@@ -1,0 +1,34 @@
+model:
+  input_size: 784
+  hidden_size: 128
+  output_size: 10
+
+trainer:
+  epochs: 30
+  batch_size: 64
+  device: cuda
+
+optimizer:
+  type: Adam
+  lr: 0.001
+
+scheduler:
+  type: StepLR
+  step_size: 5
+  gamma: 0.5
+
+data:
+  train_path: ./data/train
+  val_path: ./data/valid
+  test_path: ./data/test
+  alignment_path: ./data/alignments
+  interpro_annotations: ./data/interpro_annotations.csv
+  protein_embeddings: ./data/protein_embeddings.h5
+
+cuda:
+  device: cuda:0
+
+checkpoint:
+  dir: ./checkpoints
+  load: false
+  load_path: ./checkpoints/best_model.pth
