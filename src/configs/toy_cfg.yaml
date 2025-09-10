@@ -1,0 +1,39 @@
+# filepath: /home/atoffano/PFP_layer/src/configs/cfg.yaml
+model:
+  hidden_channels: 128  # Used for HeteroProteinGNN
+  batch_size: 16  # Batch size for DataLoader
+
+trainer:
+  epochs: 1  # Number of training epochs
+  device: cuda  # Device for training
+  compile: false  # Whether to use torch.compile
+
+optimizer:
+  type: Adam
+  lr: 0.001
+
+scheduler:
+  type: StepLR
+  step_size: 5
+  gamma: 0.5
+
+data:
+  dataset: 'toy'
+  subontology: ['BPO']  # One or more from ['CCO', 'MFO', 'BPO']
+  train_on_swissprot: False  # Whether to train on SwissProt or original train dataset
+  swissprot_exp_only: True  # If training on SwissProt, whether to use only experimental annotations
+  alignment_path: ./data/toy/toy_swissprot_2024_01_alignment.tsv  # Alignment TSV
+  prot_emb_path: ./data/toy/toy_swissprot_esm1b_per_aa.h5  # HDF5 embeddings file
+  interpro_path: ./data/toy/toy_swissprot_interpro_106_0.tsv  # Path to InterPro TSV
+
+run:
+  qualifier: default  # Additional string to append to run_id for uniqueness
+
+checkpoint:
+  dir: ./checkpoints
+  load: false
+  load_path: ./checkpoints/best_model.pth
+
+constants:
+  project_path: "/home/atoffano/PFP_layer"  # From constants.py
+  uses_entryid: true  # From constants.py
