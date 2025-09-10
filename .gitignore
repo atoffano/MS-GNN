@@ -3,3 +3,5 @@
 data/swissprot
 data/toy
 .vscode
+results
+wandb
