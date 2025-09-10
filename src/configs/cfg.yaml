@@ -1,12 +1,12 @@
+# filepath: /home/atoffano/PFP_layer/src/configs/cfg.yaml
 model:
-  input_size: 784
-  hidden_size: 128
-  output_size: 10
+  hidden_channels: 128  # Used for HeteroProteinGNN
+  batch_size: 16  # Batch size for DataLoader
 
 trainer:
-  epochs: 30
-  batch_size: 64
-  device: cuda
+  epochs: 1  # Number of training epochs
+  device: cuda  # Device for training
+  compile: false  # Whether to use torch.compile
 
 optimizer:
   type: Adam
@@ -18,17 +18,20 @@ scheduler:
   gamma: 0.5
 
 data:
-  train_path: ./data/train
-  val_path: ./data/valid
-  test_path: ./data/test
-  alignment_path: ./data/alignments
-  interpro_annotations: ./data/interpro_annotations.csv
-  protein_embeddings: ./data/protein_embeddings.h5
-
-cuda:
-  device: cuda:0
+  dataset: 'ATGO'
+  interpro_path: ./data/toy/toy_swissprot_interpro_106_0.tsv  # Path to InterPro TSV
+  go_train_path: ./data/toy/toy_swissprot_2024_01_BPO_train_exp_annotations.tsv  # GO train annotations
+  go_val_path: ./data/toy/toy_swissprot_2024_01_BPO_val_exp_annotations.tsv  # GO val annotations
+  go_test_path: ./data/toy/toy_swissprot_2024_01_BPO_test_exp_annotations.tsv  # GO test annotations
+  alignment_path: ./data/toy/toy_swissprot_2024_01_alignment.tsv  # Alignment TSV
+  h5_path: ./data/toy/toy_swissprot_esm1b_per_aa.h5  # HDF5 embeddings file
+  subontology: ['BPO']  # One or more from ['CCO', 'MFO', 'BPO']
 
 checkpoint:
   dir: ./checkpoints
   load: false
   load_path: ./checkpoints/best_model.pth
+
+constants:
+  project_path: "/home/atoffano/PFP_layer"  # From constants.py
+  uses_entryid: true  # From constants.py

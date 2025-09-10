@@ -1,0 +1,5 @@
+*__pycache__*
+*.png
+data/swissprot
+data/toy
+.vscode
