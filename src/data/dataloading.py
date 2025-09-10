@@ -5,20 +5,40 @@ import pandas as pd
 import h5py
 from src.utils import constants
 from src.utils.helpers import timeit
+import logging  # Added for logging
+
+logger = logging.getLogger(__name__)  # Create logger for this module
 
 
 class SwissProtHeteroDataset:
-    def __init__(self, h5_path, tsv_paths, go_split_paths, alignment_path, split):
-        self.go_train_dict = self._load_go_annotations(go_split_paths["train"])
-        self.go_val_dict = self._load_go_annotations(go_split_paths["val"])
-        self.go_test_dict = self._load_go_annotations(go_split_paths["test"])
-        self.split = split
-        self.h5_path = h5_path
-        self.interpro_dict = self._load_interpro_annotations(tsv_paths["InterPro"])
+    def __init__(self, datapath, split):
+        logger.info("Initializing SwissProtHeteroDataset...")
+        logger.debug(f"Datapath: {datapath}, Split: {split}")
 
-        # Load alignment info for 'aligned_with' edges
+        # Load GO annotations
+        logger.info("Loading GO annotations...")
+        self.go_train_dict = self._load_go_annotations(datapath["train"])
+        self.go_val_dict = self._load_go_annotations(datapath["val"])
+        self.go_test_dict = self._load_go_annotations(datapath["test"])
+        logger.info(
+            f"Loaded GO annotations: Train={len(self.go_train_dict)}, Val={len(self.go_val_dict)}, Test={len(self.go_test_dict)}"
+        )
+
+        self.split = split
+        self.prot_emb_path = datapath["prot_emb"]
+        logger.debug(f"Protein embedding path: {self.prot_emb_path}")
+
+        # Load InterPro annotations
+        logger.info("Loading InterPro annotations...")
+        self.interpro_dict = self._load_interpro_annotations(datapath["interpro"])
+        logger.info(
+            f"Loaded InterPro annotations for {len(self.interpro_dict)} proteins"
+        )
+
+        # Load alignment info
+        logger.info("Loading alignment data...")
         self.alignment_df = pd.read_csv(
-            alignment_path,
+            datapath["alignments"],
             sep="\t",
             header=None,
             names=[
@@ -36,8 +56,10 @@ class SwissProtHeteroDataset:
                 "bitscore",
             ],
         )
+        logger.info(f"Loaded alignment data with {len(self.alignment_df)} entries")
 
-        # Collect all proteins appearing in any annotation or alignment file
+        # Collect all proteins
+        logger.info("Collecting all proteins from annotations and alignments...")
         go_prot_ids = (
             set(self.go_train_dict.keys())
             | set(self.go_val_dict.keys())
@@ -49,37 +71,42 @@ class SwissProtHeteroDataset:
         )
         proteins = sorted(go_prot_ids | ipr_prot_ids | align_prot_ids)
         self.proteins = proteins
+        logger.info(f"Total unique proteins: {len(proteins)}")
 
-        # Map protein IDs to node indices
+        # Map protein IDs to indices
         self.protein_id_to_idx = {pid: i for i, pid in enumerate(proteins)}
         self.protein_idx_to_id = {v: k for k, v in self.protein_id_to_idx.items()}
+        logger.debug("Built protein ID to index mappings")
 
+        # Build AA index mappings
+        logger.info("Building AA index mappings...")
         self.aa_idx_to_protein_pos = {}
-        with h5py.File(self.h5_path, "r") as h5file:
+        with h5py.File(self.prot_emb_path, "r") as h5file:
             total_aa = 0
             for pid in self.proteins:
                 length = h5file[pid]["embeddings"].shape[0] if pid in h5file else 0
                 for pos in range(length):
                     self.aa_idx_to_protein_pos[total_aa + pos] = (pid, pos)
                 total_aa += length
+        logger.info(f"Total AA nodes: {total_aa}")
 
-        # Build train/val/test masks
+        # Build masks
+        logger.info("Building train/val/test masks...")
         self.train_mask = torch.zeros(len(proteins), dtype=torch.bool)
         self.val_mask = torch.zeros(len(proteins), dtype=torch.bool)
         self.test_mask = torch.zeros(len(proteins), dtype=torch.bool)
 
-        # Train mask
         for pid in self.go_train_dict.keys():
             if pid in self.protein_id_to_idx:
                 self.train_mask[self.protein_id_to_idx[pid]] = True
+        logger.debug(f"Train mask set for {self.train_mask.sum().item()} proteins")
 
-        # Include train annotations when predicting on val
         val_pids = set(self.go_val_dict.keys()).union(self.go_train_dict.keys())
         for pid in val_pids:
             if pid in self.protein_id_to_idx:
                 self.val_mask[self.protein_id_to_idx[pid]] = True
+        logger.debug(f"Val mask set for {self.val_mask.sum().item()} proteins")
 
-        # Include train+val annotations when predicting on test
         test_pids = (
             set(self.go_test_dict.keys())
             .union(self.go_train_dict.keys())
@@ -88,24 +115,31 @@ class SwissProtHeteroDataset:
         for pid in test_pids:
             if pid in self.protein_id_to_idx:
                 self.test_mask[self.protein_id_to_idx[pid]] = True
+        logger.debug(f"Test mask set for {self.test_mask.sum().item()} proteins")
 
-        # Build vocab sizes (for label vector sizes)
+        # Build vocab sizes
+        logger.info("Building vocabulary sizes...")
         all_go_dicts = (
             list(self.go_train_dict.values())
             + list(self.go_val_dict.values())
             + list(self.go_test_dict.values())
         )
         self.go_vocab_size = all_go_dicts[0].shape[0] if all_go_dicts else 0
-
         self.ipr_vocab_size = (
             next(iter(self.interpro_dict.values())).shape[0]
             if self.interpro_dict
             else 0
         )
+        logger.info(
+            f"GO vocab size: {self.go_vocab_size}, InterPro vocab size: {self.ipr_vocab_size}"
+        )
 
-        # Build hetero Data base graph with nodes and edges
+        # Build hetero data
+        logger.info("Building heterogeneous data graph...")
         self.data = self._build_hetero_data_base()
+        logger.info("Validating heterogeneous data...")
         self.data.validate(raise_on_error=True)
+        logger.info("Dataset initialization complete!")
 
     @timeit
     def _load_go_annotations(self, go_tsv_path):
@@ -164,7 +198,7 @@ class SwissProtHeteroDataset:
         aa_counts = []
         protein_to_aa_start_idx = {}
         total_aa = 0
-        with h5py.File(self.h5_path, "r") as h5file:
+        with h5py.File(self.prot_emb_path, "r") as h5file:
             for pid in self.proteins:
                 length = h5file[pid]["embeddings"].shape[0] if pid in h5file else 0
                 protein_to_aa_start_idx[pid] = total_aa

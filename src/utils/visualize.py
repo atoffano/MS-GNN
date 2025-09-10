@@ -1,5 +1,8 @@
 from typing import Any, Dict, List, Optional
 import torch
+import matplotlib.pyplot as plt
+import numpy as np
+import networkx as nx
 
 
 def visualize_graph_via_networkx(
@@ -8,12 +11,26 @@ def visualize_graph_via_networkx(
     cutoff_edge: float = 0.0,
     cutoff_node: float = 0.0,
     node_labels: Optional[Dict[str, List[str]]] = None,
+    edge_types_to_plot: Optional[List[tuple]] = None,
 ) -> Any:
-    import matplotlib.pyplot as plt
-    import networkx as nx
+    """
+    Visualize the graph explanation using NetworkX.
 
+    Args:
+        hetero_explanation: The explanation object.
+        path: Path to save the plot. If None, show the plot.
+        cutoff_edge: Minimum edge mask value to include.
+        cutoff_node: Minimum node importance to include.
+        node_labels: Dictionary of node labels.
+        edge_types_to_plot: List of edge types to plot, e.g., [("protein", "aa2protein", "protein")]. If None, plot all edge types.
+    """
     plots = {}
-    for edge_type in hetero_explanation.edge_types:
+    edge_types = (
+        edge_types_to_plot if edge_types_to_plot else hetero_explanation.edge_types
+    )
+    for edge_type in edge_types:
+        if edge_type not in hetero_explanation.edge_types:
+            continue  # Skip if edge_type not in explanation
         src_type, _, dst_type = edge_type
         edge_index = hetero_explanation[edge_type].edge_index
         edge_mask = hetero_explanation[edge_type].edge_mask
@@ -129,8 +146,6 @@ def plot_aa_edge_histogram(
 
     Returns dict with figure, values (per-aa summed importance) and indices.
     """
-    import matplotlib.pyplot as plt
-    import numpy as np
 
     # Resolve node mask for 'aa' and compute summed importance per node
     aa_node_mask = hetero_explanation["aa"].node_mask  # shape [num_aa, num_features]
