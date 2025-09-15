@@ -2,12 +2,15 @@ import torch
 from torch_geometric.data import HeteroData
 from torch_geometric.loader import NeighborLoader
 import pandas as pd
+import numpy as np
 import h5py
 from src.utils import constants
 from src.utils.helpers import timeit
 import logging  # Added for logging
 
 logger = logging.getLogger(__name__)  # Create logger for this module
+
+import time
 
 
 class SwissProtHeteroDataset:
@@ -235,33 +238,36 @@ class SwissProtHeteroDataset:
         return data
 
     @timeit
-    def get_batch_features(self, batch, h5_file):
-        batch["aa"].x = self.get_aa_features(batch, h5_file)
+    def get_batch_features(self, batch):
+        batch["aa"].x = self.get_aa_features(batch)
         go, interpro = self.get_function_features(batch)
         batch["protein"].go = go
         batch["protein"].interpro = interpro
         batch["protein"].x = batch["protein"].interpro  # Use InterPro as features
         return batch
 
-    def get_aa_features(self, batch, h5_file):
+    def get_aa_features(self, batch):
         aa_embeddings = torch.zeros(batch["aa"].num_nodes, 1280, dtype=torch.float32)
-
-        # Collect unique proteins and their AA indices/positions in the batch
         protein_to_aa_data = {}
         for local_idx, aa_global_idx in enumerate(batch["aa"].n_id.tolist()):
             protein_id, aa_pos = self.aa_idx_to_protein_pos[aa_global_idx]
-            if protein_id not in protein_to_aa_data:
-                protein_to_aa_data[protein_id] = []
-            protein_to_aa_data[protein_id].append((local_idx, aa_pos))
+            protein_to_aa_data.setdefault(protein_id, []).append((local_idx, aa_pos))
 
-        # Load embeddings per protein once and assign to AAs
+        # Load all embeddings in one file open
+        emb_dict = {}
+        with h5py.File(self.prot_emb_path, "r", libver="latest", swmr=True) as h5_file:
+            for protein_id in protein_to_aa_data.keys():
+                if protein_id in h5_file:
+                    emb_dict[protein_id] = h5_file[protein_id]["embeddings"][:]
+
         for protein_id, aa_list in protein_to_aa_data.items():
-            if protein_id in h5_file:
-                protein_embs = torch.from_numpy(
-                    h5_file[protein_id]["embeddings"][:]
-                )  # Load full array once
-                for local_idx, aa_pos in aa_list:
-                    aa_embeddings[local_idx] = protein_embs[aa_pos]
+            if protein_id in emb_dict:
+                protein_embs_np = emb_dict[protein_id]
+                local_indices = np.array([local_idx for local_idx, _ in aa_list])
+                aa_positions = np.array([aa_pos for _, aa_pos in aa_list])
+                aa_embeddings[local_indices] = torch.from_numpy(
+                    protein_embs_np[aa_positions]
+                ).to(torch.float32)
 
         return aa_embeddings
 
@@ -299,7 +305,9 @@ def define_loaders(config, dataset):
         num_neighbors=[-1],  # Use all neighbors
         batch_size=config["model"]["batch_size"],
         shuffle=True,
-        num_workers=4,
+        num_workers=16,
+        pin_memory=True,
+        persistent_workers=True,
     )
 
     val_loader = NeighborLoader(
@@ -308,7 +316,9 @@ def define_loaders(config, dataset):
         num_neighbors=[-1],  # Use all neighbors
         batch_size=config["model"]["batch_size"],
         shuffle=False,
-        num_workers=4,
+        num_workers=16,
+        pin_memory=True,
+        persistent_workers=True,
     )
 
     test_loader = NeighborLoader(
@@ -317,6 +327,8 @@ def define_loaders(config, dataset):
         num_neighbors=[-1],  # Use all neighbors
         batch_size=config["model"]["batch_size"],
         shuffle=False,
-        num_workers=4,
+        num_workers=16,
+        pin_memory=True,
+        persistent_workers=True,
     )
     return train_loader, val_loader, test_loader

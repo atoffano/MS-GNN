@@ -4,7 +4,7 @@ model:
   batch_size: 16  # Batch size for DataLoader
 
 trainer:
-  epochs: 1  # Number of training epochs
+  epochs: 2  # Number of training epochs
   device: cuda  # Device for training
   compile: false  # Whether to use torch.compile
 
