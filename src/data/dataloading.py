@@ -2,12 +2,100 @@ import torch
 from torch_geometric.data import HeteroData
 from torch_geometric.loader import NeighborLoader
 import pandas as pd
-import h5py
+import numpy as np
+import pickle
 from src.utils import constants
 from src.utils.helpers import timeit
-import logging  # Added for logging
+import logging
+from pathlib import Path
+from collections import defaultdict
 
-logger = logging.getLogger(__name__)  # Create logger for this module
+logger = logging.getLogger(__name__)
+
+import time
+
+
+class ChunkedEmbeddingLoader:
+    """Efficiently loads protein embeddings from chunked format."""
+
+    def __init__(self, chunks_dir: str, cache_size: int = 5):
+        """
+        Args:
+            chunks_dir: Directory containing chunked embedding files
+            cache_size: Number of chunks to keep in memory cache
+        """
+        self.chunks_dir = Path(chunks_dir)
+        self.cache_size = cache_size
+        self._chunk_cache = {}
+        self._cache_order = []
+
+        # Load mapping data
+        with open(f"{self.chunks_dir}/protein_mapping.pkl", "rb") as f:
+            mapping_data = pickle.load(f)
+
+        self.protein_to_chunk = mapping_data["protein_to_chunk"]
+        self.chunk_metadata = mapping_data["chunk_metadata"]
+
+        logger.info(
+            f"Loaded chunked embeddings: {len(self.protein_to_chunk)} proteins in {len(self.chunk_metadata)} chunks"
+        )
+
+    def _load_chunk(self, chunk_idx: int) -> dict:
+        """Load a specific chunk into memory."""
+        if chunk_idx in self._chunk_cache:
+            # Move to end of cache order (LRU)
+            self._cache_order.remove(chunk_idx)
+            self._cache_order.append(chunk_idx)
+            return self._chunk_cache[chunk_idx]
+
+        # Load chunk from disk
+        chunk_path = f"{self.chunks_dir}/embeddings_chunk_{chunk_idx}.pt"
+        chunk_data = torch.load(chunk_path, map_location="cpu")
+
+        # Add to cache
+        self._chunk_cache[chunk_idx] = chunk_data
+        self._cache_order.append(chunk_idx)
+
+        # Evict oldest chunk if cache is full
+        if len(self._chunk_cache) > self.cache_size:
+            oldest_chunk = self._cache_order.pop(0)
+            del self._chunk_cache[oldest_chunk]
+
+        logger.debug(f"Loaded chunk {chunk_idx} into cache")
+        return chunk_data
+
+    def get_protein_length(self, protein_id: str) -> int:
+        """Get the sequence length for a protein without loading embeddings."""
+        if protein_id not in self.protein_to_chunk:
+            return 0
+
+        chunk_idx = self.protein_to_chunk[protein_id]
+        chunk_info = self.chunk_metadata[str(chunk_idx)]
+
+        try:
+            protein_idx = chunk_info["proteins"].index(protein_id)
+            return chunk_info["amino_acid_counts"][protein_idx]
+        except (ValueError, KeyError):
+            return 0
+
+    def get_embeddings_batch(self, protein_ids: list) -> dict:
+        """Get embeddings for a batch of proteins efficiently."""
+        # Group proteins by chunk
+        chunk_groups = defaultdict(list)
+        for protein_id in protein_ids:
+            if protein_id in self.protein_to_chunk:
+                chunk_idx = self.protein_to_chunk[protein_id]
+                chunk_groups[chunk_idx].append(protein_id)
+
+        # Load embeddings
+        embeddings = {}
+        for chunk_idx, chunk_proteins in chunk_groups.items():
+            chunk_data = self._load_chunk(chunk_idx)
+            for protein_id in chunk_proteins:
+                if protein_id in chunk_data:
+                    embeddings[protein_id] = chunk_data[protein_id]
+
+        return embeddings
 
 
 class SwissProtHeteroDataset:
@@ -25,8 +113,11 @@ class SwissProtHeteroDataset:
         )
 
         self.split = split
-        self.prot_emb_path = datapath["prot_emb"]
-        logger.debug(f"Protein embedding path: {self.prot_emb_path}")
+
+        chunks_dir = datapath["prot_emb_path"]
+
+        logger.info(f"Loading chunked embeddings from: {chunks_dir}")
+        self.embedding_loader = ChunkedEmbeddingLoader(chunks_dir, cache_size=10)
 
         # Load InterPro annotations
         logger.info("Loading InterPro annotations...")
@@ -77,18 +168,6 @@ class SwissProtHeteroDataset:
         self.protein_id_to_idx = {pid: i for i, pid in enumerate(proteins)}
         self.protein_idx_to_id = {v: k for k, v in self.protein_id_to_idx.items()}
         logger.debug("Built protein ID to index mappings")
-
-        # Build AA index mappings
-        logger.info("Building AA index mappings...")
-        self.aa_idx_to_protein_pos = {}
-        with h5py.File(self.prot_emb_path, "r") as h5file:
-            total_aa = 0
-            for pid in self.proteins:
-                length = h5file[pid]["embeddings"].shape[0] if pid in h5file else 0
-                for pos in range(length):
-                    self.aa_idx_to_protein_pos[total_aa + pos] = (pid, pos)
-                total_aa += length
-        logger.info(f"Total AA nodes: {total_aa}")
 
         # Build masks
         logger.info("Building train/val/test masks...")
@@ -195,29 +274,29 @@ class SwissProtHeteroDataset:
         num_proteins = len(self.proteins)
         data["protein"].num_nodes = num_proteins
 
+        # Build AA mappings using chunked loader
         aa_counts = []
-        protein_to_aa_start_idx = {}
+        self.protein_to_aa_start_idx = {}
         total_aa = 0
-        with h5py.File(self.prot_emb_path, "r") as h5file:
-            for pid in self.proteins:
-                length = h5file[pid]["embeddings"].shape[0] if pid in h5file else 0
-                protein_to_aa_start_idx[pid] = total_aa
-                aa_counts.append(length)
-                total_aa += length
 
+        logger.info("Building AA mappings from chunked embeddings...")
+        for pid in self.proteins:
+            length = self.embedding_loader.get_protein_length(pid)
+            self.protein_to_aa_start_idx[pid] = total_aa
+            aa_counts.append(length)
+            total_aa += length
+
+        logger.info(f"Total AA nodes: {total_aa}")
         data["aa"].num_nodes = total_aa
 
+        # Build edges
         src_aa = []
         dst_protein = []
-        # Build compact per-aa arrays while iterating proteins
-        aa_to_protein = []
         for prot_idx, pid in enumerate(self.proteins):
-            start_idx = protein_to_aa_start_idx[pid]
-            length = aa_counts[self.protein_id_to_idx[pid]]
+            start_idx = self.protein_to_aa_start_idx[pid]
+            length = aa_counts[prot_idx]
             src_aa.extend(range(start_idx, start_idx + length))
             dst_protein.extend([prot_idx] * length)
-            # per-aa arrays: protein index only (positions are sequential)
-            aa_to_protein.extend([prot_idx] * length)
 
         edge_index_aa2protein = torch.tensor([src_aa, dst_protein], dtype=torch.long)
         data["aa", "aa2protein", "protein"].edge_index = edge_index_aa2protein
@@ -235,33 +314,52 @@ class SwissProtHeteroDataset:
         return data
 
     @timeit
-    def get_batch_features(self, batch, h5_file):
-        batch["aa"].x = self.get_aa_features(batch, h5_file)
+    def get_batch_features(self, batch):
+        batch["aa"].x = self.get_aa_features(batch)
         go, interpro = self.get_function_features(batch)
         batch["protein"].go = go
         batch["protein"].interpro = interpro
         batch["protein"].x = batch["protein"].interpro  # Use InterPro as features
         return batch
 
-    def get_aa_features(self, batch, h5_file):
+    def get_aa_features(self, batch):
         aa_embeddings = torch.zeros(batch["aa"].num_nodes, 1280, dtype=torch.float32)
 
-        # Collect unique proteins and their AA indices/positions in the batch
-        protein_to_aa_data = {}
-        for local_idx, aa_global_idx in enumerate(batch["aa"].n_id.tolist()):
-            protein_id, aa_pos = self.aa_idx_to_protein_pos[aa_global_idx]
-            if protein_id not in protein_to_aa_data:
-                protein_to_aa_data[protein_id] = []
-            protein_to_aa_data[protein_id].append((local_idx, aa_pos))
+        # Get AA-to-protein edge index to map AA local indices to protein local indices
+        edge_index = batch["aa", "aa2protein", "protein"].edge_index
+        aa_to_protein_local = {}  # Map AA local idx to protein local idx
+        for aa_local, prot_local in zip(edge_index[0], edge_index[1]):
+            aa_to_protein_local[aa_local.item()] = prot_local.item()
 
-        # Load embeddings per protein once and assign to AAs
+        # Group AA local indices by protein and compute positions
+        protein_to_aa_data = {}
+        for aa_local_idx in range(batch["aa"].num_nodes):
+            if aa_local_idx in aa_to_protein_local:
+                prot_local_idx = aa_to_protein_local[aa_local_idx]
+                prot_global_idx = batch["protein"].n_id[prot_local_idx].item()
+                protein_id = self.protein_idx_to_id[prot_global_idx]
+                aa_global_idx = batch["aa"].n_id[aa_local_idx].item()
+                # Compute position on the fly: global AA idx - protein's start idx
+                aa_pos = aa_global_idx - self.protein_to_aa_start_idx.get(protein_id, 0)
+                protein_to_aa_data.setdefault(protein_id, []).append(
+                    (aa_local_idx, aa_pos)
+                )
+
+        # Get unique protein IDs for batch loading
+        protein_ids = list(protein_to_aa_data.keys())
+
+        # Load embeddings for all proteins in this batch using chunked loader
+        protein_embeddings = self.embedding_loader.get_embeddings_batch(protein_ids)
+
+        # Assign embeddings to AA nodes
         for protein_id, aa_list in protein_to_aa_data.items():
-            if protein_id in h5_file:
-                protein_embs = torch.from_numpy(
-                    h5_file[protein_id]["embeddings"][:]
-                )  # Load full array once
-                for local_idx, aa_pos in aa_list:
-                    aa_embeddings[local_idx] = protein_embs[aa_pos]
+            if protein_id in protein_embeddings:
+                protein_embs = protein_embeddings[protein_id]
+                for aa_local_idx, aa_pos in aa_list:
+                    if aa_pos < len(protein_embs):
+                        aa_embeddings[aa_local_idx] = protein_embs[aa_pos].to(
+                            torch.float32
+                        )
 
         return aa_embeddings
 
@@ -299,7 +397,9 @@ def define_loaders(config, dataset):
         num_neighbors=[-1],  # Use all neighbors
         batch_size=config["model"]["batch_size"],
         shuffle=True,
-        num_workers=4,
+        num_workers=16,
+        pin_memory=True,
+        persistent_workers=True,
     )
 
     val_loader = NeighborLoader(
@@ -308,7 +408,9 @@ def define_loaders(config, dataset):
         num_neighbors=[-1],  # Use all neighbors
         batch_size=config["model"]["batch_size"],
         shuffle=False,
-        num_workers=4,
+        num_workers=16,
+        pin_memory=True,
+        persistent_workers=True,
     )
 
     test_loader = NeighborLoader(
@@ -317,6 +419,8 @@ def define_loaders(config, dataset):
         num_neighbors=[-1],  # Use all neighbors
         batch_size=config["model"]["batch_size"],
         shuffle=False,
-        num_workers=4,
+        num_workers=16,
+        pin_memory=True,
+        persistent_workers=True,
     )
     return train_loader, val_loader, test_loader

@@ -12,6 +12,7 @@ from src.utils.visualize import visualize_graph_via_networkx, plot_aa_edge_histo
 from src.data.dataloading import SwissProtHeteroDataset, define_loaders
 from src.models.gnn_model import HeteroProteinGNN
 from src.utils.helpers import timeit
+import time
 
 # Configure logging
 logging.basicConfig(
@@ -24,22 +25,27 @@ logger = logging.getLogger(__name__)
 def train_epoch(model, optimizer, loader, dataset, device, epoch):
     model.train()
     total_loss = 0
-    with h5py.File(dataset.prot_emb_path, "r") as h5_file:
-        for batch in loader:
-            batch = dataset.get_batch_features(batch, h5_file)
-            batch = batch.to(device)
+    for batch in loader:
+        batch = dataset.get_batch_features(batch)
+        batch = batch.to(device)
 
-            optimizer.zero_grad()
-            out = model(batch.x_dict, batch.edge_index_dict, batch)
+        optimizer.zero_grad()
+        t1 = time.time()
+        out = model(batch.x_dict, batch.edge_index_dict, batch)
+        t2 = time.time()
+        logger.info(f"Forward pass time: {t2 - t1:.4f} seconds")
 
-            criterion = torch.nn.BCEWithLogitsLoss()
-            loss = criterion(
-                out,
-                batch["protein"].go[: batch["protein"].batch_size],
-            )
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
+        criterion = torch.nn.BCEWithLogitsLoss()
+        loss = criterion(
+            out,
+            batch["protein"].go[: batch["protein"].batch_size],
+        )
+        t1 = time.time()
+        loss.backward()
+        t2 = time.time()
+        logger.info(f"Backward pass time: {t2 - t1:.4f} seconds")
+        optimizer.step()
+        total_loss += loss.item()
     avg_loss = total_loss / len(loader)
     wandb.log({"train_loss": avg_loss, "epoch": epoch})
     logger.info(f"Epoch {epoch} - Train loss: {avg_loss:.4f}")
@@ -49,75 +55,74 @@ def train_epoch(model, optimizer, loader, dataset, device, epoch):
 def validation(model, loader, dataset, device, epoch, results_dir):
     model.eval()
     total_loss = 0
-    with h5py.File(dataset.prot_emb_path, "r") as h5_file:
-        with torch.no_grad():
-            for batch in loader:
-                batch = dataset.get_batch_features(batch, h5_file)
-                batch = batch.to(device)
+    with torch.no_grad():
+        for batch in loader:
+            batch = dataset.get_batch_features(batch)
+            batch = batch.to(device)
 
-                out = model(batch.x_dict, batch.edge_index_dict, batch)
+            out = model(batch.x_dict, batch.edge_index_dict, batch)
 
-                criterion = torch.nn.BCEWithLogitsLoss()
-                loss = criterion(
-                    out,
-                    batch["protein"].go[: batch["protein"].batch_size],
-                )
-                total_loss += loss.item()
+            criterion = torch.nn.BCEWithLogitsLoss()
+            loss = criterion(
+                out,
+                batch["protein"].go[: batch["protein"].batch_size],
+            )
+            total_loss += loss.item()
 
-            #     # Explanation generation
-            #     explainer = Explainer(
-            #         model,  # It is assumed that model outputs a single tensor.
-            #         algorithm=CaptumExplainer("IntegratedGradients"),
-            #         explanation_type="model",
-            #         node_mask_type="attributes",
-            #         edge_mask_type="object",
-            #         model_config=dict(
-            #             mode="multiclass_classification",
-            #             task_level="node",
-            #             return_type="raw",  # Model returns probabilities.
-            #         ),
-            #     )
+        #     # Explanation generation
+        #     explainer = Explainer(
+        #         model,  # It is assumed that model outputs a single tensor.
+        #         algorithm=CaptumExplainer("IntegratedGradients"),
+        #         explanation_type="model",
+        #         node_mask_type="attributes",
+        #         edge_mask_type="object",
+        #         model_config=dict(
+        #             mode="multiclass_classification",
+        #             task_level="node",
+        #             return_type="raw",  # Model returns probabilities.
+        #         ),
+        #     )
 
-            #     hetero_explanation = explainer(
-            #         batch.x_dict,
-            #         batch.edge_index_dict,
-            #         batch=batch,
-            #         target=None,
-            #         # index=None,
-            #         index=torch.arange(batch["protein"].batch_size),
-            #         # batch["protein"].go[: batch["protein"].batch_size]
-            #     )
-            #     logger.info(
-            #         f"Generated explanations in {hetero_explanation.available_explanations}"
-            #     )
+        #     hetero_explanation = explainer(
+        #         batch.x_dict,
+        #         batch.edge_index_dict,
+        #         batch=batch,
+        #         target=None,
+        #         # index=None,
+        #         index=torch.arange(batch["protein"].batch_size),
+        #         # batch["protein"].go[: batch["protein"].batch_size]
+        #     )
+        #     logger.info(
+        #         f"Generated explanations in {hetero_explanation.available_explanations}"
+        #     )
 
-            # path = os.path.join(results_dir, "feature_importance.png")
-            # hetero_explanation.visualize_feature_importance(path, top_k=10)
-            # logger.info(f"Feature importance plot has been saved to '{path}'")
-            # wandb.log({"feature_importance_plot": wandb.Image(path)})
+        # path = os.path.join(results_dir, "feature_importance.png")
+        # hetero_explanation.visualize_feature_importance(path, top_k=10)
+        # logger.info(f"Feature importance plot has been saved to '{path}'")
+        # wandb.log({"feature_importance_plot": wandb.Image(path)})
 
-            # # Visualize graph via NetworkX for specified edge types
-            # graph_path = os.path.join(results_dir, "graph_explanation")
-            # plots = visualize_graph_via_networkx(
-            #     hetero_explanation,
-            #     path=graph_path,  # Base path; function will append suffix for each edge type
-            #     cutoff_edge=0.00001,
-            #     edge_types_to_plot=[("aa", "aa2protein", "protein")],
-            # )
-            # # Log each saved plot to wandb
-            # for edge_type, fig in plots.items():
-            #     suffix = "_".join(edge_type)
-            #     plot_path = f"{graph_path}_{suffix}.png"
-            #     wandb.log({f"graph_explanation_plot_{suffix}": wandb.Image(plot_path)})
+        # # Visualize graph via NetworkX for specified edge types
+        # graph_path = os.path.join(results_dir, "graph_explanation")
+        # plots = visualize_graph_via_networkx(
+        #     hetero_explanation,
+        #     path=graph_path,  # Base path; function will append suffix for each edge type
+        #     cutoff_edge=0.00001,
+        #     edge_types_to_plot=[("aa", "aa2protein", "protein")],
+        # )
+        # # Log each saved plot to wandb
+        # for edge_type, fig in plots.items():
+        #     suffix = "_".join(edge_type)
+        #     plot_path = f"{graph_path}_{suffix}.png"
+        #     wandb.log({f"graph_explanation_plot_{suffix}": wandb.Image(plot_path)})
 
-            # # Plot AA edge histogram
-            # path = os.path.join(results_dir, "aa_edge_histogram.png")
-            # ret = plot_aa_edge_histogram(
-            #     hetero_explanation,
-            #     edge_type=("aa", "aa2protein", "protein"),
-            #     path=path,
-            # )
-            # wandb.log({"aa_edge_histogram_plot": wandb.Image(ret["fig"])})
+        # # Plot AA edge histogram
+        # path = os.path.join(results_dir, "aa_edge_histogram.png")
+        # ret = plot_aa_edge_histogram(
+        #     hetero_explanation,
+        #     edge_type=("aa", "aa2protein", "protein"),
+        #     path=path,
+        # )
+        # wandb.log({"aa_edge_histogram_plot": wandb.Image(ret["fig"])})
 
     avg_loss = total_loss / len(loader)
     wandb.log({"val_loss": avg_loss, "epoch": epoch})
@@ -127,7 +132,7 @@ def validation(model, loader, dataset, device, epoch, results_dir):
 
 def main():
     # Load config from YAML
-    config_path = "src/configs/cfg.yaml"
+    config_path = "src/configs/toy_cfg.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
