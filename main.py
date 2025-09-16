@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 def train_epoch(model, optimizer, loader, dataset, device, epoch):
     model.train()
     total_loss = 0
-    for batch in loader:
+    for batch in tqdm.tqdm(loader):
         batch = dataset.get_batch_features(batch)
         batch = batch.to(device)
 
@@ -132,7 +132,7 @@ def validation(model, loader, dataset, device, epoch, results_dir):
 
 def main():
     # Load config from YAML
-    config_path = "src/configs/toy_cfg.yaml"
+    config_path = "src/configs/cfg.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
@@ -167,22 +167,35 @@ def main():
         )
 
         # Paths from config
-        datapath = {
-            "interpro": f"{config['constants']['project_path']}{config['data']['interpro_path'][1:]}",
-            "prot_emb": f"{config['constants']['project_path']}{config['data']['prot_emb_path'][1:]}",
-            "alignments": f"{config['constants']['project_path']}{config['data']['alignment_path'][1:]}",
-            "train": f"{config['constants']['project_path']}/data/{dataset}/{dataset}_{subontology}_train_annotations.tsv",
-            "val": f"{config['constants']['project_path']}/data/{dataset}/{dataset}_{subontology}_val_annotations.tsv",
-            "test": f"{config['constants']['project_path']}/data/{dataset}/{dataset}_{subontology}_test_annotations.tsv",
-        }
+        config["interpro"] = (
+            f"{config['constants']['project_path']}{config['data']['interpro_path'][1:]}"
+        )
+        config["prot_emb"] = (
+            f"{config['constants']['project_path']}{config['data']['prot_emb_path'][1:]}"
+        )
+        config["alignments"] = (
+            f"{config['constants']['project_path']}{config['data']['alignment_path'][1:]}"
+        )
+        config["prot_emb_path"] = (
+            f"{config['constants']['project_path']}{config['data']['prot_emb_path'][1:]}"
+        )
+        config["train"] = (
+            f"{config['constants']['project_path']}/data/{dataset}/{dataset}_{subontology}_train_annotations.tsv"
+        )
+        config["val"] = (
+            f"{config['constants']['project_path']}/data/{dataset}/{dataset}_{subontology}_val_annotations.tsv"
+        )
+        config["test"] = (
+            f"{config['constants']['project_path']}/data/{dataset}/{dataset}_{subontology}_test_annotations.tsv"
+        )
         # Optionally add SwissProt training data
         if config["data"].get("train_on_swissprot", True):
             exp = "exp_" if config["data"].get("swissprot_exp_only", True) else ""
-            datapath["train"] = (
+            config["train"] = (
                 f"{config['constants']['project_path']}/data/swissprot/2024_01/swissprot_2024_01_{subontology}_{exp}annotations.tsv"
             )
 
-        dataset = SwissProtHeteroDataset(datapath, split="train")
+        dataset = SwissProtHeteroDataset(config, split="train")
 
         transform = T.Compose(
             [

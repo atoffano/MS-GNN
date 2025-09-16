@@ -32,13 +32,13 @@ class ChunkedEmbeddingLoader:
         # Load mapping data
         with open(f"{self.chunks_dir}/protein_mapping.pkl", "rb") as f:
             mapping_data = pickle.load(f)
-
         self.protein_to_chunk = mapping_data["protein_to_chunk"]
         self.chunk_metadata = mapping_data["chunk_metadata"]
 
         logger.info(
-            f"Loaded chunked embeddings: {len(self.protein_to_chunk)} proteins in {len(self.chunk_metadata)} chunks"
+            f"Loaded chunked embeddings metadata: {len(self.protein_to_chunk)} proteins in {len(self.chunk_metadata)} chunks"
         )
+        del mapping_data
 
     def _load_chunk(self, chunk_idx: int) -> dict:
         """Load a specific chunk into memory."""
@@ -64,20 +64,6 @@ class ChunkedEmbeddingLoader:
         logger.debug(f"Loaded chunk {chunk_idx} into cache")
         return chunk_data
 
-    def get_protein_length(self, protein_id: str) -> int:
-        """Get the sequence length for a protein without loading embeddings."""
-        if protein_id not in self.protein_to_chunk:
-            return 0
-
-        chunk_idx = self.protein_to_chunk[protein_id]
-        chunk_info = self.chunk_metadata[str(chunk_idx)]
-
-        try:
-            protein_idx = chunk_info["proteins"].index(protein_id)
-            return chunk_info["amino_acid_counts"][protein_idx]
-        except (ValueError, KeyError):
-            return 0
-
     def get_embeddings_batch(self, protein_ids: list) -> dict:
         """Get embeddings for a batch of proteins efficiently."""
         # Group proteins by chunk
@@ -99,29 +85,29 @@ class ChunkedEmbeddingLoader:
 
 
 class SwissProtHeteroDataset:
-    def __init__(self, datapath, split):
+    def __init__(self, config, split):
         logger.info("Initializing SwissProtHeteroDataset...")
-        logger.debug(f"Datapath: {datapath}, Split: {split}")
+        logger.debug(f"Datapath: {config}, Split: {split}")
 
         # Load GO annotations
         logger.info("Loading GO annotations...")
-        self.go_train_dict = self._load_go_annotations(datapath["train"])
-        self.go_val_dict = self._load_go_annotations(datapath["val"])
-        self.go_test_dict = self._load_go_annotations(datapath["test"])
+        self.go_train_dict = self._load_go_annotations(config["train"])
+        self.go_val_dict = self._load_go_annotations(config["val"])
+        self.go_test_dict = self._load_go_annotations(config["test"])
         logger.info(
             f"Loaded GO annotations: Train={len(self.go_train_dict)}, Val={len(self.go_val_dict)}, Test={len(self.go_test_dict)}"
         )
-
         self.split = split
 
-        chunks_dir = datapath["prot_emb_path"]
-
-        logger.info(f"Loading chunked embeddings from: {chunks_dir}")
-        self.embedding_loader = ChunkedEmbeddingLoader(chunks_dir, cache_size=10)
+        self.chunks_dir = config["prot_emb_path"]
+        logger.info(f"Loading chunked embeddings from: {self.chunks_dir}")
+        self.embedding_loader = ChunkedEmbeddingLoader(
+            self.chunks_dir, cache_size=config["trainer"]["cache_size"]
+        )
 
         # Load InterPro annotations
         logger.info("Loading InterPro annotations...")
-        self.interpro_dict = self._load_interpro_annotations(datapath["interpro"])
+        self.interpro_dict = self._load_interpro_annotations(config["interpro"])
         logger.info(
             f"Loaded InterPro annotations for {len(self.interpro_dict)} proteins"
         )
@@ -129,7 +115,7 @@ class SwissProtHeteroDataset:
         # Load alignment info
         logger.info("Loading alignment data...")
         self.alignment_df = pd.read_csv(
-            datapath["alignments"],
+            config["alignments"],
             sep="\t",
             header=None,
             names=[
@@ -255,17 +241,17 @@ class SwissProtHeteroDataset:
         Returns dict protein_id -> multi-hot vector of interpro presence
         """
         df = pd.read_csv(interpro_tsv_path, sep="\t")
-        all_ipr = sorted(df["IPR"].unique())
-        ipr_to_idx = {ipr: i for i, ipr in enumerate(all_ipr)}
+        ipr_ids = df["IPR"].unique()
+        ipr_to_idx = {ipr: i for i, ipr in enumerate(ipr_ids)}
 
         grouped = df.groupby("ID")["IPR"].apply(list)
         interpro_dict = {}
         for pid, ipr_list in grouped.items():
-            vec = torch.zeros(len(all_ipr), dtype=torch.float32)
+            vec = torch.zeros(len(ipr_ids), dtype=torch.float32)
             for ipr in ipr_list:
                 vec[ipr_to_idx[ipr]] = 1.0
             interpro_dict[pid] = vec
-        self.ipr_vocab_size = len(all_ipr)
+        self.ipr_vocab_size = len(ipr_ids)
         return interpro_dict
 
     @timeit
@@ -274,29 +260,27 @@ class SwissProtHeteroDataset:
         num_proteins = len(self.proteins)
         data["protein"].num_nodes = num_proteins
 
-        # Build AA mappings using chunked loader
-        aa_counts = []
-        self.protein_to_aa_start_idx = {}
-        total_aa = 0
-
-        logger.info("Building AA mappings from chunked embeddings...")
-        for pid in self.proteins:
-            length = self.embedding_loader.get_protein_length(pid)
-            self.protein_to_aa_start_idx[pid] = total_aa
-            aa_counts.append(length)
-            total_aa += length
-
-        logger.info(f"Total AA nodes: {total_aa}")
-        data["aa"].num_nodes = total_aa
-
-        # Build edges
-        src_aa = []
-        dst_protein = []
-        for prot_idx, pid in enumerate(self.proteins):
-            start_idx = self.protein_to_aa_start_idx[pid]
-            length = aa_counts[prot_idx]
-            src_aa.extend(range(start_idx, start_idx + length))
-            dst_protein.extend([prot_idx] * length)
+        # Protein start AA index mapping
+        self.protein_start_aa = {}
+        src_aa, dst_protein = [], []
+        tot_aa_counts = 0
+        for chunk_nb in self.embedding_loader.chunk_metadata.keys():
+            proteins_in_chunk = self.embedding_loader.chunk_metadata[chunk_nb][
+                "proteins"
+            ]
+            aa_counts = self.embedding_loader.chunk_metadata[chunk_nb][
+                "amino_acid_counts"
+            ]
+            for pid, aa_count in zip(proteins_in_chunk, aa_counts):
+                if pid not in self.protein_id_to_idx:
+                    continue
+                prot_idx = self.protein_id_to_idx[pid]
+                self.protein_start_aa[prot_idx] = tot_aa_counts
+                src_aa.extend(range(tot_aa_counts, tot_aa_counts + aa_count))
+                dst_protein.extend([prot_idx] * aa_count)
+                tot_aa_counts += aa_count
+        logger.info(f"Total AA nodes: {tot_aa_counts}")
+        data["aa"].num_nodes = tot_aa_counts
 
         edge_index_aa2protein = torch.tensor([src_aa, dst_protein], dtype=torch.long)
         data["aa", "aa2protein", "protein"].edge_index = edge_index_aa2protein
@@ -325,11 +309,14 @@ class SwissProtHeteroDataset:
     def get_aa_features(self, batch):
         aa_embeddings = torch.zeros(batch["aa"].num_nodes, 1280, dtype=torch.float32)
 
+        t1 = time.time()
         # Get AA-to-protein edge index to map AA local indices to protein local indices
         edge_index = batch["aa", "aa2protein", "protein"].edge_index
         aa_to_protein_local = {}  # Map AA local idx to protein local idx
         for aa_local, prot_local in zip(edge_index[0], edge_index[1]):
             aa_to_protein_local[aa_local.item()] = prot_local.item()
+        t2 = time.time()
+        logger.info(f"AA to protein mapping time: {t2 - t1:.4f} seconds")
 
         # Group AA local indices by protein and compute positions
         protein_to_aa_data = {}
@@ -340,17 +327,27 @@ class SwissProtHeteroDataset:
                 protein_id = self.protein_idx_to_id[prot_global_idx]
                 aa_global_idx = batch["aa"].n_id[aa_local_idx].item()
                 # Compute position on the fly: global AA idx - protein's start idx
-                aa_pos = aa_global_idx - self.protein_to_aa_start_idx.get(protein_id, 0)
+                aa_pos = aa_global_idx - self.protein_start_aa[prot_global_idx]
                 protein_to_aa_data.setdefault(protein_id, []).append(
                     (aa_local_idx, aa_pos)
                 )
-
+        t3 = time.time()
+        logger.info(f"Protein to AA grouping time: {t3 - t2:.4f} seconds")
         # Get unique protein IDs for batch loading
         protein_ids = list(protein_to_aa_data.keys())
 
+        # DEBUG: Handle toy dataset with random embeddings to avoid storing embeddings locally
+        if "toy" in self.chunks_dir:
+            # Set random embeddings for toy dataset proteins
+            for protein_id, aa_list in protein_to_aa_data.items():
+                for aa_local_idx, aa_pos in aa_list:
+                    aa_embeddings[aa_local_idx] = torch.randn(1280)
+            return aa_embeddings
+
         # Load embeddings for all proteins in this batch using chunked loader
         protein_embeddings = self.embedding_loader.get_embeddings_batch(protein_ids)
-
+        t4 = time.time()
+        logger.info(f"Embedding loading time: {t4 - t3:.4f} seconds")
         # Assign embeddings to AA nodes
         for protein_id, aa_list in protein_to_aa_data.items():
             if protein_id in protein_embeddings:
@@ -360,7 +357,8 @@ class SwissProtHeteroDataset:
                         aa_embeddings[aa_local_idx] = protein_embs[aa_pos].to(
                             torch.float32
                         )
-
+        t5 = time.time()
+        logger.info(f"AA embedding assignment time: {t5 - t4:.4f} seconds")
         return aa_embeddings
 
     @timeit
