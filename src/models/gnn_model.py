@@ -4,7 +4,7 @@ from torch_geometric.nn import HeteroConv, GATv2Conv, Linear, SAGEConv
 from src.utils.helpers import timeit
 
 
-class HeteroProteinGNN(torch.nn.Module):
+class  ProteinGNN(torch.nn.Module):
     def __init__(self, hidden_channels, out_channels):
         super().__init__()
         self.conv1 = HeteroConv(

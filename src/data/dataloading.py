@@ -2,120 +2,118 @@ import torch
 from torch_geometric.data import HeteroData
 from torch_geometric.loader import NeighborLoader
 import pandas as pd
-import numpy as np
 import pickle
-from src.utils import constants
-from src.utils.helpers import timeit
-import logging
 from pathlib import Path
-from collections import defaultdict
+import logging
+import random
 
 logger = logging.getLogger(__name__)
 
-import time
 
+class SwissProtDataset:
+    """Dataset that maintains a static protein-protein graph and loads individual protein features on-demand."""
 
-class ChunkedEmbeddingLoader:
-    """Efficiently loads protein embeddings from chunked format."""
-
-    def __init__(self, chunks_dir: str, cache_size: int = 5):
-        """
-        Args:
-            chunks_dir: Directory containing chunked embedding files
-            cache_size: Number of chunks to keep in memory cache
-        """
-        self.chunks_dir = Path(chunks_dir)
-        self.cache_size = cache_size
-        self._chunk_cache = {}
-        self._cache_order = []
-
-        # Load mapping data
-        with open(f"{self.chunks_dir}/protein_mapping.pkl", "rb") as f:
-            mapping_data = pickle.load(f)
-        self.protein_to_chunk = mapping_data["protein_to_chunk"]
-        self.chunk_metadata = mapping_data["chunk_metadata"]
-
-        logger.info(
-            f"Loaded chunked embeddings metadata: {len(self.protein_to_chunk)} proteins in {len(self.chunk_metadata)} chunks"
-        )
-        del mapping_data
-
-    def _load_chunk(self, chunk_idx: int) -> dict:
-        """Load a specific chunk into memory."""
-        if chunk_idx in self._chunk_cache:
-            # Move to end of cache order (LRU)
-            self._cache_order.remove(chunk_idx)
-            self._cache_order.append(chunk_idx)
-            return self._chunk_cache[chunk_idx]
-
-        # Load chunk from disk
-        chunk_path = f"{self.chunks_dir}/embeddings_chunk_{chunk_idx}.pt"
-        chunk_data = torch.load(chunk_path, map_location="cpu")
-
-        # Add to cache
-        self._chunk_cache[chunk_idx] = chunk_data
-        self._cache_order.append(chunk_idx)
-
-        # Evict oldest chunk if cache is full
-        if len(self._chunk_cache) > self.cache_size:
-            oldest_chunk = self._cache_order.pop(0)
-            del self._chunk_cache[oldest_chunk]
-
-        logger.debug(f"Loaded chunk {chunk_idx} into cache")
-        return chunk_data
-
-    def get_embeddings_batch(self, protein_ids: list) -> dict:
-        """Get embeddings for a batch of proteins efficiently."""
-        # Group proteins by chunk
-        chunk_groups = defaultdict(list)
-        for protein_id in protein_ids:
-            if protein_id in self.protein_to_chunk:
-                chunk_idx = self.protein_to_chunk[protein_id]
-                chunk_groups[chunk_idx].append(protein_id)
-
-        # Load embeddings
-        embeddings = {}
-        for chunk_idx, chunk_proteins in chunk_groups.items():
-            chunk_data = self._load_chunk(chunk_idx)
-            for protein_id in chunk_proteins:
-                if protein_id in chunk_data:
-                    embeddings[protein_id] = chunk_data[protein_id]
-
-        return embeddings
-
-
-class SwissProtHeteroDataset:
-    def __init__(self, config, split):
-        logger.info("Initializing SwissProtHeteroDataset...")
-        logger.debug(f"Datapath: {config}, Split: {split}")
-
-        # Load GO annotations
-        logger.info("Loading GO annotations...")
-        self.go_train_dict = self._load_go_annotations(config["train"])
-        self.go_val_dict = self._load_go_annotations(config["val"])
-        self.go_test_dict = self._load_go_annotations(config["test"])
-        logger.info(
-            f"Loaded GO annotations: Train={len(self.go_train_dict)}, Val={len(self.go_val_dict)}, Test={len(self.go_test_dict)}"
-        )
+    def __init__(self, config, split="train"):
+        self.config = config
         self.split = split
+        self.graphs_dir = Path("./data/swissprot/2024_01/protein_graphs")
 
-        self.chunks_dir = config["prot_emb_path"]
-        logger.info(f"Loading chunked embeddings from: {self.chunks_dir}")
-        self.embedding_loader = ChunkedEmbeddingLoader(
-            self.chunks_dir, cache_size=config["trainer"]["cache_size"]
+        with open(f"{self.graphs_dir}/interpro_vocab.pkl", "rb") as f:
+            interpro_info = pickle.load(f)
+        self.ipr_vocab_size = interpro_info["vocab_size"]
+
+        with open(f"{self.graphs_dir}/go_vocab.pkl", "rb") as f:
+            go_info = pickle.load(f)
+        self.go_vocab_info = go_info
+        self.go_vocab_sizes = {
+            onto: info["vocab_size"] for onto, info in go_info.items()
+        }
+        self.subontology = (
+            config["data"]["subontology"][0] if config["data"]["subontology"] else "BPO"
         )
+        self.go_vocab_size = self.go_vocab_sizes[self.subontology]
 
-        # Load InterPro annotations
-        logger.info("Loading InterPro annotations...")
-        self.interpro_dict = self._load_interpro_annotations(config["interpro"])
+        # Get preprocessed protein graphs
+        self.proteins = [
+            f.stem
+            for f in self.graphs_dir.glob("*.pt")
+            if f.stem not in ["metadata", "interpro_vocab", "go_vocab"]
+        ]
+
+        # Load GO annotations to determine train/val/test splits
+        self._load_split_masks(config)
+
+        # Create the protein-protein heterograph
+        self.data = self._create_protein_graph(config)
+
         logger.info(
-            f"Loaded InterPro annotations for {len(self.interpro_dict)} proteins"
+            f"Created protein graph with {self.data['protein'].num_nodes} proteins"
+        )
+        logger.info(f"Train proteins: {self.train_mask.sum().item()}")
+        logger.info(f"Val proteins: {self.val_mask.sum().item()}")
+        logger.info(f"Test proteins: {self.test_mask.sum().item()}")
+
+    def _load_split_masks(self, config):
+        """Load train/val/test splits based on GO annotations."""
+        splits = {"train": set(), "val": set(), "test": set()}
+        subontology = self.subontology
+
+        if config["data"].get("train_on_swissprot"):
+            exp_suffix = "exp_" if config["data"].get("exp_only", True) else ""
+            train_path = f"./data/swissprot/2024_01/swissprot_2024_01_{subontology}_{exp_suffix}annotations.tsv"
+        else:
+            # Stick to original dataset's train set
+            train_path = f"./data/{config['data']['dataset']}/{config['data']['dataset']}_{subontology}_train_annotations.tsv"
+
+        if Path(train_path).exists():
+            train_df = pd.read_csv(train_path, sep="\t")
+            splits["train"] = set(train_df["EntryID"].tolist())
+
+        # Load val and test splits
+        dataset_name = config["data"]["dataset"]
+        for split_name in ["val", "test"]:
+            split_path = f"./data/{dataset_name}/{dataset_name}_{subontology}_{split_name}_annotations.tsv"
+            if Path(split_path).exists():
+                split_df = pd.read_csv(split_path, sep="\t")
+                splits[split_name] = set(split_df["EntryID"].tolist())
+
+        # Filter by available proteins and create index mappings
+        protein_set = set(self.proteins)
+        for split in splits:
+            splits[split] = splits[split].intersection(protein_set)
+
+        self.protein_to_idx = {pid: i for i, pid in enumerate(self.proteins)}
+        self.idx_to_protein = {v: k for k, v in self.protein_to_idx.items()}
+
+        # Create split sets with indices and masks
+        self.train_proteins = list(splits["train"])
+        self.val_proteins = list(splits["val"])
+        self.test_proteins = list(splits["test"])
+
+        num_proteins = len(self.proteins)
+        self.train_mask = torch.zeros(num_proteins, dtype=torch.bool)
+        self.val_mask = torch.zeros(num_proteins, dtype=torch.bool)
+        self.test_mask = torch.zeros(num_proteins, dtype=torch.bool)
+
+        for pid in self.train_proteins:
+            if pid in self.protein_to_idx:
+                self.train_mask[self.protein_to_idx[pid]] = True
+        for pid in self.val_proteins:
+            if pid in self.protein_to_idx:
+                self.val_mask[self.protein_to_idx[pid]] = True
+        for pid in self.test_proteins:
+            if pid in self.protein_to_idx:
+                self.test_mask[self.protein_to_idx[pid]] = True
+
+        logger.info(
+            f"Loaded splits - Train: {len(self.train_proteins)}, Val: {len(self.val_proteins)}, Test: {len(self.test_proteins)}"
         )
 
-        # Load alignment info
-        logger.info("Loading alignment data...")
-        self.alignment_df = pd.read_csv(
-            config["alignments"],
+    def _create_protein_graph(self, config):
+        """Creates the high-level protein network."""
+        alignment_path = f"{config['constants']['project_path']}{config['data']['alignment_path'][1:]}"
+        alignment_df = pd.read_csv(
+            alignment_path,
             sep="\t",
             header=None,
             names=[
@@ -133,292 +131,169 @@ class SwissProtHeteroDataset:
                 "bitscore",
             ],
         )
-        logger.info(f"Loaded alignment data with {len(self.alignment_df)} entries")
 
-        # Collect all proteins
-        logger.info("Collecting all proteins from annotations and alignments...")
-        go_prot_ids = (
-            set(self.go_train_dict.keys())
-            | set(self.go_val_dict.keys())
-            | set(self.go_test_dict.keys())
-        )
-        ipr_prot_ids = set(self.interpro_dict.keys())
-        align_prot_ids = set(self.alignment_df["protein1"]).union(
-            set(self.alignment_df["protein2"])
-        )
-        proteins = sorted(go_prot_ids | ipr_prot_ids | align_prot_ids)
-        self.proteins = proteins
-        logger.info(f"Total unique proteins: {len(proteins)}")
+        # Convert to indices
+        source_indices = alignment_df["protein1"].map(self.protein_to_idx).tolist()
+        target_indices = alignment_df["protein2"].map(self.protein_to_idx).tolist()
 
-        # Map protein IDs to indices
-        self.protein_id_to_idx = {pid: i for i, pid in enumerate(proteins)}
-        self.protein_idx_to_id = {v: k for k, v in self.protein_id_to_idx.items()}
-        logger.debug("Built protein ID to index mappings")
-
-        # Build masks
-        logger.info("Building train/val/test masks...")
-        self.train_mask = torch.zeros(len(proteins), dtype=torch.bool)
-        self.val_mask = torch.zeros(len(proteins), dtype=torch.bool)
-        self.test_mask = torch.zeros(len(proteins), dtype=torch.bool)
-
-        for pid in self.go_train_dict.keys():
-            if pid in self.protein_id_to_idx:
-                self.train_mask[self.protein_id_to_idx[pid]] = True
-        logger.debug(f"Train mask set for {self.train_mask.sum().item()} proteins")
-
-        val_pids = set(self.go_val_dict.keys()).union(self.go_train_dict.keys())
-        for pid in val_pids:
-            if pid in self.protein_id_to_idx:
-                self.val_mask[self.protein_id_to_idx[pid]] = True
-        logger.debug(f"Val mask set for {self.val_mask.sum().item()} proteins")
-
-        test_pids = (
-            set(self.go_test_dict.keys())
-            .union(self.go_train_dict.keys())
-            .union(self.go_val_dict.keys())
-        )
-        for pid in test_pids:
-            if pid in self.protein_id_to_idx:
-                self.test_mask[self.protein_id_to_idx[pid]] = True
-        logger.debug(f"Test mask set for {self.test_mask.sum().item()} proteins")
-
-        # Build vocab sizes
-        logger.info("Building vocabulary sizes...")
-        all_go_dicts = (
-            list(self.go_train_dict.values())
-            + list(self.go_val_dict.values())
-            + list(self.go_test_dict.values())
-        )
-        self.go_vocab_size = all_go_dicts[0].shape[0] if all_go_dicts else 0
-        self.ipr_vocab_size = (
-            next(iter(self.interpro_dict.values())).shape[0]
-            if self.interpro_dict
-            else 0
-        )
-        logger.info(
-            f"GO vocab size: {self.go_vocab_size}, InterPro vocab size: {self.ipr_vocab_size}"
-        )
-
-        # Build hetero data
-        logger.info("Building heterogeneous data graph...")
-        self.data = self._build_hetero_data_base()
-        logger.info("Validating heterogeneous data...")
-        self.data.validate(raise_on_error=True)
-        logger.info("Dataset initialization complete!")
-
-    @timeit
-    def _load_go_annotations(self, go_tsv_path):
-        """
-        Load GO annotations from a TSV of format:
-        EntryID   GO terms separated by ;
-        Return dict: protein_id --> multi-hot tensor for GO terms
-        """
-        df = pd.read_csv(go_tsv_path, sep="\t")
-        # Parse all unique GO terms
-        all_terms = set()
-        for terms_str in df["term"]:
-            all_terms.update([t.strip() for t in terms_str.split(";")])
-        all_terms = sorted(all_terms)
-        go_to_idx = {go: i for i, go in enumerate(all_terms)}
-
-        # Build multi-hot encoding per protein
-        go_dict = {}
-        for _, row in df.iterrows():
-            pid = row["EntryID"]
-            terms = [t.strip() for t in row["term"].split(";")]
-            vec = torch.zeros(len(all_terms), dtype=torch.float32)
-            for t in terms:
-                vec[go_to_idx[t]] = 1.0
-            go_dict[pid] = vec
-
-        self.go_vocab_size = len(all_terms)
-        return go_dict
-
-    @timeit
-    def _load_interpro_annotations(self, interpro_tsv_path):
-        """
-        Load InterPro annotations from TSV with columns ID, IPR (IPR ID)
-        Returns dict protein_id -> multi-hot vector of interpro presence
-        """
-        df = pd.read_csv(interpro_tsv_path, sep="\t")
-        ipr_ids = df["IPR"].unique()
-        ipr_to_idx = {ipr: i for i, ipr in enumerate(ipr_ids)}
-
-        grouped = df.groupby("ID")["IPR"].apply(list)
-        interpro_dict = {}
-        for pid, ipr_list in grouped.items():
-            vec = torch.zeros(len(ipr_ids), dtype=torch.float32)
-            for ipr in ipr_list:
-                vec[ipr_to_idx[ipr]] = 1.0
-            interpro_dict[pid] = vec
-        self.ipr_vocab_size = len(ipr_ids)
-        return interpro_dict
-
-    @timeit
-    def _build_hetero_data_base(self):
+        # Create protein-protein full graph
         data = HeteroData()
+
+        # Protein nodes - features are added later when batching
         num_proteins = len(self.proteins)
         data["protein"].num_nodes = num_proteins
 
-        # Protein start AA index mapping
-        self.protein_start_aa = {}
-        src_aa, dst_protein = [], []
-        tot_aa_counts = 0
-        for chunk_nb in self.embedding_loader.chunk_metadata.keys():
-            proteins_in_chunk = self.embedding_loader.chunk_metadata[chunk_nb][
-                "proteins"
-            ]
-            aa_counts = self.embedding_loader.chunk_metadata[chunk_nb][
-                "amino_acid_counts"
-            ]
-            for pid, aa_count in zip(proteins_in_chunk, aa_counts):
-                if pid not in self.protein_id_to_idx:
-                    continue
-                prot_idx = self.protein_id_to_idx[pid]
-                self.protein_start_aa[prot_idx] = tot_aa_counts
-                src_aa.extend(range(tot_aa_counts, tot_aa_counts + aa_count))
-                dst_protein.extend([prot_idx] * aa_count)
-                tot_aa_counts += aa_count
-        logger.info(f"Total AA nodes: {tot_aa_counts}")
-        data["aa"].num_nodes = tot_aa_counts
+        # Protein-protein edges
+        protein_edge_index = torch.tensor(
+            [source_indices, target_indices], dtype=torch.long
+        )
+        if config["data"].get("edge_attrs", True):
+            edge_attrs = torch.tensor(
+                alignment_df["bitscore"].tolist(), dtype=torch.float32
+            )
+            data["protein", "aligned_with", "protein"].edge_attr = edge_attrs
+        data["protein", "aligned_with", "protein"].edge_index = protein_edge_index
 
-        edge_index_aa2protein = torch.tensor([src_aa, dst_protein], dtype=torch.long)
-        data["aa", "aa2protein", "protein"].edge_index = edge_index_aa2protein
-
-        source = self.alignment_df["protein1"].map(self.protein_id_to_idx).to_list()
-        target = self.alignment_df["protein2"].map(self.protein_id_to_idx).to_list()
-        edge_index_aligned = torch.tensor([source, target], dtype=torch.long)
-        data["protein", "aligned_with", "protein"].edge_index = edge_index_aligned
-
-        # Attach masks as attributes (for convenience)
-        data["protein"].train_mask = self.train_mask
-        data["protein"].val_mask = self.val_mask
-        data["protein"].test_mask = self.test_mask
-
+        logger.info(f"Built protein-protein graph with {len(source_indices)} edges")
         return data
 
-    @timeit
+    def load_protein_graph(self, protein_id):
+        """Load a single protein graph from disk."""
+        graph_path = f"{self.graphs_dir}/{protein_id}.pt"
+        if not graph_path.exists():
+            logger.warning(f"Graph not found for protein {protein_id}")
+            return None
+        return torch.load(graph_path, map_location="cpu")
+
+    def convert_go_terms_to_onehot(self, go_terms_dict):
+        """Convert GO terms to one-hot encoding based on config."""
+        # Get the appropriate GO vocabulary for this subontology
+        go_vocab = self.go_vocab_info[self.subontology]
+        go_to_idx = go_vocab["go_to_idx"]
+        vocab_size = go_vocab["vocab_size"]
+
+        onehot = torch.zeros(vocab_size, dtype=torch.float32)
+        use_experimental_only = self.config["data"].get("exp_only", True)
+        if use_experimental_only:
+            terms = go_terms_dict.get("experimental", [])
+        else:
+            terms = go_terms_dict.get("curated", [])
+
+        for term in terms:
+            if term in go_to_idx:
+                onehot[go_to_idx[term]] = 1.0
+
+        return onehot
+
     def get_batch_features(self, batch):
-        batch["aa"].x = self.get_aa_features(batch)
-        go, interpro = self.get_function_features(batch)
-        batch["protein"].go = go
-        batch["protein"].interpro = interpro
-        batch["protein"].x = batch["protein"].interpro  # Use InterPro as features
-        return batch
+        """Load individual protein features and amino acid data for the sampled batch."""
+        protein_n_id = batch["protein"].n_id
+        batch_size = batch["protein"].batch_size
+        sampled_protein_ids = [self.idx_to_protein[idx.item()] for idx in protein_n_id]
 
-    def get_aa_features(self, batch):
-        aa_embeddings = torch.zeros(batch["aa"].num_nodes, 1280, dtype=torch.float32)
+        # Load individual protein graphs and extract features
+        all_interpro_features = []
+        all_go_features = []
+        all_aa_features = []
+        aa_to_protein_edges = []
+        protein_sizes = []
+        current_aa_offset = 0
 
-        t1 = time.time()
-        # Get AA-to-protein edge index to map AA local indices to protein local indices
-        edge_index = batch["aa", "aa2protein", "protein"].edge_index
-        aa_to_protein_local = {}  # Map AA local idx to protein local idx
-        for aa_local, prot_local in zip(edge_index[0], edge_index[1]):
-            aa_to_protein_local[aa_local.item()] = prot_local.item()
-        t2 = time.time()
-        logger.info(f"AA to protein mapping time: {t2 - t1:.4f} seconds")
+        for local_idx, protein_id in enumerate(sampled_protein_ids):
+            protein_graph = self.load_protein_graph(protein_id)
 
-        # Group AA local indices by protein and compute positions
-        protein_to_aa_data = {}
-        for aa_local_idx in range(batch["aa"].num_nodes):
-            if aa_local_idx in aa_to_protein_local:
-                prot_local_idx = aa_to_protein_local[aa_local_idx]
-                prot_global_idx = batch["protein"].n_id[prot_local_idx].item()
-                protein_id = self.protein_idx_to_id[prot_global_idx]
-                aa_global_idx = batch["aa"].n_id[aa_local_idx].item()
-                # Compute position on the fly: global AA idx - protein's start idx
-                aa_pos = aa_global_idx - self.protein_start_aa[prot_global_idx]
-                protein_to_aa_data.setdefault(protein_id, []).append(
-                    (aa_local_idx, aa_pos)
+            if protein_graph is None:
+                # Use default features if graph not found
+                logger.warning(
+                    f"Using default features for missing protein {protein_id}"
                 )
-        t3 = time.time()
-        logger.info(f"Protein to AA grouping time: {t3 - t2:.4f} seconds")
-        # Get unique protein IDs for batch loading
-        protein_ids = list(protein_to_aa_data.keys())
-
-        # DEBUG: Handle toy dataset with random embeddings to avoid storing embeddings locally
-        if "toy" in self.chunks_dir:
-            # Set random embeddings for toy dataset proteins
-            for protein_id, aa_list in protein_to_aa_data.items():
-                for aa_local_idx, aa_pos in aa_list:
-                    aa_embeddings[aa_local_idx] = torch.randn(1280)
-            return aa_embeddings
-
-        # Load embeddings for all proteins in this batch using chunked loader
-        protein_embeddings = self.embedding_loader.get_embeddings_batch(protein_ids)
-        t4 = time.time()
-        logger.info(f"Embedding loading time: {t4 - t3:.4f} seconds")
-        # Assign embeddings to AA nodes
-        for protein_id, aa_list in protein_to_aa_data.items():
-            if protein_id in protein_embeddings:
-                protein_embs = protein_embeddings[protein_id]
-                for aa_local_idx, aa_pos in aa_list:
-                    if aa_pos < len(protein_embs):
-                        aa_embeddings[aa_local_idx] = protein_embs[aa_pos].to(
-                            torch.float32
-                        )
-        t5 = time.time()
-        logger.info(f"AA embedding assignment time: {t5 - t4:.4f} seconds")
-        return aa_embeddings
-
-    @timeit
-    def get_function_features(self, batch):
-        interpro = torch.zeros(
-            batch["protein"].num_nodes, self.ipr_vocab_size, dtype=torch.float32
-        )
-        go = torch.zeros(
-            batch["protein"].num_nodes, self.go_vocab_size, dtype=torch.float32
-        )
-
-        for local_idx, protein_global_idx in enumerate(batch["protein"].n_id.tolist()):
-            protein_id = self.protein_idx_to_id[protein_global_idx]
-            ipr_features = self.interpro_dict.get(
-                protein_id, torch.zeros(self.ipr_vocab_size)
-            )
-            interpro[local_idx] = ipr_features
-
-            if self.split == "train":
-                go_dict = self.go_train_dict
-            elif self.split == "val":
-                go_dict = self.go_val_dict
+                interpro_feat = torch.zeros(self.ipr_vocab_size, dtype=torch.float32)
+                go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
+                aa_feat = torch.zeros(200, 1280, dtype=torch.float32)  # Default 200 AAs
             else:
-                go_dict = self.go_test_dict
-            go_features = go_dict.get(protein_id, torch.zeros(self.go_vocab_size))
-            go[local_idx] = go_features
-        return go, interpro
+                # Extract InterPro features
+                interpro_feat = protein_graph["protein"].interpro.squeeze(0)
+
+                # Extract and convert GO features
+                go_terms_key = f"go_terms_{self.subontology}"
+                if go_terms_key in protein_graph["protein"]:
+                    go_terms_dict = protein_graph["protein"][go_terms_key]
+
+                    # For training proteins, use actual annotations
+                    # For val/test, use zeros to prevent leakage
+                    # Note: PyG NeighborLoader guarantees that sampled seed nodes (i.e. nodes which we are making a prediction on) are first in the batch
+                    if local_idx < batch_size and protein_id in self.train_proteins:
+                        go_feat = self.convert_go_terms_to_onehot(go_terms_dict)
+                    else:
+                        go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
+
+                # Extract amino acid features
+                aa_feat = protein_graph["aa"].x
+
+            all_interpro_features.append(interpro_feat)
+            all_go_features.append(go_feat)
+            all_aa_features.append(aa_feat)
+            protein_sizes.append(aa_feat.shape[0])
+
+            # Create AA to protein edges
+            num_aas = aa_feat.shape[0]
+            aa_indices = torch.arange(current_aa_offset, current_aa_offset + num_aas)
+            protein_indices = torch.full((num_aas,), local_idx, dtype=torch.long)
+            aa_to_protein_edges.append(torch.stack([aa_indices, protein_indices]))
+
+            current_aa_offset += num_aas
+
+        # Update batch with loaded features
+        batch["protein"].interpro = torch.stack(all_interpro_features)
+        batch["protein"].go = torch.stack(all_go_features)
+
+        # Add amino acid nodes and features
+        batch["aa"].x = torch.cat(all_aa_features, dim=0)
+        batch["aa"].num_nodes = batch["aa"].x.shape[0]
+
+        # Add AA to protein edges
+        batch["aa", "belongs_to", "protein"].edge_index = torch.cat(
+            aa_to_protein_edges, dim=1
+        )
+
+        # Store metadata
+        batch["protein"].protein_ids = sampled_protein_ids
+        batch["protein"].protein_sizes = protein_sizes
+
+        return batch
 
 
 def define_loaders(config, dataset):
+    """Create NeighborLoader instances for train/val/test."""
+
     train_loader = NeighborLoader(
         dataset.data,
-        input_nodes=("protein", dataset.data["protein"].train_mask),
-        num_neighbors=[-1],  # Use all neighbors
+        num_neighbors={("protein", "aligned_with", "protein"): [-1]},  # 1-hop sampling
         batch_size=config["model"]["batch_size"],
+        input_nodes=("protein", dataset.train_mask),
+        transform=dataset.get_batch_features,
         shuffle=True,
-        num_workers=16,
-        pin_memory=True,
-        persistent_workers=True,
+        num_workers=0,
     )
 
     val_loader = NeighborLoader(
         dataset.data,
-        input_nodes=("protein", dataset.data["protein"].val_mask),
-        num_neighbors=[-1],  # Use all neighbors
+        num_neighbors={("protein", "aligned_with", "protein"): [-1]},
         batch_size=config["model"]["batch_size"],
+        input_nodes=("protein", dataset.val_mask),
+        transform=dataset.get_batch_features,
         shuffle=False,
-        num_workers=16,
-        pin_memory=True,
-        persistent_workers=True,
+        num_workers=0,
     )
 
     test_loader = NeighborLoader(
         dataset.data,
-        input_nodes=("protein", dataset.data["protein"].test_mask),
-        num_neighbors=[-1],  # Use all neighbors
+        num_neighbors={("protein", "aligned_with", "protein"): [-1]},
         batch_size=config["model"]["batch_size"],
+        input_nodes=("protein", dataset.test_mask),
+        transform=dataset.get_batch_features,
         shuffle=False,
-        num_workers=16,
-        pin_memory=True,
-        persistent_workers=True,
+        num_workers=0,
     )
+
     return train_loader, val_loader, test_loader

@@ -9,8 +9,8 @@ import datetime
 import torch_geometric.transforms as T
 from torch_geometric.explain import Explainer, CaptumExplainer, AttentionExplainer
 from src.utils.visualize import visualize_graph_via_networkx, plot_aa_edge_histogram
-from src.data.dataloading import SwissProtHeteroDataset, define_loaders
-from src.models.gnn_model import HeteroProteinGNN
+from src.data.dataloading import SwissProtDataset, define_loaders
+from src.models.gnn_model import ProteinGNN
 from src.utils.helpers import timeit
 import time
 
@@ -22,18 +22,17 @@ logger = logging.getLogger(__name__)
 
 
 @timeit
-def train_epoch(model, optimizer, loader, dataset, device, epoch):
+def train_epoch(model, optimizer, loader, device, epoch):
     model.train()
     total_loss = 0
-    for batch in tqdm.tqdm(loader):
-        batch = dataset.get_batch_features(batch)
+    for batch in tqdm.tqdm(loader, desc=f"Training Epoch {epoch}"):
         batch = batch.to(device)
 
         optimizer.zero_grad()
         t1 = time.time()
         out = model(batch.x_dict, batch.edge_index_dict, batch)
         t2 = time.time()
-        logger.info(f"Forward pass time: {t2 - t1:.4f} seconds")
+        logger.debug(f"Forward pass time: {t2 - t1:.4f} seconds")
 
         criterion = torch.nn.BCEWithLogitsLoss()
         loss = criterion(
@@ -43,7 +42,7 @@ def train_epoch(model, optimizer, loader, dataset, device, epoch):
         t1 = time.time()
         loss.backward()
         t2 = time.time()
-        logger.info(f"Backward pass time: {t2 - t1:.4f} seconds")
+        logger.debug(f"Backward pass time: {t2 - t1:.4f} seconds")
         optimizer.step()
         total_loss += loss.item()
     avg_loss = total_loss / len(loader)
@@ -52,14 +51,16 @@ def train_epoch(model, optimizer, loader, dataset, device, epoch):
     return avg_loss
 
 
-def validation(model, loader, dataset, device, epoch, results_dir):
+def validation(model, loader, device, epoch):
     model.eval()
     total_loss = 0
-    with torch.no_grad():
-        for batch in loader:
-            batch = dataset.get_batch_features(batch)
-            batch = batch.to(device)
 
+    with torch.no_grad():
+        for batch in tqdm.tqdm(loader, desc="Validation"):
+            if batch is None:
+                continue
+
+            batch = batch.to(device)
             out = model(batch.x_dict, batch.edge_index_dict, batch)
 
             criterion = torch.nn.BCEWithLogitsLoss()
@@ -137,9 +138,8 @@ def main():
         config = yaml.safe_load(f)
 
     time_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_qualifier = config["run"]["qualifier"]
-    dataset = config["data"]["dataset"]
-    run_id = f"{time_str}_{dataset}_{run_qualifier}"
+    dataset_name = config["data"]["dataset"]
+    run_id = f"{time_str}_{dataset_name}_{config['run']['qualifier']}_efficient"
 
     # Create results directory
     results_dir = f"./results/{config['data']['dataset']}/{run_id}"
@@ -150,7 +150,7 @@ def main():
         wandb.init(
             project="PFP_layer",
             config=config,
-            name=f"{run_id}_{dataset}_{subontology}",
+            name=f"{run_id}_{dataset_name}_{subontology}",
         )
         wandb.run.log_code(".")
 
@@ -166,63 +166,36 @@ def main():
             config["trainer"]["device"] if torch.cuda.is_available() else "cpu"
         )
 
-        # Paths from config
-        config["interpro"] = (
-            f"{config['constants']['project_path']}{config['data']['interpro_path'][1:]}"
-        )
-        config["prot_emb"] = (
-            f"{config['constants']['project_path']}{config['data']['prot_emb_path'][1:]}"
-        )
-        config["alignments"] = (
-            f"{config['constants']['project_path']}{config['data']['alignment_path'][1:]}"
-        )
-        config["prot_emb_path"] = (
-            f"{config['constants']['project_path']}{config['data']['prot_emb_path'][1:]}"
-        )
-        config["train"] = (
-            f"{config['constants']['project_path']}/data/{dataset}/{dataset}_{subontology}_train_annotations.tsv"
-        )
-        config["val"] = (
-            f"{config['constants']['project_path']}/data/{dataset}/{dataset}_{subontology}_val_annotations.tsv"
-        )
-        config["test"] = (
-            f"{config['constants']['project_path']}/data/{dataset}/{dataset}_{subontology}_test_annotations.tsv"
-        )
-        # Optionally add SwissProt training data
-        if config["data"].get("train_on_swissprot", True):
-            exp = "exp_" if config["data"].get("swissprot_exp_only", True) else ""
-            config["train"] = (
-                f"{config['constants']['project_path']}/data/swissprot/2024_01/swissprot_2024_01_{subontology}_{exp}annotations.tsv"
-            )
+        # Update config for current subontology
+        config["data"]["subontology"] = [subontology]  # Set current subontology
 
-        dataset = SwissProtHeteroDataset(config, split="train")
+        # Create efficient dataset
+        logger.info("Creating efficient dataset...")
+        dataset = SwissProtDataset(config, split="train")
 
-        transform = T.Compose(
-            [
-                T.ToUndirected(reduce="mean", merge=True),
-                T.RemoveDuplicatedEdges(reduce="mean"),
-            ]
-        )
-        dataset.data = transform(dataset.data)
-        dataset.data.validate(raise_on_error=True)
-        logger.info(f"Dataset: {dataset.data}")
-        assert dataset.data.validate()
-
+        # Create efficient loaders
+        logger.info("Creating efficient data loaders...")
         train_loader, val_loader, test_loader = define_loaders(config, dataset)
 
-        logger.info(f"Dataset has {dataset.data['protein'].num_nodes} protein nodes")
-        logger.info(f"GO vocabulary size: {dataset.go_vocab_size}")
+        # Get vocab size for current subontology
+        go_vocab_size = dataset.go_vocab_sizes[subontology]
+
+        logger.info(
+            f"Dataset loaded with {len(dataset.available_proteins)} total proteins"
+        )
+        logger.info(f"GO vocabulary size for {subontology}: {go_vocab_size}")
         logger.info(f"InterPro vocabulary size: {dataset.ipr_vocab_size}")
-        logger.info(f"Number of training proteins: {dataset.train_mask.sum().item()}")
-        logger.info(f"Number of validation proteins: {dataset.val_mask.sum().item()}")
-        logger.info(f"Number of test proteins: {dataset.test_mask.sum().item()}")
+        logger.info(f"Number of training proteins: {len(dataset.train_proteins)}")
+        logger.info(f"Number of validation proteins: {len(dataset.val_proteins)}")
+        logger.info(f"Number of test proteins: {len(dataset.test_proteins)}")
 
         # Instantiate model with config values
-        model = HeteroProteinGNN(
+        model = ProteinGNN(
             hidden_channels=config["model"]["hidden_channels"],
-            out_channels=dataset.go_vocab_size,
+            out_channels=go_vocab_size,
         )
         model = model.to(device)
+
         if config["trainer"].get("compile", False):
             model = torch.compile(model)
             logger.info("Model compiled with torch.compile()")
@@ -239,19 +212,21 @@ def main():
             gamma=config["scheduler"]["gamma"],
         )
 
+        # Training loop
         for epoch in range(1, config["trainer"]["epochs"] + 1):
-            loss = train_epoch(model, optimizer, train_loader, dataset, device, epoch)
+            train_loss = train_epoch(model, optimizer, train_loader, device, epoch)
+            val_loss = validation(model, val_loader, device, epoch)
             scheduler.step()
 
         # Save model
-        model_path = os.path.join(results_dir, "model.pth")
+        model_path = os.path.join(results_dir, f"model_{subontology}.pth")
         torch.save(model.state_dict(), model_path)
         logger.info(f"Model saved to {model_path}")
         wandb.save(model_path)
 
-        # Validation after training
-        val_loss = validation(model, val_loader, dataset, device, epoch, results_dir)
         wandb.finish()
+
+    logger.info("Training complete for all subontologies!")
 
 
 if __name__ == "__main__":
