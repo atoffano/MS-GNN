@@ -1,149 +1,138 @@
 import tqdm
 import torch
-import h5py
 import yaml
 import logging
 import wandb
 import os
 import datetime
-import torch_geometric.transforms as T
+import time
 from torch_geometric.explain import Explainer, CaptumExplainer, AttentionExplainer
 from src.utils.visualize import visualize_graph_via_networkx, plot_aa_edge_histogram
 from src.data.dataloading import SwissProtDataset, define_loaders
 from src.models.gnn_model import ProteinGNN
+from src.utils.evaluation import save_predictions, evaluate
 from src.utils.helpers import timeit
-import time
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 
-@timeit
-def train_epoch(model, optimizer, loader, device, epoch):
-    model.train()
-    total_loss = 0
-    for batch in tqdm.tqdm(loader, desc=f"Training Epoch {epoch}"):
-        batch = batch.to(device)
-
-        optimizer.zero_grad()
-        t1 = time.time()
-        out = model(batch.x_dict, batch.edge_index_dict, batch)
-        t2 = time.time()
-        logger.debug(f"Forward pass time: {t2 - t1:.4f} seconds")
-
-        criterion = torch.nn.BCEWithLogitsLoss()
-        loss = criterion(
-            out,
-            batch["protein"].go[: batch["protein"].batch_size],
-        )
-        t1 = time.time()
-        loss.backward()
-        t2 = time.time()
-        logger.debug(f"Backward pass time: {t2 - t1:.4f} seconds")
-        optimizer.step()
-        total_loss += loss.item()
-    avg_loss = total_loss / len(loader)
-    wandb.log({"train_loss": avg_loss, "epoch": epoch})
-    logger.info(f"Epoch {epoch} - Train loss: {avg_loss:.4f}")
-    return avg_loss
-
-
-def validation(model, loader, device, epoch):
+def run_intermediate_validation(model, val_loader, criterion, device):
     model.eval()
-    total_loss = 0
-
+    val_loss_sum = 0
+    val_batches_run = 0
+    val_iter = iter(val_loader)
     with torch.no_grad():
-        for batch in tqdm.tqdm(loader, desc="Validation"):
-            if batch is None:
-                continue
+        for _ in range(1):
+            val_batch = next(val_iter)
+            val_batch = val_batch.to(device)
+            val_out = model(val_batch.x_dict, val_batch.edge_index_dict, val_batch)
+            val_loss = criterion(
+                val_out,
+                val_batch["protein"].go[: val_batch["protein"].batch_size],
+            )
+            val_loss_sum += val_loss.item()
+            val_batches_run += 1
+    avg_val_loss = val_loss_sum / val_batches_run
+    model.train()
+    return avg_val_loss
 
+
+@timeit
+def train(config, model, train_loader, val_loader, device):
+    optimizer = torch.optim.Adam(model.parameters(), lr=config["optimizer"]["lr"])
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size=config["scheduler"]["step_size"],
+        gamma=config["scheduler"]["gamma"],
+    )
+    criterion = torch.nn.BCEWithLogitsLoss()
+
+    # Training loop
+    for epoch in range(1, config["trainer"]["epochs"] + 1):
+        model.train()
+        total_loss = 0
+        batch_count = 0
+        num_batches = len(train_loader)
+        trigger_points = [
+            tp for tp in range(1, num_batches) if tp % (num_batches // 3) == 0
+        ]
+
+        for batch in tqdm.tqdm(train_loader, desc=f"Training Epoch {epoch}"):
+            t1 = time.time()
             batch = batch.to(device)
+            optimizer.zero_grad()
             out = model(batch.x_dict, batch.edge_index_dict, batch)
 
-            criterion = torch.nn.BCEWithLogitsLoss()
             loss = criterion(
                 out,
                 batch["protein"].go[: batch["protein"].batch_size],
             )
+            loss.backward()
+            optimizer.step()
             total_loss += loss.item()
+            t2 = time.time()
+            logger.debug(f"Batch pass time: {t2 - t1:.4f} seconds")
+            batch_count += 1
 
-        #     # Explanation generation
-        #     explainer = Explainer(
-        #         model,  # It is assumed that model outputs a single tensor.
-        #         algorithm=CaptumExplainer("IntegratedGradients"),
-        #         explanation_type="model",
-        #         node_mask_type="attributes",
-        #         edge_mask_type="object",
-        #         model_config=dict(
-        #             mode="multiclass_classification",
-        #             task_level="node",
-        #             return_type="raw",  # Model returns probabilities.
-        #         ),
-        #     )
+            if batch_count in trigger_points:
+                avg_val_loss = run_intermediate_validation(
+                    model, val_loader, criterion, device
+                )
+                wandb.log(
+                    {
+                        "intermediate_train_loss": total_loss / batch_count,
+                        "intermediate_val_loss": avg_val_loss,
+                    }
+                )
+        scheduler.step()
 
-        #     hetero_explanation = explainer(
-        #         batch.x_dict,
-        #         batch.edge_index_dict,
-        #         batch=batch,
-        #         target=None,
-        #         # index=None,
-        #         index=torch.arange(batch["protein"].batch_size),
-        #         # batch["protein"].go[: batch["protein"].batch_size]
-        #     )
-        #     logger.info(
-        #         f"Generated explanations in {hetero_explanation.available_explanations}"
-        #     )
 
-        # path = os.path.join(results_dir, "feature_importance.png")
-        # hetero_explanation.visualize_feature_importance(path, top_k=10)
-        # logger.info(f"Feature importance plot has been saved to '{path}'")
-        # wandb.log({"feature_importance_plot": wandb.Image(path)})
+def validation(config, model, dataset, val_loader, test_loader, device):
+    # Compute final validation / test losses and save predictions
+    for split in ["val", "test"]:
+        loader = val_loader if split == "val" else test_loader
+        model.eval()
+        total_loss = 0
+        all_batches = []
+        with torch.no_grad():
+            for batch in tqdm.tqdm(loader, desc=f"Validation on {split} proteins"):
+                batch = batch.to(device)
+                out = model(batch.x_dict, batch.edge_index_dict, batch)
+                criterion = torch.nn.BCEWithLogitsLoss()
+                loss = criterion(
+                    out,
+                    batch["protein"].go[: batch["protein"].batch_size],
+                )
+                total_loss += loss.item()
+                all_batches.append((batch, out))
 
-        # # Visualize graph via NetworkX for specified edge types
-        # graph_path = os.path.join(results_dir, "graph_explanation")
-        # plots = visualize_graph_via_networkx(
-        #     hetero_explanation,
-        #     path=graph_path,  # Base path; function will append suffix for each edge type
-        #     cutoff_edge=0.00001,
-        #     edge_types_to_plot=[("aa", "aa2protein", "protein")],
-        # )
-        # # Log each saved plot to wandb
-        # for edge_type, fig in plots.items():
-        #     suffix = "_".join(edge_type)
-        #     plot_path = f"{graph_path}_{suffix}.png"
-        #     wandb.log({f"graph_explanation_plot_{suffix}": wandb.Image(plot_path)})
+        avg_loss = total_loss / len(loader)
+        logger.info(f"Final {split.capitalize()} loss: {avg_loss:.4f}")
+        wandb.log({f"{split}_loss": avg_loss})
 
-        # # Plot AA edge histogram
-        # path = os.path.join(results_dir, "aa_edge_histogram.png")
-        # ret = plot_aa_edge_histogram(
-        #     hetero_explanation,
-        #     edge_type=("aa", "aa2protein", "protein"),
-        #     path=path,
-        # )
-        # wandb.log({"aa_edge_histogram_plot": wandb.Image(ret["fig"])})
-
-    avg_loss = total_loss / len(loader)
-    wandb.log({"val_loss": avg_loss, "epoch": epoch})
-    logger.info(f"Validation loss: {avg_loss:.4f}")
-    return avg_loss
+        # Save predictions
+        if config["run"]["save_predictions"][split]:
+            save_predictions(config, model, loader, device, dataset, split)
+            logger.info(
+                f"Saved predictions to {config['run']['results_dir']}/predictions_{split}_{dataset.subontology}.tsv"
+            )
 
 
 def main():
-    # Load config from YAML
-    config_path = "src/configs/cfg.yaml"
+    config_path = "src/configs/toy_cfg.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
     time_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     dataset_name = config["data"]["dataset"]
-    run_id = f"{time_str}_{dataset_name}_{config['run']['qualifier']}_efficient"
+    run_id = f"{time_str}_{dataset_name}_{config['run']['qualifier']}"
 
     # Create results directory
-    results_dir = f"./results/{config['data']['dataset']}/{run_id}"
-    os.makedirs(results_dir, exist_ok=True)
+    config["run"]["results_dir"] = f"./results/{config['data']['dataset']}/{run_id}"
+    os.makedirs(config["run"]["results_dir"], exist_ok=True)
 
     for subontology in config["data"]["subontology"]:
         # Initialize wandb
@@ -155,7 +144,7 @@ def main():
         wandb.run.log_code(".")
 
         # Set up logging to file
-        log_file = os.path.join(results_dir, f"{subontology}.log")
+        log_file = os.path.join(config["run"]["results_dir"], f"{subontology}.log")
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(
             logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
@@ -165,24 +154,20 @@ def main():
         device = torch.device(
             config["trainer"]["device"] if torch.cuda.is_available() else "cpu"
         )
-
-        # Update config for current subontology
-        config["data"]["subontology"] = [subontology]  # Set current subontology
+        logger.info(f"Using device: {device}")
+        logger.info(f"Results will be saved to: {config['run']['results_dir']}")
 
         # Create efficient dataset
-        logger.info("Creating efficient dataset...")
+        logger.info("Creating dataset...")
         dataset = SwissProtDataset(config, split="train")
 
-        # Create efficient loaders
-        logger.info("Creating efficient data loaders...")
+        logger.info("Creating data loaders...")
         train_loader, val_loader, test_loader = define_loaders(config, dataset)
 
         # Get vocab size for current subontology
         go_vocab_size = dataset.go_vocab_sizes[subontology]
 
-        logger.info(
-            f"Dataset loaded with {len(dataset.available_proteins)} total proteins"
-        )
+        logger.info(f"Dataset loaded with {len(dataset.proteins)} total proteins")
         logger.info(f"GO vocabulary size for {subontology}: {go_vocab_size}")
         logger.info(f"InterPro vocabulary size: {dataset.ipr_vocab_size}")
         logger.info(f"Number of training proteins: {len(dataset.train_proteins)}")
@@ -195,7 +180,6 @@ def main():
             out_channels=go_vocab_size,
         )
         model = model.to(device)
-
         if config["trainer"].get("compile", False):
             model = torch.compile(model)
             logger.info("Model compiled with torch.compile()")
@@ -203,30 +187,34 @@ def main():
             logger.info("Model not compiled; running in standard mode.")
         logger.info(f"Model: {model}")
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=config["optimizer"]["lr"])
-
-        # Scheduler
-        scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer,
-            step_size=config["scheduler"]["step_size"],
-            gamma=config["scheduler"]["gamma"],
-        )
-
         # Training loop
-        for epoch in range(1, config["trainer"]["epochs"] + 1):
-            train_loss = train_epoch(model, optimizer, train_loader, device, epoch)
-            val_loss = validation(model, val_loader, device, epoch)
-            scheduler.step()
+        train(config, model, train_loader, val_loader, device)
+        validation(config, model, dataset, val_loader, test_loader, device)
 
         # Save model
-        model_path = os.path.join(results_dir, f"model_{subontology}.pth")
-        torch.save(model.state_dict(), model_path)
-        logger.info(f"Model saved to {model_path}")
-        wandb.save(model_path)
+        if config["trainer"].get("save_model"):
+            model_path = os.path.join(
+                config["run"]["results_dir"], f"model_{subontology}.pth"
+            )
+            torch.save(model.state_dict(), model_path)
+            logger.info(f"Model saved to {model_path}")
+            # wandb.save(model_path)
 
+        # Compute evaluation metrics
+        logger.info("Starting evaluation...")
+        if config["run"]["save_predictions"]["val"]:
+            evaluate(
+                config, logger, config["run"]["results_dir"], subontology, split="val"
+            )
+        if config["run"]["save_predictions"]["test"]:
+            evaluate(
+                config, logger, config["run"]["results_dir"], subontology, split="test"
+            )
+
+        logger.info(f"Evaluation completed")
         wandb.finish()
 
-    logger.info("Training complete for all subontologies!")
+    logger.info("Training complete !")
 
 
 if __name__ == "__main__":

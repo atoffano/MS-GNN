@@ -6,6 +6,7 @@ import pickle
 from pathlib import Path
 import logging
 import random
+from src.utils.helpers import timeit
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class SwissProtDataset:
     def __init__(self, config, split="train"):
         self.config = config
         self.split = split
-        self.graphs_dir = Path("./data/swissprot/2024_01/protein_graphs")
+        self.graphs_dir = Path(config["data"]["protein_graphs"])
 
         with open(f"{self.graphs_dir}/interpro_vocab.pkl", "rb") as f:
             interpro_info = pickle.load(f)
@@ -111,7 +112,9 @@ class SwissProtDataset:
 
     def _create_protein_graph(self, config):
         """Creates the high-level protein network."""
-        alignment_path = f"{config['constants']['project_path']}{config['data']['alignment_path'][1:]}"
+        alignment_path = (
+            f"{config['run']['project_path']}{config['data']['alignment_path'][1:]}"
+        )
         alignment_df = pd.read_csv(
             alignment_path,
             sep="\t",
@@ -147,7 +150,7 @@ class SwissProtDataset:
         protein_edge_index = torch.tensor(
             [source_indices, target_indices], dtype=torch.long
         )
-        if config["data"].get("edge_attrs", True):
+        if config["data"].get("edge_attrs"):
             edge_attrs = torch.tensor(
                 alignment_df["bitscore"].tolist(), dtype=torch.float32
             )
@@ -159,11 +162,15 @@ class SwissProtDataset:
 
     def load_protein_graph(self, protein_id):
         """Load a single protein graph from disk."""
-        graph_path = f"{self.graphs_dir}/{protein_id}.pt"
-        if not graph_path.exists():
+        try:
+            return torch.load(
+                f"{self.graphs_dir}/{protein_id}.pt",
+                map_location="cpu",
+                weights_only=False,
+            )
+        except FileNotFoundError:
             logger.warning(f"Graph not found for protein {protein_id}")
             return None
-        return torch.load(graph_path, map_location="cpu")
 
     def convert_go_terms_to_onehot(self, go_terms_dict):
         """Convert GO terms to one-hot encoding based on config."""
@@ -246,6 +253,10 @@ class SwissProtDataset:
         # Update batch with loaded features
         batch["protein"].interpro = torch.stack(all_interpro_features)
         batch["protein"].go = torch.stack(all_go_features)
+        # Set protein node features as concatenation of InterPro and GO
+        batch["protein"].x = torch.cat(
+            [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
+        )
 
         # Add amino acid nodes and features
         batch["aa"].x = torch.cat(all_aa_features, dim=0)
@@ -276,24 +287,28 @@ def define_loaders(config, dataset):
         num_workers=0,
     )
 
-    val_loader = NeighborLoader(
-        dataset.data,
-        num_neighbors={("protein", "aligned_with", "protein"): [-1]},
-        batch_size=config["model"]["batch_size"],
-        input_nodes=("protein", dataset.val_mask),
-        transform=dataset.get_batch_features,
-        shuffle=False,
-        num_workers=0,
-    )
-
     test_loader = NeighborLoader(
         dataset.data,
         num_neighbors={("protein", "aligned_with", "protein"): [-1]},
         batch_size=config["model"]["batch_size"],
         input_nodes=("protein", dataset.test_mask),
         transform=dataset.get_batch_features,
-        shuffle=False,
+        shuffle=True,
         num_workers=0,
     )
 
-    return train_loader, val_loader, test_loader
+    # Some datasets, like H30, do not have a validation set
+    # This is (dirtily) handled by using the test set as val too
+    if not config["data"]["test_only"]:
+        val_loader = NeighborLoader(
+            dataset.data,
+            num_neighbors={("protein", "aligned_with", "protein"): [-1]},
+            batch_size=config["model"]["batch_size"],
+            input_nodes=("protein", dataset.val_mask),
+            transform=dataset.get_batch_features,
+            shuffle=True,
+            num_workers=0,
+        )
+        return train_loader, val_loader, test_loader
+    else:
+        return train_loader, test_loader, test_loader
