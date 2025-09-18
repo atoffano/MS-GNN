@@ -22,15 +22,15 @@ data:
   train_on_swissprot: False  # Whether to train on SwissProt or original train dataset
   exp_only: True  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV
-  protein_graphs: ./data/toy/protein_graphs
+  protein_graphs: ./data/swissprot/2024_01/protein_graphs
   uses_entryid: true
-  test_only: false  # Whether to run evaluation only on the test set (no validation)
 
 run:
   qualifier: default  # Additional string to append to run_id for uniqueness
   save_predictions:
     val: true
     test: true
+  test_only: false  # Whether to run evaluation only on the test set (no validation)
   save_model: false
   project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
 

@@ -7,8 +7,10 @@ from collections import defaultdict
 import tqdm
 import argparse
 import torch
+from src.utils.helpers import timeit
 
 
+@timeit
 def save_predictions(config, model, loader, device, dataset, split=None):
     model.eval()
     predictions = []
@@ -34,6 +36,7 @@ def save_predictions(config, model, loader, device, dataset, split=None):
     df.to_csv(pred_path, sep="\t", index=False)
 
 
+@timeit
 def evaluate(config, logger, output_dir, subontology, split):
     """
     Evaluate the predictions using the ground truth (GT) annotations and the BeProf evaluation method.
@@ -110,6 +113,7 @@ def evaluate(config, logger, output_dir, subontology, split):
         logger.warning(f"Predictions file {pred_file} does not exist.")
 
 
+@timeit
 def run_beprof_evaluation(
     logger, pred_pkl, gt_pkl, background_pkl, go_obo_file, eval_output_dir
 ):
@@ -148,11 +152,8 @@ def run_beprof_evaluation(
         logger.info(f"BeProf evaluation completed successfully")
         logger.info(f"Results saved to: {eval_output_dir}")
 
-        # Log stdout and stderr
         if result.stdout:
             logger.info(f"BeProf stdout:\n{result.stdout}")
-        if result.stderr:
-            logger.warning(f"BeProf stderr:\n{result.stderr}")
 
     except subprocess.CalledProcessError as e:
         logger.error(f"BeProf evaluation failed with return code {e.returncode}")

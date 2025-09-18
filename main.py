@@ -19,6 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+@timeit
 def run_intermediate_validation(model, val_loader, criterion, device):
     model.eval()
     val_loss_sum = 0
@@ -92,7 +93,8 @@ def train(config, model, train_loader, val_loader, device):
 
 def validation(config, model, dataset, val_loader, test_loader, device):
     # Compute final validation / test losses and save predictions
-    for split in ["val", "test"]:
+    splits = ["test"] if config["run"]["test_only"] else ["val", "test"]
+    for split in splits:
         loader = val_loader if split == "val" else test_loader
         model.eval()
         total_loss = 0
@@ -206,7 +208,7 @@ def main():
             evaluate(
                 config, logger, config["run"]["results_dir"], subontology, split="val"
             )
-        if config["run"]["save_predictions"]["test"]:
+        if config["run"]["save_predictions"]["test"] or not config["run"]["test_only"]:
             evaluate(
                 config, logger, config["run"]["results_dir"], subontology, split="test"
             )

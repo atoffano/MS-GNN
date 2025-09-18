@@ -210,10 +210,7 @@ class SwissProtDataset:
             protein_graph = self.load_protein_graph(protein_id)
 
             if protein_graph is None:
-                # Use default features if graph not found
-                logger.warning(
-                    f"Using default features for missing protein {protein_id}"
-                )
+                logger.warning(f"Using empty features for missing protein {protein_id}")
                 interpro_feat = torch.zeros(self.ipr_vocab_size, dtype=torch.float32)
                 go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
                 aa_feat = torch.zeros(200, 1280, dtype=torch.float32)  # Default 200 AAs
@@ -250,10 +247,10 @@ class SwissProtDataset:
 
             current_aa_offset += num_aas
 
-        # Update batch with loaded features
+        # Update batch with function-related features
         batch["protein"].interpro = torch.stack(all_interpro_features)
         batch["protein"].go = torch.stack(all_go_features)
-        # Set protein node features as concatenation of InterPro and GO
+        # Set protein node features as concatenation of InterPro and GO one hots.
         batch["protein"].x = torch.cat(
             [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
         )
@@ -298,8 +295,8 @@ def define_loaders(config, dataset):
     )
 
     # Some datasets, like H30, do not have a validation set
-    # This is (dirtily) handled by using the test set as val too
-    if not config["data"]["test_only"]:
+    # This is (dirtily) handled by using the test set as val too.
+    if not config["run"]["test_only"]:
         val_loader = NeighborLoader(
             dataset.data,
             num_neighbors={("protein", "aligned_with", "protein"): [-1]},
