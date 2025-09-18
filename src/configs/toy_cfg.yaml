@@ -5,7 +5,8 @@ model:
 trainer:
   epochs: 1
   device: cuda
-  compile: false  # Whether to use torch.compile
+  compile: true  # Whether to use torch.compile
+  num_workers: 16
 
 optimizer:
   type: Adam

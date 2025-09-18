@@ -26,7 +26,7 @@ def run_intermediate_validation(model, val_loader, criterion, device):
     val_batches_run = 0
     val_iter = iter(val_loader)
     with torch.no_grad():
-        for _ in range(1):
+        for _ in range(3):
             val_batch = next(val_iter)
             val_batch = val_batch.to(device)
             val_out = model(val_batch.x_dict, val_batch.edge_index_dict, val_batch)
@@ -58,7 +58,7 @@ def train(config, model, train_loader, val_loader, device):
         batch_count = 0
         num_batches = len(train_loader)
         trigger_points = [
-            tp for tp in range(1, num_batches) if tp % (num_batches // 3) == 0
+            tp for tp in range(1, num_batches) if tp % (num_batches // 10) == 0
         ]
 
         for batch in tqdm.tqdm(train_loader, desc=f"Training Epoch {epoch}"):

@@ -281,7 +281,7 @@ def define_loaders(config, dataset):
         input_nodes=("protein", dataset.train_mask),
         transform=dataset.get_batch_features,
         shuffle=True,
-        num_workers=0,
+        num_workers=config["data"]["num_workers"],
     )
 
     test_loader = NeighborLoader(
@@ -291,7 +291,7 @@ def define_loaders(config, dataset):
         input_nodes=("protein", dataset.test_mask),
         transform=dataset.get_batch_features,
         shuffle=True,
-        num_workers=0,
+        num_workers=config["data"]["num_workers"],
     )
 
     # Some datasets, like H30, do not have a validation set
@@ -304,7 +304,7 @@ def define_loaders(config, dataset):
             input_nodes=("protein", dataset.val_mask),
             transform=dataset.get_batch_features,
             shuffle=True,
-            num_workers=0,
+            num_workers=config["data"]["num_workers"],
         )
         return train_loader, val_loader, test_loader
     else:
