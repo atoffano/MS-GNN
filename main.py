@@ -124,7 +124,7 @@ def validation(config, model, dataset, val_loader, test_loader, device):
 
 
 def main():
-    config_path = "src/configs/toy_cfg.yaml"
+    config_path = "src/configs/cfg.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
