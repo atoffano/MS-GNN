@@ -1,15 +1,15 @@
 model:
   hidden_channels: 128
-  batch_size: 16
+  batch_size: 32
 
 trainer:
   epochs: 1
   device: cuda
-  compile: false  # Whether to use torch.compile
+  compile: true  # Whether to use torch.compile
 
 optimizer:
   type: Adam
-  lr: 0.001
+  lr: 0.01
 
 scheduler:
   type: StepLR

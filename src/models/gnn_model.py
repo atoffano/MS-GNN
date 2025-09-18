@@ -1,12 +1,30 @@
 import torch
-import torch.nn.functional as F
-from torch_geometric.nn import HeteroConv, GATv2Conv, Linear, SAGEConv
+from torch.nn import PReLU
+from torch_geometric.nn import (
+    HeteroConv,
+    GATv2Conv,
+    Linear,
+    HeteroDictLinear,
+    BatchNorm,
+)
 from src.utils.helpers import timeit
 
 
 class ProteinGNN(torch.nn.Module):
     def __init__(self, hidden_channels, out_channels):
         super().__init__()
+        node_types = ["protein", "aa"]
+        self.lin_in = HeteroDictLinear(
+            in_channels=-1,
+            out_channels=hidden_channels,
+            types=node_types,
+        )
+        self.prelu1 = torch.nn.ModuleDict(
+            {node_type: PReLU(hidden_channels) for node_type in node_types}
+        )
+        self.bn1 = torch.nn.ModuleDict(
+            {node_type: BatchNorm(hidden_channels) for node_type in node_types}
+        )
         self.conv1 = HeteroConv(
             {
                 ("aa", "belongs_to", "protein"): GATv2Conv(
@@ -25,7 +43,14 @@ class ProteinGNN(torch.nn.Module):
             },
             aggr="sum",
         )
+        self.prelu_prot = PReLU()
+        self.bn_prot = BatchNorm(hidden_channels * 2)  # Due to SkipCat
 
+        self.lin_post = Linear(hidden_channels * 2, hidden_channels)
+        self.prelu_post = PReLU()
+        self.bn_post = BatchNorm(hidden_channels)
+
+        self.lin_out = Linear(hidden_channels, out_channels)
         # self.conv2 = HeteroConv(
         #     {
         #         ("aa", "belongs_to", "protein"): GATv2Conv(
@@ -45,12 +70,27 @@ class ProteinGNN(torch.nn.Module):
         #     aggr="sum",
         # )
 
-        self.lin = Linear(hidden_channels, out_channels)
-
     def forward(self, x_dict, edge_index_dict, batch):
-        x_dict = self.conv1(x_dict, edge_index_dict)
+        x_dict = self.lin_in(x_dict)
+        x_dict = {k: self.prelu1[k](v) for k, v in x_dict.items()}
+        x_dict = {k: self.bn1[k](v) for k, v in x_dict.items()}
+
+        x_gnn = self.conv1(x_dict, edge_index_dict)
         # x_dict = self.conv2(x_dict, edge_index_dict)
-        x_prot = x_dict["protein"][: batch["protein"].batch_size]
-        x_prot = x_prot.relu()
-        x_prot = self.lin(x_prot)
+        # SkipCat: concatenate input features and GNN output
+        x_prot = torch.cat(
+            [
+                x_dict["protein"][: batch["protein"].batch_size],
+                x_gnn["protein"][: batch["protein"].batch_size],
+            ],
+            dim=1,
+        )
+        x_prot = self.prelu_prot(x_prot)
+        x_prot = self.bn_prot(x_prot)
+
+        x_prot = self.lin_post(x_prot)
+        x_prot = self.prelu_post(x_prot)
+        x_prot = self.bn_post(x_prot)
+
+        x_prot = self.lin_out(x_prot)
         return x_prot

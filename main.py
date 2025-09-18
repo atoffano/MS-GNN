@@ -75,7 +75,7 @@ def train(config, model, train_loader, val_loader, device):
             optimizer.step()
             total_loss += loss.item()
             t2 = time.time()
-            logger.debug(f"Batch pass time: {t2 - t1:.4f} seconds")
+            logger.info(f"Batch pass time: {t2 - t1:.4f} seconds")
             batch_count += 1
 
             if batch_count in trigger_points:
@@ -216,7 +216,7 @@ def main():
         logger.info(f"Evaluation completed")
         wandb.finish()
 
-    logger.info("Training complete !")
+    logger.info("Done!")
 
 
 if __name__ == "__main__":

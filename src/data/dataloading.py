@@ -5,7 +5,6 @@ import pandas as pd
 import pickle
 from pathlib import Path
 import logging
-import random
 from src.utils.helpers import timeit
 
 logger = logging.getLogger(__name__)
@@ -192,6 +191,7 @@ class SwissProtDataset:
 
         return onehot
 
+    @timeit
     def get_batch_features(self, batch):
         """Load individual protein features and amino acid data for the sampled batch."""
         protein_n_id = batch["protein"].n_id

@@ -1,15 +1,15 @@
 model:
-  hidden_channels: 128  # Used for HeteroProteinGNN
-  batch_size: 16  # Batch size for DataLoader
+  hidden_channels: 128
+  batch_size: 32
 
 trainer:
-  epochs: 2  # Number of training epochs
-  device: cuda  # Device for training
+  epochs: 1
+  device: cuda
   compile: false  # Whether to use torch.compile
 
 optimizer:
   type: Adam
-  lr: 0.001
+  lr: 0.01
 
 scheduler:
   type: StepLR
@@ -18,7 +18,7 @@ scheduler:
 
 data:
   dataset: 'toy'
-  subontology: ['CCO']  # One or more from ['CCO', 'MFO', 'BPO']
+  subontology: ['BPO']  # One or more from ['CCO', 'MFO', 'BPO']
   train_on_swissprot: False  # Whether to train on SwissProt or original train dataset
   exp_only: True  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/toy/toy_swissprot_2024_01_alignment.tsv  # Alignment TSV
@@ -32,7 +32,8 @@ run:
     test: true
   test_only: true  # Whether to run evaluation only on the test set (no validation)
   save_model: false
-  project_path: "/home/atoffano/PFP_layer"  # From constants.py
+  #project_path: "/home/atoffano/PFP_layer"  # From constants.py
+  project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
 
 checkpoint:
   dir: ./checkpoints
