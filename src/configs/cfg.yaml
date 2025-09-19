@@ -1,12 +1,13 @@
 model:
   hidden_channels: 256
   batch_size: 32
+  edge_attrs: false
 
 trainer:
   epochs: 5
   device: cuda
   compile: true  # Whether to use torch.compile
-  num_workers: 16
+  num_workers: 12
 
 optimizer:
   type: Adam
@@ -24,7 +25,6 @@ data:
   exp_only: true  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
-  uses_entryid: false
 
 run:
   qualifier: default  # Additional string to append to run_id for uniqueness

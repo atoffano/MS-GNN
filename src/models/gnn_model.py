@@ -11,8 +11,11 @@ from src.utils.helpers import timeit
 
 
 class ProteinGNN(torch.nn.Module):
-    def __init__(self, hidden_channels, out_channels):
+    def __init__(self, config, dataset):
         super().__init__()
+        self.edge_attrs = config["model"]["edge_attrs"]
+        hidden_channels = config["model"]["hidden_channels"]
+        out_channels = dataset.go_vocab_size
         node_types = ["protein", "aa"]
         self.lin_in = HeteroDictLinear(
             in_channels=-1,
@@ -33,13 +36,17 @@ class ProteinGNN(torch.nn.Module):
                     add_self_loops=False,
                 ),
                 ("protein", "aligned_with", "protein"): GATv2Conv(
-                    (-1, -1), hidden_channels, add_self_loops=False
+                    (-1, -1),
+                    hidden_channels,
+                    add_self_loops=False,
+                    edge_dim=(
+                        dataset.data.num_edge_features[
+                            ("protein", "aligned_with", "protein")
+                        ]
+                        if self.edge_attrs
+                        else None
+                    ),
                 ),
-                # ("protein", "rev_belongs_to", "aa"): GATv2Conv(
-                #     in_channels=(-1, -1),
-                #     out_channels=hidden_channels,
-                #     add_self_loops=False,
-                # ),
             },
             aggr="sum",
         )
@@ -51,32 +58,21 @@ class ProteinGNN(torch.nn.Module):
         self.bn_post = BatchNorm(hidden_channels)
 
         self.lin_out = Linear(hidden_channels, out_channels)
-        # self.conv2 = HeteroConv(
-        #     {
-        #         ("aa", "belongs_to", "protein"): GATv2Conv(
-        #             in_channels=(-1, -1),
-        #             out_channels=hidden_channels,
-        #             add_self_loops=False,
-        #         ),
-        #         ("protein", "aligned_with", "protein"): GATv2Conv(
-        #             (-1, -1), hidden_channels, add_self_loops=False
-        #         ),
-        #         ("protein", "rev_belongs_to", "aa"): GATv2Conv(
-        #             in_channels=(-1, -1),
-        #             out_channels=hidden_channels,
-        #             add_self_loops=False,
-        #         ),
-        #     },
-        #     aggr="sum",
-        # )
 
-    def forward(self, x_dict, edge_index_dict, batch):
+    def forward(self, batch):
+        x_dict, edge_index_dict = batch.x_dict, batch.edge_index_dict
+        edge_attrs_dict = batch.edge_attr_dict if self.edge_attrs else None
+
         x_dict = self.lin_in(x_dict)
         x_dict = {k: self.prelu1[k](v) for k, v in x_dict.items()}
         x_dict = {k: self.bn1[k](v) for k, v in x_dict.items()}
 
-        x_gnn = self.conv1(x_dict, edge_index_dict)
-        # x_dict = self.conv2(x_dict, edge_index_dict)
+        if self.edge_attrs:
+            x_gnn = self.conv1(x_dict, edge_index_dict, edge_attr_dict=edge_attrs_dict)
+        else:
+            x_gnn = self.conv1(x_dict, edge_index_dict)
+        # x_dict = self.conv2(x_dict, edge_index_dict, edge_attrs_dict)
+
         # SkipCat: concatenate input features and GNN output
         x_prot = torch.cat(
             [

@@ -15,6 +15,11 @@ class SwissProtDataset:
 
     def __init__(self, config, split="train"):
         self.config = config
+        if config["data"]["dataset"] in ["D1"]:
+            self.uses_entryid = True  # D1 uses EntryIDs
+        else:
+            self.uses_entryid = False
+
         self.split = split
         self.graphs_dir = Path(config["data"]["protein_graphs"])
 
@@ -51,7 +56,7 @@ class SwissProtDataset:
             for f in self.graphs_dir.glob("*.pt")
             if f.stem not in ["metadata", "interpro_vocab", "go_vocab"]
         ]
-        if config["data"]["uses_entryid"]:
+        if self.uses_entryid:
             self.proteins = [self.pid_mapping.get(pid, pid) for pid in self.proteins]
 
         # Load GO annotations to determine train/val/test splits
@@ -82,11 +87,10 @@ class SwissProtDataset:
         if Path(train_path).exists():
             train_df = pd.read_csv(train_path, sep="\t")
             splits["train"] = set(train_df["EntryID"].tolist())
-            if not config["data"]["train_on_swissprot"]:
-                if config["data"]["uses_entryid"]:
-                    splits["train"] = set(
-                        train_df["EntryID"].map(self.pid_mapping).tolist()
-                    )
+            if config["data"]["train_on_swissprot"] and self.uses_entryid:
+                splits["train"] = set(
+                    train_df["EntryID"].map(self.pid_mapping).tolist()
+                )
 
         # Load val and test splits
         dataset_name = config["data"]["dataset"]
@@ -94,7 +98,7 @@ class SwissProtDataset:
             split_path = f"./data/{dataset_name}/{dataset_name}_{subontology}_{split_name}_annotations.tsv"
             if Path(split_path).exists():
                 split_df = pd.read_csv(split_path, sep="\t")
-                if config["data"]["uses_entryid"]:
+                if self.uses_entryid:
                     split_df["EntryID"] = split_df["EntryID"].map(self.pid_mapping)
                 splits[split_name] = set(split_df["EntryID"].tolist())
 
@@ -166,7 +170,7 @@ class SwissProtDataset:
                 "bitscore",
             ],
         )
-        if config["data"]["uses_entryid"]:
+        if self.uses_entryid:
             alignment_df["protein1"] = alignment_df["protein1"].map(self.pid_mapping)
             alignment_df["protein2"] = alignment_df["protein2"].map(self.pid_mapping)
 
@@ -184,13 +188,15 @@ class SwissProtDataset:
         protein_edge_index = torch.tensor(
             [source_indices, target_indices], dtype=torch.long
         )
-        if config["data"].get("edge_attrs"):
-            edge_attrs = torch.tensor(
-                alignment_df["bitscore"].tolist(), dtype=torch.float32
-            )
+        if config["model"]["edge_attrs"]:
+            features = alignment_df.drop(columns=["protein1", "protein2"])
+            means = features.mean()
+            stds = features.std()
+            normalized_features = (features - means) / stds
+            edge_attrs = torch.tensor(normalized_features.values, dtype=torch.float32)
             data["protein", "aligned_with", "protein"].edge_attr = edge_attrs
-        data["protein", "aligned_with", "protein"].edge_index = protein_edge_index
 
+        data["protein", "aligned_with", "protein"].edge_index = protein_edge_index
         logger.info(f"Built protein-protein graph with {len(source_indices)} edges")
         return data
 
@@ -228,7 +234,7 @@ class SwissProtDataset:
         protein_n_id = batch["protein"].n_id
         batch_size = batch["protein"].batch_size
         sampled_protein_ids = [self.idx_to_protein[idx.item()] for idx in protein_n_id]
-        if self.config["data"]["uses_entryid"]:
+        if self.uses_entryid:
             sampled_protein_ids = [
                 self.rev_pid_mapping.get(pid, pid) for pid in sampled_protein_ids
             ]

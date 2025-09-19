@@ -26,7 +26,7 @@ def save_predictions(config, model, loader, device, dataset, split=None):
             enumerate(loader), desc=f"Predicting on {split} proteins"
         ):
             batch = batch.to(device)
-            out = model(batch.x_dict, batch.edge_index_dict, batch)
+            out = model(batch)
             batch_size = batch["protein"].batch_size
             protein_ids = batch["protein"].protein_ids[:batch_size]
             scores = torch.sigmoid(out[:batch_size]).cpu().numpy()

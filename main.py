@@ -29,7 +29,7 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
         for _ in range(num_batches):
             val_batch = next(iter(val_loader))
             val_batch = val_batch.to(device)
-            val_out = model(val_batch.x_dict, val_batch.edge_index_dict, val_batch)
+            val_out = model(val_batch)
             val_loss = criterion(
                 val_out,
                 val_batch["protein"].go[: val_batch["protein"].batch_size],
@@ -57,7 +57,7 @@ def train(config, model, train_loader, val_loader, test_loader, device):
         for batch in tqdm.tqdm(train_loader, desc=f"Training Epoch {epoch}"):
             batch = batch.to(device)
             optimizer.zero_grad()
-            out = model(batch.x_dict, batch.edge_index_dict, batch)
+            out = model(batch)
 
             loss = criterion(
                 out,
@@ -100,7 +100,7 @@ def train(config, model, train_loader, val_loader, test_loader, device):
 
 
 def main():
-    config_path = "src/configs/cfg.yaml"
+    config_path = "src/configs/toy_cfg.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
@@ -111,6 +111,9 @@ def main():
     # Create results directory
     config["run"]["results_dir"] = f"./results/{config['data']['dataset']}/{run_id}"
     os.makedirs(config["run"]["results_dir"], exist_ok=True)
+    logger.info(
+        "Config:\n" + yaml.dump(config, sort_keys=False, default_flow_style=False)
+    )
 
     for subontology in config["data"]["subontology"]:
         # Initialize wandb
@@ -154,8 +157,8 @@ def main():
 
         # Instantiate model with config values
         model = ProteinGNN(
-            hidden_channels=config["model"]["hidden_channels"],
-            out_channels=go_vocab_size,
+            config,
+            dataset,
         )
         model = model.to(device)
         if config["trainer"].get("compile", False):
