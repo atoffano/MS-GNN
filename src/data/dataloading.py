@@ -72,7 +72,7 @@ class SwissProtDataset:
         splits = {"train": set(), "val": set(), "test": set()}
         subontology = self.subontology
 
-        if config["data"].get("train_on_swissprot"):
+        if config["data"]["train_on_swissprot"]:
             exp_suffix = "exp_" if config["data"].get("exp_only", True) else ""
             train_path = f"./data/swissprot/2024_01/swissprot_2024_01_{subontology}_{exp_suffix}annotations.tsv"
         else:
@@ -82,6 +82,11 @@ class SwissProtDataset:
         if Path(train_path).exists():
             train_df = pd.read_csv(train_path, sep="\t")
             splits["train"] = set(train_df["EntryID"].tolist())
+            if not config["data"]["train_on_swissprot"]:
+                if config["data"]["uses_entryid"]:
+                    splits["train"] = set(
+                        train_df["EntryID"].map(self.pid_mapping).tolist()
+                    )
 
         # Load val and test splits
         dataset_name = config["data"]["dataset"]
@@ -93,9 +98,22 @@ class SwissProtDataset:
                     split_df["EntryID"] = split_df["EntryID"].map(self.pid_mapping)
                 splits[split_name] = set(split_df["EntryID"].tolist())
 
+        # Ensure all proteins in splits are in SwissProt.
         protein_set = set(self.proteins)
         for split in splits:
+            missing = list(splits[split] - protein_set)
+            if missing:
+                logger.warning(
+                    f"Proteins not found in protein_set for split '{split}': {missing}.\nPlaceholder empty features will be used."
+                )
             splits[split] = splits[split].intersection(protein_set)
+
+        # Remove proteins from val/test if they are also in train
+        # This should only happen if training on the full SwissProt release.
+        if config["data"]["train_on_swissprot"]:
+            train_proteins = splits["train"]
+            for split in ["val", "test"]:
+                splits[split] = splits[split] - train_proteins
 
         self.protein_to_idx = {pid: i for i, pid in enumerate(self.proteins)}
         self.idx_to_protein = {v: k for k, v in self.protein_to_idx.items()}
@@ -190,18 +208,15 @@ class SwissProtDataset:
 
     def convert_go_terms_to_onehot(self, go_terms_dict):
         """Convert GO terms to one-hot encoding based on config."""
-        # Get the appropriate GO vocabulary for this subontology
         go_vocab = self.go_vocab_info[self.subontology]
         go_to_idx = go_vocab["go_to_idx"]
         vocab_size = go_vocab["vocab_size"]
 
         onehot = torch.zeros(vocab_size, dtype=torch.float32)
-        use_experimental_only = self.config["data"].get("exp_only", True)
-        if use_experimental_only:
+        if self.config["data"]["exp_only"]:
             terms = go_terms_dict.get("experimental", [])
         else:
             terms = go_terms_dict.get("curated", [])
-
         for term in terms:
             if term in go_to_idx:
                 onehot[go_to_idx[term]] = 1.0
