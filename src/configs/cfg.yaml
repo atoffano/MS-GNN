@@ -21,10 +21,10 @@ data:
   dataset: 'ATGO'
   subontology: ['BPO']  # One or more from ['CCO', 'MFO', 'BPO']
   train_on_swissprot: False  # Whether to train on SwissProt or original train dataset
-  exp_only: True  # If training on SwissProt, whether to use only experimental annotations
+  exp_only: true  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
-  uses_entryid: true
+  uses_entryid: false
 
 run:
   qualifier: default  # Additional string to append to run_id for uniqueness
