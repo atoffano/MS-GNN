@@ -20,14 +20,15 @@ logger = logging.getLogger(__name__)
 
 
 @timeit
-def run_intermediate_validation(model, val_loader, criterion, device):
+def run_intermediate_validation(model, val_loader, criterion, device, num_batches=5):
+    if num_batches > len(val_loader):
+        num_batches = len(val_loader)
     model.eval()
     val_loss_sum = 0
     val_batches_run = 0
-    val_iter = iter(val_loader)
     with torch.no_grad():
-        for _ in range(3):
-            val_batch = next(val_iter)
+        for _ in range(num_batches):
+            val_batch = next(iter(val_loader))
             val_batch = val_batch.to(device)
             val_out = model(val_batch.x_dict, val_batch.edge_index_dict, val_batch)
             val_loss = criterion(
@@ -42,7 +43,7 @@ def run_intermediate_validation(model, val_loader, criterion, device):
 
 
 @timeit
-def train(config, model, train_loader, val_loader, device):
+def train(config, model, train_loader, val_loader, test_loader, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=config["optimizer"]["lr"])
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer,
@@ -80,7 +81,7 @@ def train(config, model, train_loader, val_loader, device):
 
             if batch_count in trigger_points:
                 avg_val_loss = run_intermediate_validation(
-                    model, val_loader, criterion, device
+                    model, val_loader, criterion, device, num_batches=3
                 )
                 wandb.log(
                     {
@@ -89,38 +90,20 @@ def train(config, model, train_loader, val_loader, device):
                     }
                 )
         scheduler.step()
-
-
-def validation(config, model, dataset, val_loader, test_loader, device):
-    # Compute final validation / test losses and save predictions
-    splits = ["test"] if config["run"]["test_only"] else ["val", "test"]
-    for split in splits:
-        loader = val_loader if split == "val" else test_loader
-        model.eval()
-        total_loss = 0
-        all_batches = []
-        with torch.no_grad():
-            for batch in tqdm.tqdm(loader, desc=f"Validation on {split} proteins"):
-                batch = batch.to(device)
-                out = model(batch.x_dict, batch.edge_index_dict, batch)
-                criterion = torch.nn.BCEWithLogitsLoss()
-                loss = criterion(
-                    out,
-                    batch["protein"].go[: batch["protein"].batch_size],
-                )
-                total_loss += loss.item()
-                all_batches.append((batch, out))
-
-        avg_loss = total_loss / len(loader)
-        logger.info(f"Final {split.capitalize()} loss: {avg_loss:.4f}")
-        wandb.log({f"{split}_loss": avg_loss})
-
-        # Save predictions
-        if config["run"]["save_predictions"][split]:
-            save_predictions(config, model, loader, device, dataset, split)
-            logger.info(
-                f"Saved predictions to {config['run']['results_dir']}/predictions_{split}_{dataset.subontology}.tsv"
-            )
+    val_loss = run_intermediate_validation(
+        model, val_loader, criterion, device, num_batches=len(val_loader)
+    )
+    test_loss = run_intermediate_validation(
+        model, test_loader, criterion, device, num_batches=len(test_loader)
+    )
+    logger.info(f"Final Validation Loss: {val_loss:.4f}")
+    logger.info(f"Final Test Loss: {test_loss:.4f}")
+    wandb.log(
+        {
+            "final_val_loss": val_loss,
+            "final_test_loss": test_loss,
+        }
+    )
 
 
 def main():
@@ -190,8 +173,16 @@ def main():
         logger.info(f"Model: {model}")
 
         # Training loop
-        train(config, model, train_loader, val_loader, device)
-        validation(config, model, dataset, val_loader, test_loader, device)
+        train(config, model, train_loader, val_loader, test_loader device)
+        splits = ["test"] if config["run"]["test_only"] else ["val", "test"]
+        for split in splits:
+            loader = val_loader if split == "val" else test_loader
+            # Save predictions
+            if config["run"]["save_predictions"][split]:
+                save_predictions(config, model, loader, device, dataset, split)
+                logger.info(
+                    f"Saved predictions to {config['run']['results_dir']}/predictions_{split}_{dataset.subontology}.tsv"
+                )
 
         # Save model
         if config["trainer"].get("save_model"):

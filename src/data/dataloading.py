@@ -290,7 +290,7 @@ def define_loaders(config, dataset):
         batch_size=config["model"]["batch_size"],
         input_nodes=("protein", dataset.test_mask),
         transform=dataset.get_batch_features,
-        shuffle=True,
+        shuffle=False,
         num_workers=config["run"]["num_workers"],
     )
 
@@ -303,7 +303,7 @@ def define_loaders(config, dataset):
             batch_size=config["model"]["batch_size"],
             input_nodes=("protein", dataset.val_mask),
             transform=dataset.get_batch_features,
-            shuffle=True,
+            shuffle=False,
             num_workers=config["run"]["num_workers"],
         )
         return train_loader, val_loader, test_loader

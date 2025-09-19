@@ -1,12 +1,12 @@
 model:
-  hidden_channels: 128
+  hidden_channels: 256
   batch_size: 32
 
 trainer:
-  epochs: 1
+  epochs: 5
   device: cuda
   compile: true  # Whether to use torch.compile
-  num_workers: 16
+  num_workers: 32
 
 optimizer:
   type: Adam
@@ -34,7 +34,7 @@ run:
   test_only: false  # Whether to run evaluation only on the test set (no validation)
   save_model: false
   project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
-
+  
 checkpoint:
   dir: ./checkpoints
   load: false
