@@ -33,12 +33,26 @@ class SwissProtDataset:
         )
         self.go_vocab_size = self.go_vocab_sizes[self.subontology]
 
+        # Protein IDs are in the Accession Number format (e.g. P12345) or in the EntryID format (e.g. INS_HUMAN), depending on the dataset
+        self.pid_mapping = (
+            pd.read_csv(
+                f"./data/swissprot/2024_01/swissprot_2024_01_annotations.tsv",  # Most up to date mapping
+                sep="\t",
+                usecols=["EntryID", "Entry Name"],
+            )
+            .set_index("Entry Name")
+            .to_dict()["EntryID"]
+        )
+        self.rev_pid_mapping = {v: k for k, v in self.pid_mapping.items()}
+
         # Get preprocessed protein graphs
         self.proteins = [
             f.stem
             for f in self.graphs_dir.glob("*.pt")
             if f.stem not in ["metadata", "interpro_vocab", "go_vocab"]
         ]
+        if config["data"]["uses_entryid"]:
+            self.proteins = [self.pid_mapping.get(pid, pid) for pid in self.proteins]
 
         # Load GO annotations to determine train/val/test splits
         self._load_split_masks(config)
@@ -75,9 +89,10 @@ class SwissProtDataset:
             split_path = f"./data/{dataset_name}/{dataset_name}_{subontology}_{split_name}_annotations.tsv"
             if Path(split_path).exists():
                 split_df = pd.read_csv(split_path, sep="\t")
+                if config["data"]["uses_entryid"]:
+                    split_df["EntryID"] = split_df["EntryID"].map(self.pid_mapping)
                 splits[split_name] = set(split_df["EntryID"].tolist())
 
-        # Filter by available proteins and create index mappings
         protein_set = set(self.proteins)
         for split in splits:
             splits[split] = splits[split].intersection(protein_set)
@@ -133,15 +148,17 @@ class SwissProtDataset:
                 "bitscore",
             ],
         )
+        if config["data"]["uses_entryid"]:
+            alignment_df["protein1"] = alignment_df["protein1"].map(self.pid_mapping)
+            alignment_df["protein2"] = alignment_df["protein2"].map(self.pid_mapping)
 
         # Convert to indices
         source_indices = alignment_df["protein1"].map(self.protein_to_idx).tolist()
         target_indices = alignment_df["protein2"].map(self.protein_to_idx).tolist()
 
-        # Create protein-protein full graph
         data = HeteroData()
 
-        # Protein nodes - features are added later when batching
+        # Protein nodes - aa features are added later when batching
         num_proteins = len(self.proteins)
         data["protein"].num_nodes = num_proteins
 
@@ -196,6 +213,10 @@ class SwissProtDataset:
         protein_n_id = batch["protein"].n_id
         batch_size = batch["protein"].batch_size
         sampled_protein_ids = [self.idx_to_protein[idx.item()] for idx in protein_n_id]
+        if self.config["data"]["uses_entryid"]:
+            sampled_protein_ids = [
+                self.rev_pid_mapping.get(pid, pid) for pid in sampled_protein_ids
+            ]
 
         # Load individual protein graphs and extract features
         all_interpro_features = []

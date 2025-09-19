@@ -6,7 +6,7 @@ trainer:
   epochs: 5
   device: cuda
   compile: true  # Whether to use torch.compile
-  num_workers: 32
+  num_workers: 16
 
 optimizer:
   type: Adam
@@ -20,8 +20,8 @@ scheduler:
 data:
   dataset: 'ATGO'
   subontology: ['BPO']  # One or more from ['CCO', 'MFO', 'BPO']
-  train_on_swissprot: false  # Whether to train on SwissProt or original train dataset
-  exp_only: false  # If training on SwissProt, whether to use only experimental annotations
+  train_on_swissprot: False  # Whether to train on SwissProt or original train dataset
+  exp_only: True  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
   uses_entryid: true
@@ -34,7 +34,7 @@ run:
   test_only: false  # Whether to run evaluation only on the test set (no validation)
   save_model: false
   project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
-  
+
 checkpoint:
   dir: ./checkpoints
   load: false
