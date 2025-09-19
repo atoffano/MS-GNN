@@ -13,13 +13,18 @@ from src.utils.helpers import timeit
 @timeit
 def save_predictions(config, model, loader, device, dataset, split=None):
     model.eval()
-    predictions = []
-    # Reverse mapping from index to GO term
     go_idx_to_term = {
         v: k for k, v in dataset.go_vocab_info[dataset.subontology]["go_to_idx"].items()
     }
+    pred_path = f"{config['run']['results_dir']}/predictions/predictions_{split}_{dataset.subontology}.tsv"
+    os.makedirs(os.path.dirname(pred_path), exist_ok=True)
+    with open(pred_path, "w") as f:
+        f.write("target_ID\tterm_ID\tscore\n")
+    batch_buffer = []
     with torch.no_grad():
-        for batch in tqdm.tqdm(loader, desc=f"Predicting on {split} proteins"):
+        for batch_count, batch in tqdm.tqdm(
+            enumerate(loader), desc=f"Predicting on {split} proteins"
+        ):
             batch = batch.to(device)
             out = model(batch.x_dict, batch.edge_index_dict, batch)
             batch_size = batch["protein"].batch_size
@@ -27,13 +32,16 @@ def save_predictions(config, model, loader, device, dataset, split=None):
             scores = torch.sigmoid(out[:batch_size]).cpu().numpy()
             for i, pid in enumerate(protein_ids):
                 for j, score in enumerate(scores[i]):
-                    if score > 0:  # Save all nonzero scores
+                    if score > 0:
                         term_id = go_idx_to_term[j]
-                        predictions.append([pid, term_id, float(score)])
-    pred_path = f"{config['run']['results_dir']}/predictions/predictions_{split}_{dataset.subontology}.tsv"
-    os.makedirs(os.path.dirname(pred_path), exist_ok=True)
-    df = pd.DataFrame(predictions, columns=["target_ID", "term_ID", "score"])
-    df.to_csv(pred_path, sep="\t", index=False)
+                        batch_buffer.append(f"{pid}\t{term_id}\t{float(score)}\n")
+            if batch_count % 50 == 0:
+                with open(pred_path, "a") as f:
+                    f.writelines(batch_buffer)
+                batch_buffer = []
+        if batch_buffer:
+            with open(pred_path, "a") as f:
+                f.writelines(batch_buffer)
 
 
 @timeit

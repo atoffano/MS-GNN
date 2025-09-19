@@ -191,7 +191,6 @@ class SwissProtDataset:
 
         return onehot
 
-    @timeit
     def get_batch_features(self, batch):
         """Load individual protein features and amino acid data for the sampled batch."""
         protein_n_id = batch["protein"].n_id
@@ -281,7 +280,7 @@ def define_loaders(config, dataset):
         input_nodes=("protein", dataset.train_mask),
         transform=dataset.get_batch_features,
         shuffle=True,
-        num_workers=config["run"]["num_workers"],
+        num_workers=config["trainer"]["num_workers"],
     )
 
     test_loader = NeighborLoader(
@@ -291,7 +290,7 @@ def define_loaders(config, dataset):
         input_nodes=("protein", dataset.test_mask),
         transform=dataset.get_batch_features,
         shuffle=False,
-        num_workers=config["run"]["num_workers"],
+        num_workers=config["trainer"]["num_workers"],
     )
 
     # Some datasets, like H30, do not have a validation set
@@ -304,7 +303,7 @@ def define_loaders(config, dataset):
             input_nodes=("protein", dataset.val_mask),
             transform=dataset.get_batch_features,
             shuffle=False,
-            num_workers=config["run"]["num_workers"],
+            num_workers=config["trainer"]["num_workers"],
         )
         return train_loader, val_loader, test_loader
     else:

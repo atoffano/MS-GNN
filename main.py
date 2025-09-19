@@ -19,7 +19,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-@timeit
 def run_intermediate_validation(model, val_loader, criterion, device, num_batches=5):
     if num_batches > len(val_loader):
         num_batches = len(val_loader)
@@ -42,7 +41,6 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
     return avg_val_loss
 
 
-@timeit
 def train(config, model, train_loader, val_loader, test_loader, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=config["optimizer"]["lr"])
     scheduler = torch.optim.lr_scheduler.StepLR(
@@ -55,15 +53,8 @@ def train(config, model, train_loader, val_loader, test_loader, device):
     # Training loop
     for epoch in range(1, config["trainer"]["epochs"] + 1):
         model.train()
-        total_loss = 0
         batch_count = 0
-        num_batches = len(train_loader)
-        trigger_points = [
-            tp for tp in range(1, num_batches) if tp % (num_batches // 10) == 0
-        ]
-
         for batch in tqdm.tqdm(train_loader, desc=f"Training Epoch {epoch}"):
-            t1 = time.time()
             batch = batch.to(device)
             optimizer.zero_grad()
             out = model(batch.x_dict, batch.edge_index_dict, batch)
@@ -74,20 +65,22 @@ def train(config, model, train_loader, val_loader, test_loader, device):
             )
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
-            t2 = time.time()
-            logger.info(f"Batch pass time: {t2 - t1:.4f} seconds")
+            wandb.log({"train_loss": loss.item()})
             batch_count += 1
 
-            if batch_count in trigger_points:
+            if batch_count % 50 == 0:
                 avg_val_loss = run_intermediate_validation(
-                    model, val_loader, criterion, device, num_batches=3
+                    model, val_loader, criterion, device
                 )
                 wandb.log(
                     {
-                        "intermediate_train_loss": total_loss / batch_count,
                         "intermediate_val_loss": avg_val_loss,
+                        "lr": scheduler.get_last_lr()[0],
                     }
+                )
+                batch_count = 0
+                logger.info(
+                    f"Epoch {epoch}, Batch {batch_count}, Train Loss: {loss.item():.4f}, Intermediate Val Loss: {avg_val_loss:.4f}"
                 )
         scheduler.step()
     val_loss = run_intermediate_validation(
@@ -107,7 +100,7 @@ def train(config, model, train_loader, val_loader, test_loader, device):
 
 
 def main():
-    config_path = "src/configs/cfg.yaml"
+    config_path = "src/configs/toy_cfg.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
@@ -173,7 +166,7 @@ def main():
         logger.info(f"Model: {model}")
 
         # Training loop
-        train(config, model, train_loader, val_loader, test_loader device)
+        train(config, model, train_loader, val_loader, test_loader, device)
         splits = ["test"] if config["run"]["test_only"] else ["val", "test"]
         for split in splits:
             loader = val_loader if split == "val" else test_loader
