@@ -168,8 +168,10 @@ def main():
             logger.info("Model not compiled; running in standard mode.")
         logger.info(f"Model: {model}")
 
-        # Training loop
+        # Training
         train(config, model, train_loader, val_loader, test_loader, device)
+
+        # Predictions
         splits = ["test"] if config["run"]["test_only"] else ["val", "test"]
         for split in splits:
             loader = val_loader if split == "val" else test_loader

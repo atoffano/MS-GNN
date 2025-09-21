@@ -323,6 +323,7 @@ def define_loaders(config, dataset):
         transform=dataset.get_batch_features,
         shuffle=True,
         num_workers=config["trainer"]["num_workers"],
+        drop_last=True,
     )
 
     test_loader = NeighborLoader(
