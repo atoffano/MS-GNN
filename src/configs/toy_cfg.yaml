@@ -32,7 +32,7 @@ run:
   save_predictions:
     val: true
     test: true
-  test_only: true  # Whether to run evaluation only on the test set (no validation)
+  test_only: false  # Whether to run evaluation only on the test set (no validation)
   save_model: false
   project_path: "/home/atoffano/PFP_layer"  # From constants.py
   #project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"

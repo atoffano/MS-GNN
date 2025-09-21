@@ -108,7 +108,7 @@ class SwissProtDataset:
             missing = list(splits[split] - protein_set)
             if missing:
                 logger.warning(
-                    f"Proteins not found in protein_set for split '{split}': {missing}.\nPlaceholder empty features will be used."
+                    f"{len(missing)} proteins features not found in protein set for split '{split}'.\nPlaceholder empty features will be used."
                 )
             splits[split] = splits[split].intersection(protein_set)
 
