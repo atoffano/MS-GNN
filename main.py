@@ -196,11 +196,19 @@ def main():
         logger.info("Starting evaluation...")
         if config["run"]["save_predictions"]["val"]:
             evaluate(
-                config, logger, config["run"]["results_dir"], subontology, split="val"
+                logger,
+                config["data"]["dataset"],
+                config["run"]["results_dir"],
+                subontology,
+                split="val",
             )
         if config["run"]["save_predictions"]["test"] or not config["run"]["test_only"]:
             evaluate(
-                config, logger, config["run"]["results_dir"], subontology, split="test"
+                logger,
+                config["data"]["dataset"],
+                config["run"]["results_dir"],
+                subontology,
+                split="test",
             )
 
         logger.info(f"Evaluation completed")

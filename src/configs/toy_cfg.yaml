@@ -21,7 +21,7 @@ scheduler:
 data:
   dataset: 'toy'
   subontology: ['CCO']  # One or more from ['CCO', 'MFO', 'BPO']
-  train_on_swissprot: false  # Whether to train on SwissProt or original train dataset
+  train_on_swissprot: true  # Whether to train on SwissProt or original train dataset
   exp_only: true  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/toy/toy_swissprot_2024_01_alignment.tsv  # Alignment TSV
   protein_graphs: ./data/toy/protein_graphs

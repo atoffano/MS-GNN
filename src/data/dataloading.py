@@ -91,8 +91,14 @@ class SwissProtDataset:
                 splits["train"] = set(
                     train_df["EntryID"].map(self.pid_mapping).tolist()
                 )
+            # Store train annotations for on-the-fly GO term loading
+            self.train_annots = train_df.set_index("EntryID").to_dict(orient="index")
+            for pid in self.train_annots:
+                self.train_annots[pid]["term"] = self.train_annots[pid]["term"].split(
+                    "; "
+                )
 
-        # Load val and test splits
+        # Load val and test
         dataset_name = config["data"]["dataset"]
         for split_name in ["val", "test"]:
             split_path = f"./data/{dataset_name}/{dataset_name}_{subontology}_{split_name}_annotations.tsv"
@@ -110,14 +116,12 @@ class SwissProtDataset:
                 logger.warning(
                     f"{len(missing)} proteins features not found in protein set for split '{split}'.\nPlaceholder empty features will be used."
                 )
-            splits[split] = splits[split].intersection(protein_set)
 
         # Remove proteins from val/test if they are also in train
         # This should only happen if training on the full SwissProt release.
         if config["data"]["train_on_swissprot"]:
-            train_proteins = splits["train"]
-            for split in ["val", "test"]:
-                splits[split] = splits[split] - train_proteins
+            for val_test_split in ["val", "test"]:
+                splits["train"] = splits["train"] - splits[val_test_split]
 
         self.protein_to_idx = {pid: i for i, pid in enumerate(self.proteins)}
         self.idx_to_protein = {v: k for k, v in self.protein_to_idx.items()}
@@ -214,15 +218,22 @@ class SwissProtDataset:
 
     def convert_go_terms_to_onehot(self, go_terms_dict):
         """Convert GO terms to one-hot encoding based on config."""
-        go_vocab = self.go_vocab_info[self.subontology]
-        go_to_idx = go_vocab["go_to_idx"]
-        vocab_size = go_vocab["vocab_size"]
+        go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
+        onehot = torch.zeros(
+            self.go_vocab_info[self.subontology]["vocab_size"], dtype=torch.float32
+        )
+        if self.config["data"]["train_on_swissprot"]:
+            if self.config["data"]["exp_only"]:
+                terms = go_terms_dict.get("experimental", [])
+            else:
+                terms = go_terms_dict.get("curated", [])
+        elif not self.config["data"]["exp_only"]:
+            raise ValueError(
+                "Cannot use curated annotations when restricting to original benchmark annotation corpus. Extend training to uniprot using 'train_on_swissprot : true'."
+            )
+        else:  # Get original train benchmark annotations
+            terms = go_terms_dict.get("term", [])
 
-        onehot = torch.zeros(vocab_size, dtype=torch.float32)
-        if self.config["data"]["exp_only"]:
-            terms = go_terms_dict.get("experimental", [])
-        else:
-            terms = go_terms_dict.get("curated", [])
         for term in terms:
             if term in go_to_idx:
                 onehot[go_to_idx[term]] = 1.0
@@ -231,9 +242,9 @@ class SwissProtDataset:
 
     def get_batch_features(self, batch):
         """Load individual protein features and amino acid data for the sampled batch."""
-        protein_n_id = batch["protein"].n_id
-        batch_size = batch["protein"].batch_size
-        sampled_protein_ids = [self.idx_to_protein[idx.item()] for idx in protein_n_id]
+        sampled_protein_ids = [
+            self.idx_to_protein[idx.item()] for idx in batch["protein"].n_id
+        ]
         if self.uses_entryid:
             sampled_protein_ids = [
                 self.rev_pid_mapping.get(pid, pid) for pid in sampled_protein_ids
@@ -256,24 +267,37 @@ class SwissProtDataset:
                 go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
                 aa_feat = torch.zeros(200, 1280, dtype=torch.float32)  # Default 200 AAs
             else:
-                # Extract InterPro features
+                # InterPro features
                 interpro_feat = protein_graph["protein"].interpro.squeeze(0)
 
-                # Extract and convert GO features
-                go_terms_key = f"go_terms_{self.subontology}"
-                if go_terms_key in protein_graph["protein"]:
-                    go_terms_dict = protein_graph["protein"][go_terms_key]
+                # AA features
+                aa_feat = protein_graph["aa"].x
+
+                # GO features
+                if self.config["data"]["train_on_swissprot"]:
+                    # Extract and convert GO features
+                    go_terms_key = f"go_terms_{self.subontology}"
+                    if go_terms_key in protein_graph["protein"]:
+                        go_terms_dict = protein_graph["protein"][go_terms_key]
 
                     # For training proteins, use actual annotations
                     # For val/test, use zeros to prevent leakage
                     # Note: PyG NeighborLoader guarantees that sampled seed nodes (i.e. nodes which we are making a prediction on) are first in the batch
-                    if local_idx < batch_size and protein_id in self.train_proteins:
+                    if (
+                        local_idx > batch["protein"].batch_size
+                        and protein_id in self.train_proteins
+                    ):
                         go_feat = self.convert_go_terms_to_onehot(go_terms_dict)
-                    else:
+                    else:  # Encapsulates both val/test proteins and seed train proteins
                         go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
-
-                # Extract amino acid features
-                aa_feat = protein_graph["aa"].x
+                elif (
+                    protein_id in self.train_annots
+                ):  # Override with benchmark annotations
+                    go_feat = self.convert_go_terms_to_onehot(
+                        self.train_annots[protein_id]
+                    )
+                else:  # No annotations available
+                    go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
 
             all_interpro_features.append(interpro_feat)
             all_go_features.append(go_feat)

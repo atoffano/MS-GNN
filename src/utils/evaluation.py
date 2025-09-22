@@ -45,11 +45,10 @@ def save_predictions(config, model, loader, device, dataset, split=None):
 
 
 @timeit
-def evaluate(config, logger, output_dir, subontology, split):
+def evaluate(logger, dataset, output_dir, subontology, split):
     """
     Evaluate the predictions using the ground truth (GT) annotations and the BeProf evaluation method.
     """
-    dataset = config["data"]["dataset"]
     background_pkl = f"./data/{dataset}/background_{dataset}_{split}.pkl"
     if os.path.exists(background_pkl):
         logger.info(f"Using existing background file: {background_pkl}")
@@ -219,12 +218,12 @@ def gt_convert(gt_tsv):
     #     print(protein_go_terms_dict[sample_protein])
 
 
-def convert_predictions(pred_file, aspect):
+def convert_predictions(pred_file, subontology):
     """
     Converts a TSV prediction file with columns: target_ID, term_ID
     into a dictionary where each protein gets a 'bp' dictionary of GO term predictions.
     """
-    subontology = aspect[:2].lower()
+    subontology = subontology[:2].lower()
     df = pd.read_csv(pred_file, sep="\t")
     # Split term column by '; ' and explode
     df["term_ID"] = df["term_ID"].str.split("; ")
@@ -286,6 +285,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--subontology", required=True, help="Ontology aspect (BPO, CCO, MFO)."
     )
+    parser.add_argument(
+        "--split",
+        default="test",
+        help="Data split to evaluate on (train, val, test). Default: test",
+    )
     args = parser.parse_args()
     logger = setup_logging(args.input_dir, args.subontology)
-    evaluate(logger, args.input_dir, args.dataset, args.subontology)
+    evaluate(logger, args.dataset, args.input_dir, args.subontology, args.split)
