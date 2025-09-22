@@ -36,9 +36,10 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
             )
             val_loss_sum += val_loss.item()
             val_batches_run += 1
-    avg_val_loss = val_loss_sum / val_batches_run
     model.train()
-    return avg_val_loss
+    if val_batches_run == 0:
+        return val_loss_sum
+    return val_loss_sum / val_batches_run
 
 
 def train(config, model, train_loader, val_loader, test_loader, device):
