@@ -34,7 +34,7 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
                 val_out,
                 val_batch["protein"].go[: val_batch["protein"].batch_size],
             )
-            val_loss_sum += val_loss.item() // val_batch["protein"].batch_size
+            val_loss_sum += val_loss.item() / val_batch["protein"].batch_size
             val_batches_run += 1
     model.train()
     if val_batches_run == 0:
@@ -67,9 +67,9 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
             )
             loss.backward()
             optimizer.step()
-            wandb.log({"train_loss": loss.item() // batch["protein"].batch_size})
+            wandb.log({"train_loss": loss.item() / batch["protein"].batch_size})
             batch_count += 1
-            acc_train_loss += loss.item() // batch["protein"].batch_size
+            acc_train_loss += loss.item() / batch["protein"].batch_size
 
             if batch_count % 50 == 0:
                 avg_val_loss = run_intermediate_validation(
@@ -83,7 +83,7 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
                 )
                 batch_count = 0
                 logger.info(
-                    f"Epoch {epoch}, Batch {batch_count}, Train Loss: {acc_train_loss // 50:.4f}, Intermediate Val Loss: {avg_val_loss:.4f}"
+                    f"Epoch {epoch}, Batch {batch_count}, Train Loss: {acc_train_loss // 50}, Intermediate Val Loss: {avg_val_loss}"
                 )
         scheduler.step()
     val_loss = run_intermediate_validation(
