@@ -25,7 +25,7 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
     model.eval()
     val_loss_sum = 0
     with torch.no_grad():
-        for i in range(1, num_batches + 1):
+        for _ in range(1, num_batches + 1):
             val_batch = next(iter(val_loader))
             val_batch = val_batch.to(device)
             val_out = model(val_batch)
@@ -35,7 +35,7 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
             )
             val_loss_sum += val_loss.item() / val_batch["protein"].batch_size
     model.train()
-    return val_loss_sum / i
+    return val_loss_sum / num_batches
 
 
 def train(config, model, dataset, train_loader, val_loader, test_loader, device):
@@ -99,7 +99,7 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
 
 
 def main():
-    config_path = "src/configs/cfg.yaml"
+    config_path = "src/configs/toy_cfg.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
