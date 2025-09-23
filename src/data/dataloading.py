@@ -150,6 +150,28 @@ class SwissProtDataset:
             f"Loaded splits - Train: {len(self.train_proteins)}, Val: {len(self.val_proteins)}, Test: {len(self.test_proteins)}"
         )
 
+        # Get pos weights for loss function
+        self.pos_weights = self._compute_pos_weights()
+        logger.info(f"Computed pos weights for {len(self.pos_weights)} GO terms")
+
+    def _compute_pos_weights(self):
+        """Compute positive weights for each GO term to handle class imbalance."""
+        go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
+        term_counts = torch.zeros(len(go_to_idx), dtype=torch.float32)
+
+        for pid in self.train_proteins:
+            if pid in self.train_annots:
+                terms = self.train_annots[pid].get("term", [])
+                for term in terms:
+                    if term in go_to_idx:
+                        term_counts[go_to_idx[term]] += 1
+
+        total_proteins = len(self.train_proteins)
+        pos_weights = (total_proteins - term_counts) / (
+            term_counts + 1e-5
+        )  # Avoid div by zero
+        return pos_weights
+
     def _create_protein_graph(self, config):
         """Creates the high-level protein network."""
         alignment_path = (

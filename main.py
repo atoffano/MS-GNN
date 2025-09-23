@@ -42,14 +42,14 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
     return val_loss_sum / val_batches_run
 
 
-def train(config, model, train_loader, val_loader, test_loader, device):
+def train(config, model, dataset, train_loader, val_loader, test_loader, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=config["optimizer"]["lr"])
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer,
         step_size=config["scheduler"]["step_size"],
         gamma=config["scheduler"]["gamma"],
     )
-    criterion = torch.nn.BCEWithLogitsLoss()
+    criterion = torch.nn.BCEWithLogitsLoss(pos_weight=dataset.pos_weights.to(device))
 
     # Training loop
     for epoch in range(1, config["trainer"]["epochs"] + 1):
@@ -170,7 +170,7 @@ def main():
         logger.info(f"Model: {model}")
 
         # Training
-        train(config, model, train_loader, val_loader, test_loader, device)
+        train(config, model, dataset, train_loader, val_loader, test_loader, device)
 
         # Predictions
         splits = ["test"] if config["run"]["test_only"] else ["val", "test"]
