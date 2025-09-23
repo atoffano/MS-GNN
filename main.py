@@ -83,7 +83,7 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
                 )
                 batch_count = 0
                 logger.info(
-                    f"Epoch {epoch}, Batch {batch_count}, Train Loss: {acc_train_loss // 50}, Intermediate Val Loss: {avg_val_loss}"
+                    f"Epoch {epoch}, Batch {batch_count}, Train Loss: {acc_train_loss / 50}, Intermediate Val Loss: {avg_val_loss}"
                 )
         scheduler.step()
     val_loss = run_intermediate_validation(
@@ -92,8 +92,8 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
     test_loss = run_intermediate_validation(
         model, test_loader, criterion, device, num_batches=len(test_loader)
     )
-    logger.info(f"Final Validation Loss: {val_loss:.4f}")
-    logger.info(f"Final Test Loss: {test_loss:.4f}")
+    logger.info(f"Final Validation Loss: {val_loss}")
+    logger.info(f"Final Test Loss: {test_loss}")
     wandb.log(
         {
             "final_val_loss": val_loss,
