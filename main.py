@@ -24,9 +24,8 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
         num_batches = len(val_loader)
     model.eval()
     val_loss_sum = 0
-    val_batches_run = 0
     with torch.no_grad():
-        for _ in range(num_batches):
+        for i in range(1, num_batches + 1):
             val_batch = next(iter(val_loader))
             val_batch = val_batch.to(device)
             val_out = model(val_batch)
@@ -35,11 +34,8 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
                 val_batch["protein"].go[: val_batch["protein"].batch_size],
             )
             val_loss_sum += val_loss.item() / val_batch["protein"].batch_size
-            val_batches_run += 1
     model.train()
-    if val_batches_run == 0:
-        return val_loss_sum
-    return val_loss_sum / val_batches_run
+    return val_loss_sum / i
 
 
 def train(config, model, dataset, train_loader, val_loader, test_loader, device):
@@ -54,9 +50,10 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
     # Training loop
     for epoch in range(1, config["trainer"]["epochs"] + 1):
         model.train()
-        batch_count = 0
-        acc_train_loss = 0
-        for batch in tqdm.tqdm(train_loader, desc=f"Training Epoch {epoch}"):
+        train_loss_sum = 0
+        for i, batch in tqdm.tqdm(
+            enumerate(train_loader, start=1), desc=f"Training Epoch {epoch}"
+        ):
             batch = batch.to(device)
             optimizer.zero_grad()
             out = model(batch)
@@ -68,10 +65,9 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
             loss.backward()
             optimizer.step()
             wandb.log({"train_loss": loss.item() / batch["protein"].batch_size})
-            batch_count += 1
-            acc_train_loss += loss.item() / batch["protein"].batch_size
+            train_loss_sum += loss.item() / batch["protein"].batch_size
 
-            if batch_count % 50 == 0:
+            if i % 50 == 0:
                 avg_val_loss = run_intermediate_validation(
                     model, val_loader, criterion, device
                 )
@@ -81,10 +77,10 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
                         "lr": scheduler.get_last_lr()[0],
                     }
                 )
-                batch_count = 0
                 logger.info(
-                    f"Epoch {epoch}, Batch {batch_count}, Train Loss: {acc_train_loss / 50}, Intermediate Val Loss: {avg_val_loss}"
+                    f"Epoch {epoch}, Batch {i}, Train Loss: {train_loss_sum / 50}, Intermediate Val Loss: {avg_val_loss}"
                 )
+                train_loss_sum = 0
         scheduler.step()
     val_loss = run_intermediate_validation(
         model, val_loader, criterion, device, num_batches=len(val_loader)

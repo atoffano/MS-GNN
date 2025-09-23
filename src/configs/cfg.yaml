@@ -4,14 +4,14 @@ model:
   edge_attrs: false
 
 trainer:
-  epochs: 5
+  epochs: 1
   device: cuda
   compile: true  # Whether to use torch.compile
   num_workers: 12
 
 optimizer:
   type: Adam
-  lr: 0.01
+  lr: 0.001
 
 scheduler:
   type: StepLR
