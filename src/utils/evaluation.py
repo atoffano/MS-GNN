@@ -14,32 +14,35 @@ from sklearn.metrics import precision_recall_curve, auc
 import wandb
 
 
-def compute_aupr(all_scores, all_targets):
+def compute_metrics(all_scores, all_targets):
     """
-    Compute Area Under the Precision-Recall Curve (AUPR).
+    Compute Area Under the Precision-Recall Curve (AUPR) and F-max.
     """
-    all_scores = np.concatenate(all_scores, axis=0)
-    all_targets = np.concatenate(all_targets, axis=0)
+    # Fix: handle both list of arrays and single array
+    if isinstance(all_scores, (list, tuple)):
+        all_scores = np.concatenate(all_scores, axis=0).flatten()
+    else:
+        all_scores = np.array(all_scores).flatten()
+    if isinstance(all_targets, (list, tuple)):
+        all_targets = np.concatenate(all_targets, axis=0).flatten()
+    else:
+        all_targets = np.array(all_targets).flatten()
 
-    # Flatten for micro-average
-    y_true = all_targets.flatten()
-    y_score = all_scores.flatten()
-
-    precision, recall, thresholds = precision_recall_curve(y_true, y_score)
+    precision, recall, _ = precision_recall_curve(all_targets.astype(int), all_scores)
     aupr = auc(recall, precision)
 
     # Fmax calculation
     f_scores = 2 * precision * recall / (precision + recall + 1e-8)
     fmax = np.max(f_scores)
 
-    # Log to wandb
-    wandb.log(
-        {
-            "intermediate_val_aupr": aupr,
-            "intermediate_val_fmax": fmax,
-        }
-    )
+    return precision, recall, aupr, fmax
 
+
+def plot_aupr(all_scores, all_targets):
+    """
+    Compute Area Under the Precision-Recall Curve (AUPR).
+    """
+    precision, recall, aupr, _ = compute_metrics(all_scores, all_targets)
     # Plot PR curve and log to wandb
     plt.figure(figsize=(6, 5))
     plt.plot(recall, precision, label=f"AUPR={aupr:.3f}")
@@ -48,10 +51,10 @@ def compute_aupr(all_scores, all_targets):
     plt.title("Intermediate Validation PR Curve")
     plt.grid(True, alpha=0.3)
     plt.legend()
-    wandb.log({"intermediate_val_pr_curve": wandb.Image(plt)})
+    pr_plot = wandb.Image(plt)
     plt.close()
 
-    return aupr, fmax
+    return pr_plot
 
 
 @timeit

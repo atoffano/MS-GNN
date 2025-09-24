@@ -11,16 +11,16 @@ trainer:
 
 optimizer:
   type: Adam
-  lr: 0.001
+  lr: 0.01
 
 scheduler:
   type: StepLR
-  step_size: 5
+  step_size: 1
   gamma: 0.5
 
 data:
   dataset: 'ATGO'
-  subontology: ['BPO']  # One or more from ['CCO', 'MFO', 'BPO']
+  subontology: ['CCO']  # One or more from ['CCO', 'MFO', 'BPO']
   train_on_swissprot: False  # Whether to train on SwissProt or original train dataset
   exp_only: true  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV

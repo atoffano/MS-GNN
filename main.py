@@ -6,46 +6,18 @@ import wandb
 import os
 import datetime
 import time
+import numpy as np
 from torch_geometric.explain import Explainer, CaptumExplainer, AttentionExplainer
 from src.utils.visualize import visualize_graph_via_networkx, plot_aa_edge_histogram
 from src.data.dataloading import SwissProtDataset, define_loaders
 from src.models.gnn_model import ProteinGNN
-from src.utils.evaluation import save_predictions, evaluate, compute_aupr
+from src.utils.evaluation import save_predictions, evaluate, compute_metrics, plot_aupr
 from src.utils.helpers import timeit
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-def run_intermediate_validation(model, val_loader, criterion, device, num_batches=5):
-    if num_batches >= len(val_loader):
-        num_batches = len(val_loader)
-    model.eval()
-    val_loss_sum = 0
-    all_scores, all_targets = [], []
-    with torch.no_grad():
-        for _ in range(1, num_batches + 1):
-            val_batch = next(iter(val_loader))
-            val_batch = val_batch.to(device)
-            val_out = model(val_batch)
-            val_loss = criterion(
-                val_out,
-                val_batch["protein"].y,
-            )
-            val_loss_sum += val_loss.item() / val_batch["protein"].batch_size
-            if num_batches == len(val_loader):
-                scores = torch.sigmoid(val_out).cpu().numpy()
-                targets = val_batch["protein"].y.cpu().numpy()
-                all_scores.append(scores)
-                all_targets.append(targets)
-    val_loss = val_loss_sum / num_batches if num_batches > 0 else val_loss_sum
-    model.train()
-    if num_batches == len(val_loader):
-        aupr, fmax = compute_aupr(all_scores, all_targets)
-        return val_loss, aupr, fmax
-    return val_loss
 
 
 def train(config, model, dataset, train_loader, val_loader, test_loader, device):
@@ -78,13 +50,14 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
             train_loss_sum += loss.item() / batch["protein"].batch_size
 
             if i % 50 == 0:
-                avg_val_loss = run_intermediate_validation(
+                avg_val_loss, val_aupr, val_fmax = run_intermediate_validation(
                     model, val_loader, criterion, device
                 )
                 wandb.log(
                     {
                         "intermediate_val_loss": avg_val_loss,
-                        "lr": scheduler.get_lr()[0],
+                        "intermediate_val_aupr": val_aupr,
+                        "intermediate_val_fmax": val_fmax,
                     }
                 )
                 logger.info(
@@ -92,10 +65,10 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
                 )
                 train_loss_sum = 0
         scheduler.step()
-        val_loss, val_aupr, val_fmax = run_intermediate_validation(
+        val_loss, val_aupr, val_fmax, val_pr_plot = run_intermediate_validation(
             model, val_loader, criterion, device, num_batches=len(val_loader)
         )
-        test_loss, test_aupr, test_fmax = run_intermediate_validation(
+        test_loss, test_aupr, test_fmax, test_pr_plot = run_intermediate_validation(
             model, test_loader, criterion, device, num_batches=len(test_loader)
         )
         logger.info(
@@ -106,17 +79,49 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
         wandb.log(
             {
                 "end_epoch_val_loss": val_loss,
-                "end_epoch_test_loss": test_loss,
                 "end_epoch_val_aupr": val_aupr,
                 "end_epoch_val_fmax": val_fmax,
+                "end_epoch_val_pr_curve": val_pr_plot,
+                "end_epoch_test_loss": test_loss,
                 "end_epoch_test_aupr": test_aupr,
                 "end_epoch_test_fmax": test_fmax,
+                "end_epoch_test_pr_curve": test_pr_plot,
             }
         )
 
 
+def run_intermediate_validation(model, val_loader, criterion, device, num_batches=5):
+    if num_batches >= len(val_loader):
+        num_batches = len(val_loader)
+    model.eval()
+    val_loss_sum = 0
+    all_scores, all_targets = [], []
+    with torch.no_grad():
+        for _ in range(num_batches):
+            val_batch = next(iter(val_loader))
+            val_batch = val_batch.to(device)
+            val_out = model(val_batch)
+            val_loss = criterion(
+                val_out,
+                val_batch["protein"].y,
+            )
+            val_loss_sum += val_loss.item() / val_batch["protein"].batch_size
+            all_scores.append(torch.sigmoid(val_out).cpu().numpy())
+            all_targets.append(val_batch["protein"].y.cpu().numpy())
+
+    precision, recall, aupr, fmax = compute_metrics(all_scores, all_targets)
+    val_loss = val_loss_sum / num_batches if num_batches > 0 else val_loss_sum
+    model.train()
+
+    if num_batches == len(val_loader):
+        precision, recall, aupr, fmax = compute_metrics(all_scores, all_targets)
+        pr_plot = plot_aupr(precision, recall)
+        return val_loss, aupr, fmax, pr_plot
+    return val_loss, aupr, fmax
+
+
 def main():
-    config_path = "src/configs/cfg.yaml"
+    config_path = "src/configs/toy_cfg.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
