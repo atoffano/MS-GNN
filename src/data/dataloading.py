@@ -244,17 +244,10 @@ class SwissProtDataset:
         onehot = torch.zeros(
             self.go_vocab_info[self.subontology]["vocab_size"], dtype=torch.float32
         )
-        if self.config["data"]["train_on_swissprot"]:
-            if self.config["data"]["exp_only"]:
-                terms = go_terms_dict.get("experimental", [])
-            else:
-                terms = go_terms_dict.get("curated", [])
-        elif not self.config["data"]["exp_only"]:
-            raise ValueError(
-                "Cannot use curated annotations when restricting to original benchmark annotation corpus. Extend training to uniprot using 'train_on_swissprot : true'."
-            )
-        else:  # Get original train benchmark annotations
-            terms = go_terms_dict.get("term", [])
+        if self.config["data"]["exp_only"]:
+            terms = go_terms_dict.get("experimental", [])
+        else:
+            terms = go_terms_dict.get("curated", [])
 
         for term in terms:
             if term in go_to_idx:
@@ -289,37 +282,12 @@ class SwissProtDataset:
                 go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
                 aa_feat = torch.zeros(200, 1280, dtype=torch.float32)  # Default 200 AAs
             else:
-                # InterPro features
+                # Load features
                 interpro_feat = protein_graph["protein"].interpro.squeeze(0)
-
-                # AA features
                 aa_feat = protein_graph["aa"].x
-
-                # GO features
-                if self.config["data"]["train_on_swissprot"]:
-                    # Extract and convert GO features
-                    go_terms_key = f"go_terms_{self.subontology}"
-                    if go_terms_key in protein_graph["protein"]:
-                        go_terms_dict = protein_graph["protein"][go_terms_key]
-
-                    # For training proteins, use actual annotations
-                    # For val/test, use zeros to prevent leakage
-                    # Note: PyG NeighborLoader guarantees that sampled seed nodes (i.e. nodes which we are making a prediction on) are first in the batch
-                    if (
-                        local_idx > batch["protein"].batch_size
-                        and protein_id in self.train_proteins
-                    ):
-                        go_feat = self.convert_go_terms_to_onehot(go_terms_dict)
-                    else:  # Encapsulates both val/test proteins and seed train proteins
-                        go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
-                elif (
-                    protein_id in self.train_annots
-                ):  # Override with benchmark annotations
-                    go_feat = self.convert_go_terms_to_onehot(
-                        self.train_annots[protein_id]
-                    )
-                else:  # No annotations available
-                    go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
+                go_feat = self.convert_go_terms_to_onehot(
+                    protein_graph["protein"][f"go_terms_{self.subontology}"]
+                )
 
             all_interpro_features.append(interpro_feat)
             all_go_features.append(go_feat)
@@ -337,6 +305,17 @@ class SwissProtDataset:
         # Update batch with function-related features
         batch["protein"].interpro = torch.stack(all_interpro_features)
         batch["protein"].go = torch.stack(all_go_features)
+        batch["protein"].y = batch["protein"].go[: batch["protein"].batch_size].clone()
+
+        batch["protein"].go[: batch["protein"].batch_size] = 0.0
+        if batch["mode"] == "train":
+            # Mask GO features for val/test proteins
+            n_id = batch["protein"].n_id
+            mask_val = self.val_mask[n_id]
+            mask_test = self.test_mask[n_id]
+            mask = mask_val | mask_test
+            batch["protein"].go[mask] = 0.0
+
         # Set protein node features as concatenation of InterPro and GO one hots.
         batch["protein"].x = torch.cat(
             [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
@@ -358,6 +337,15 @@ class SwissProtDataset:
         return batch
 
 
+def make_batch_transform(dataset, mode):
+    def batch_transform(batch):
+        batch["mode"] = mode
+        batch = dataset.get_batch_features(batch)
+        return batch
+
+    return batch_transform
+
+
 def define_loaders(config, dataset):
     """Create NeighborLoader instances for train/val/test."""
 
@@ -366,7 +354,7 @@ def define_loaders(config, dataset):
         num_neighbors={("protein", "aligned_with", "protein"): [-1]},  # 1-hop sampling
         batch_size=config["model"]["batch_size"],
         input_nodes=("protein", dataset.train_mask),
-        transform=dataset.get_batch_features,
+        transform=make_batch_transform(dataset, mode="train"),
         shuffle=True,
         num_workers=config["trainer"]["num_workers"],
         drop_last=True,
@@ -377,7 +365,7 @@ def define_loaders(config, dataset):
         num_neighbors={("protein", "aligned_with", "protein"): [-1]},
         batch_size=config["model"]["batch_size"],
         input_nodes=("protein", dataset.test_mask),
-        transform=dataset.get_batch_features,
+        transform=make_batch_transform(dataset, mode="predict"),
         shuffle=False,
         num_workers=config["trainer"]["num_workers"],
     )
@@ -390,7 +378,7 @@ def define_loaders(config, dataset):
             num_neighbors={("protein", "aligned_with", "protein"): [-1]},
             batch_size=config["model"]["batch_size"],
             input_nodes=("protein", dataset.val_mask),
-            transform=dataset.get_batch_features,
+            transform=make_batch_transform(dataset, mode="predict"),
             shuffle=False,
             num_workers=config["trainer"]["num_workers"],
         )

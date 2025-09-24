@@ -10,7 +10,7 @@ from torch_geometric.explain import Explainer, CaptumExplainer, AttentionExplain
 from src.utils.visualize import visualize_graph_via_networkx, plot_aa_edge_histogram
 from src.data.dataloading import SwissProtDataset, define_loaders
 from src.models.gnn_model import ProteinGNN
-from src.utils.evaluation import save_predictions, evaluate
+from src.utils.evaluation import save_predictions, evaluate, compute_aupr
 from src.utils.helpers import timeit
 
 logging.basicConfig(
@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 
 
 def run_intermediate_validation(model, val_loader, criterion, device, num_batches=5):
-    if num_batches > len(val_loader):
+    if num_batches >= len(val_loader):
         num_batches = len(val_loader)
     model.eval()
     val_loss_sum = 0
+    all_scores, all_targets = [], []
     with torch.no_grad():
         for _ in range(1, num_batches + 1):
             val_batch = next(iter(val_loader))
@@ -31,11 +32,20 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
             val_out = model(val_batch)
             val_loss = criterion(
                 val_out,
-                val_batch["protein"].go[: val_batch["protein"].batch_size],
+                val_batch["protein"].y,
             )
             val_loss_sum += val_loss.item() / val_batch["protein"].batch_size
+            if num_batches == len(val_loader):
+                scores = torch.sigmoid(val_out).cpu().numpy()
+                targets = val_batch["protein"].y.cpu().numpy()
+                all_scores.append(scores)
+                all_targets.append(targets)
+    val_loss = val_loss_sum / num_batches if num_batches > 0 else val_loss_sum
     model.train()
-    return val_loss_sum / num_batches
+    if num_batches == len(val_loader):
+        aupr, fmax = compute_aupr(all_scores, all_targets)
+        return val_loss, aupr, fmax
+    return val_loss
 
 
 def train(config, model, dataset, train_loader, val_loader, test_loader, device):
@@ -60,7 +70,7 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
 
             loss = criterion(
                 out,
-                batch["protein"].go[: batch["protein"].batch_size],
+                batch["protein"].y,
             )
             loss.backward()
             optimizer.step()
@@ -74,7 +84,7 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
                 wandb.log(
                     {
                         "intermediate_val_loss": avg_val_loss,
-                        "lr": scheduler.get_last_lr()[0],
+                        "lr": scheduler.get_lr()[0],
                     }
                 )
                 logger.info(
@@ -82,24 +92,31 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
                 )
                 train_loss_sum = 0
         scheduler.step()
-    val_loss = run_intermediate_validation(
-        model, val_loader, criterion, device, num_batches=len(val_loader)
-    )
-    test_loss = run_intermediate_validation(
-        model, test_loader, criterion, device, num_batches=len(test_loader)
-    )
-    logger.info(f"Final Validation Loss: {val_loss}")
-    logger.info(f"Final Test Loss: {test_loss}")
-    wandb.log(
-        {
-            "final_val_loss": val_loss,
-            "final_test_loss": test_loss,
-        }
-    )
+        val_loss, val_aupr, val_fmax = run_intermediate_validation(
+            model, val_loader, criterion, device, num_batches=len(val_loader)
+        )
+        test_loss, test_aupr, test_fmax = run_intermediate_validation(
+            model, test_loader, criterion, device, num_batches=len(test_loader)
+        )
+        logger.info(
+            f"End of epoch: Validation Loss: {val_loss}, Test Loss: {test_loss}\n"
+            f"Validation AUPR: {val_aupr}, Val F-max: {val_fmax}\n"
+            f"Test AUPR: {test_aupr}, Test F-max: {test_fmax}"
+        )
+        wandb.log(
+            {
+                "end_epoch_val_loss": val_loss,
+                "end_epoch_test_loss": test_loss,
+                "end_epoch_val_aupr": val_aupr,
+                "end_epoch_val_fmax": val_fmax,
+                "end_epoch_test_aupr": test_aupr,
+                "end_epoch_test_fmax": test_fmax,
+            }
+        )
 
 
 def main():
-    config_path = "src/configs/toy_cfg.yaml"
+    config_path = "src/configs/cfg.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 

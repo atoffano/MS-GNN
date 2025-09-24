@@ -8,6 +8,50 @@ import tqdm
 import argparse
 import torch
 from src.utils.helpers import timeit
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.metrics import precision_recall_curve, auc
+import wandb
+
+
+def compute_aupr(all_scores, all_targets):
+    """
+    Compute Area Under the Precision-Recall Curve (AUPR).
+    """
+    all_scores = np.concatenate(all_scores, axis=0)
+    all_targets = np.concatenate(all_targets, axis=0)
+
+    # Flatten for micro-average
+    y_true = all_targets.flatten()
+    y_score = all_scores.flatten()
+
+    precision, recall, thresholds = precision_recall_curve(y_true, y_score)
+    aupr = auc(recall, precision)
+
+    # Fmax calculation
+    f_scores = 2 * precision * recall / (precision + recall + 1e-8)
+    fmax = np.max(f_scores)
+
+    # Log to wandb
+    wandb.log(
+        {
+            "intermediate_val_aupr": aupr,
+            "intermediate_val_fmax": fmax,
+        }
+    )
+
+    # Plot PR curve and log to wandb
+    plt.figure(figsize=(6, 5))
+    plt.plot(recall, precision, label=f"AUPR={aupr:.3f}")
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.title("Intermediate Validation PR Curve")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    wandb.log({"intermediate_val_pr_curve": wandb.Image(plt)})
+    plt.close()
+
+    return aupr, fmax
 
 
 @timeit
