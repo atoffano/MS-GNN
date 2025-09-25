@@ -5,8 +5,6 @@ import logging
 import wandb
 import os
 import datetime
-import time
-import numpy as np
 from torch_geometric.explain import Explainer, CaptumExplainer, AttentionExplainer
 from src.utils.visualize import visualize_graph_via_networkx, plot_aa_edge_histogram
 from src.data.dataloading import SwissProtDataset, define_loaders
@@ -121,7 +119,7 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
 
 
 def main():
-    config_path = "src/configs/toy_cfg.yaml"
+    config_path = "src/configs/cfg.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
@@ -161,7 +159,7 @@ def main():
 
         # Create efficient dataset
         logger.info("Creating dataset...")
-        dataset = SwissProtDataset(config, split="train")
+        dataset = SwissProtDataset(config)
 
         logger.info("Creating data loaders...")
         train_loader, val_loader, test_loader = define_loaders(config, dataset)
@@ -203,12 +201,13 @@ def main():
                     f"Saved predictions to {config['run']['results_dir']}/predictions_{split}_{dataset.subontology}.tsv"
                 )
 
-        # Save model
-        if config["trainer"].get("save_model"):
-            model_path = os.path.join(
-                config["run"]["results_dir"], f"model_{subontology}.pth"
-            )
+        if config["run"].get("save_model"):
+            model_path = os.path.join(config["run"]["results_dir"], f"model.pth")
             torch.save(model.state_dict(), model_path)
+            with open(
+                os.path.join(config["run"]["results_dir"], f"cfg.yaml"), "w"
+            ) as f:
+                yaml.dump(config, f)
             logger.info(f"Model saved to {model_path}")
             # wandb.save(model_path)
 

@@ -13,14 +13,13 @@ logger = logging.getLogger(__name__)
 class SwissProtDataset:
     """Dataset that maintains a static protein-protein graph and loads individual protein features on-demand."""
 
-    def __init__(self, config, split="train"):
+    def __init__(self, config):
         self.config = config
         if config["data"]["dataset"] in ["D1"]:
             self.uses_entryid = True  # D1 uses EntryIDs
         else:
             self.uses_entryid = False
 
-        self.split = split
         self.graphs_dir = Path(config["data"]["protein_graphs"])
 
         with open(f"{self.graphs_dir}/interpro_vocab.pkl", "rb") as f:
@@ -166,10 +165,7 @@ class SwissProtDataset:
                     if term in go_to_idx:
                         term_counts[go_to_idx[term]] += 1
 
-        total_proteins = len(self.train_proteins)
-        pos_weights = (total_proteins - term_counts) / (
-            term_counts + 1e-5
-        )  # Avoid div by zero
+        pos_weights = len(self.train_proteins) / (term_counts + 1)
         return pos_weights
 
     def _create_protein_graph(self, config):
@@ -306,10 +302,10 @@ class SwissProtDataset:
         batch["protein"].interpro = torch.stack(all_interpro_features)
         batch["protein"].go = torch.stack(all_go_features)
         batch["protein"].y = batch["protein"].go[: batch["protein"].batch_size].clone()
-
         batch["protein"].go[: batch["protein"].batch_size] = 0.0
+
+        # Mask GO features for val/test proteins
         if batch["mode"] == "train":
-            # Mask GO features for val/test proteins
             n_id = batch["protein"].n_id
             mask_val = self.val_mask[n_id]
             mask_test = self.test_mask[n_id]
@@ -372,7 +368,7 @@ def define_loaders(config, dataset):
 
     # Some datasets, like H30, do not have a validation set
     # This is (dirtily) handled by using the test set as val too.
-    if not config["run"]["test_only"]:
+    if config["data"]["dataset"] != "H30":
         val_loader = NeighborLoader(
             dataset.data,
             num_neighbors={("protein", "aligned_with", "protein"): [-1]},
