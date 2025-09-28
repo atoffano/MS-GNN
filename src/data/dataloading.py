@@ -44,9 +44,11 @@ class SwissProtDataset:
                 sep="\t",
                 usecols=["EntryID", "Entry Name"],
             )
-            .set_index("Entry Name")
-            .to_dict()["EntryID"]
+            .set_index("EntryID")
+            .to_dict()["Entry Name"]
         )
+        # print sample
+        print("Sample pid mapping:", list(self.pid_mapping.items())[:5])
         self.rev_pid_mapping = {v: k for k, v in self.pid_mapping.items()}
 
         # Get preprocessed protein graphs
@@ -56,7 +58,11 @@ class SwissProtDataset:
             if f.stem not in ["metadata", "interpro_vocab", "go_vocab"]
         ]
         if self.uses_entryid:
-            self.proteins = [self.pid_mapping.get(pid, pid) for pid in self.proteins]
+            self.proteins = [
+                self.rev_pid_mapping.get(pid, pid) for pid in self.proteins
+            ]
+        # show prot sample
+        print("Sample proteins:", self.proteins[:5])
 
         # Load GO annotations to determine train/val/test splits
         self._load_split_masks(config)
@@ -96,6 +102,7 @@ class SwissProtDataset:
                 self.train_annots[pid]["term"] = self.train_annots[pid]["term"].split(
                     "; "
                 )
+            print("train head:", train_df.head())
 
         # Load val and test
         dataset_name = config["data"]["dataset"]
@@ -103,8 +110,7 @@ class SwissProtDataset:
             split_path = f"./data/{dataset_name}/{dataset_name}_{subontology}_{split_name}_annotations.tsv"
             if Path(split_path).exists():
                 split_df = pd.read_csv(split_path, sep="\t")
-                if self.uses_entryid:
-                    split_df["EntryID"] = split_df["EntryID"].map(self.pid_mapping)
+                print("Head after mapping:", split_df.head())
                 splits[split_name] = set(split_df["EntryID"].tolist())
 
         # Ensure all proteins in splits are in SwissProt.
@@ -193,8 +199,12 @@ class SwissProtDataset:
             ],
         )
         if self.uses_entryid:
-            alignment_df["protein1"] = alignment_df["protein1"].map(self.pid_mapping)
-            alignment_df["protein2"] = alignment_df["protein2"].map(self.pid_mapping)
+            alignment_df["protein1"] = alignment_df["protein1"].map(
+                self.rev_pid_mapping
+            )
+            alignment_df["protein2"] = alignment_df["protein2"].map(
+                self.rev_pid_mapping
+            )
 
         # Convert to indices
         source_indices = alignment_df["protein1"].map(self.protein_to_idx).tolist()
@@ -258,7 +268,7 @@ class SwissProtDataset:
         ]
         if self.uses_entryid:
             sampled_protein_ids = [
-                self.rev_pid_mapping.get(pid, pid) for pid in sampled_protein_ids
+                self.pid_mapping.get(pid, pid) for pid in sampled_protein_ids
             ]
 
         # Load individual protein graphs and extract features

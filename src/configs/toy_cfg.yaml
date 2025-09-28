@@ -4,14 +4,14 @@ model:
   edge_attrs: false
 
 trainer:
-  epochs: 5
+  epochs: 20
   device: cuda
   compile: false  # Whether to use torch.compile
   num_workers: 0
 
 optimizer:
   type: Adam
-  lr: 0.01
+  lr: 0.0001
 
 scheduler:
   type: StepLR
@@ -20,7 +20,7 @@ scheduler:
 
 data:
   dataset: 'toy'
-  subontology: ['CCO']  # One or more from ['CCO', 'MFO', 'BPO']
+  subontology: ['BPO']  # One or more from ['CCO', 'MFO', 'BPO']
   train_on_swissprot: false  # Whether to train on SwissProt or original train dataset
   exp_only: true  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/toy/toy_swissprot_2024_01_alignment.tsv  # Alignment TSV
@@ -32,7 +32,7 @@ run:
     val: true
     test: true
   test_only: false  # Whether to run evaluation only on the test set (no validation)
-  save_model: false
+  save_model: true
   project_path: "/home/atoffano/PFP_layer"  # From constants.py
   #project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
 
