@@ -38,11 +38,10 @@ def compute_metrics(all_scores, all_targets):
     return precision, recall, aupr, fmax
 
 
-def plot_aupr(all_scores, all_targets):
+def plot_aupr(precision, recall, aupr=None):
     """
     Compute Area Under the Precision-Recall Curve (AUPR).
     """
-    precision, recall, aupr, _ = compute_metrics(all_scores, all_targets)
     # Plot PR curve and log to wandb
     plt.figure(figsize=(6, 5))
     plt.plot(recall, precision, label=f"AUPR={aupr:.3f}")
@@ -76,6 +75,10 @@ def save_predictions(config, model, loader, device, dataset, split=None):
             out = model(batch)
             batch_size = batch["protein"].batch_size
             protein_ids = batch["protein"].protein_ids[:batch_size]
+            if dataset.uses_entryid:
+                protein_ids = [
+                    dataset.rev_pid_mapping[idx.item()] for idx in protein_ids
+                ]
             scores = torch.sigmoid(out[:batch_size]).cpu().numpy()
             for i, pid in enumerate(protein_ids):
                 for j, score in enumerate(scores[i]):
@@ -154,6 +157,21 @@ def evaluate(logger, dataset, output_dir, subontology, split):
         pred_dict = convert_predictions(pred_file, subontology)
         with open(pred_pkl, "wb") as f:
             pickle.dump(pred_dict, f)
+        # pid_mapping = (
+        #     pd.read_csv(
+        #         f"./data/swissprot/2024_01/swissprot_2024_01_annotations.tsv",  # Most up to date mapping
+        #         sep="\t",
+        #         usecols=["EntryID", "Entry Name"],
+        #     )
+        #     .set_index("EntryID")
+        #     .to_dict()["Entry Name"]
+        # )
+        # Apply mapping to pred_dict keys
+        # rev_mapping = {v: k for k, v in pid_mapping.items()}
+        # pred_dict_mapped = {rev_mapping.get(k, k): v for k, v in pred_dict.items()}
+        # with open(pred_pkl, "wb") as f:
+        #     pickle.dump(pred_dict_mapped, f)
+        # logger.info(f"Converted predictions saved to {pred_pkl}")
 
         run_beprof_evaluation(
             logger,

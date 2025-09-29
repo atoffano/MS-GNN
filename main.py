@@ -113,13 +113,13 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
 
     if num_batches == len(val_loader):
         precision, recall, aupr, fmax = compute_metrics(all_scores, all_targets)
-        pr_plot = plot_aupr(precision, recall)
+        pr_plot = plot_aupr(precision, recall, aupr)
         return val_loss, aupr, fmax, pr_plot
     return val_loss, aupr, fmax
 
 
 def main():
-    config_path = "src/configs/cfg.yaml"
+    config_path = "src/configs/toy_cfg.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 

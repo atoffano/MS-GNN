@@ -38,6 +38,7 @@ class SwissProtDataset:
         self.go_vocab_size = self.go_vocab_sizes[self.subontology]
 
         # Protein IDs are in the Accession Number format (e.g. P12345) or in the EntryID format (e.g. INS_HUMAN), depending on the dataset
+        # Dict like ('INS_HUMAN', 'P01308')
         self.pid_mapping = (
             pd.read_csv(
                 f"./data/swissprot/2024_01/swissprot_2024_01_annotations.tsv",  # Most up to date mapping
@@ -47,22 +48,19 @@ class SwissProtDataset:
             .set_index("EntryID")
             .to_dict()["Entry Name"]
         )
-        # print sample
-        print("Sample pid mapping:", list(self.pid_mapping.items())[:5])
         self.rev_pid_mapping = {v: k for k, v in self.pid_mapping.items()}
 
-        # Get preprocessed protein graphs
+        # Get preprocessed SwissProt protein graphs
         self.proteins = [
             f.stem
             for f in self.graphs_dir.glob("*.pt")
             if f.stem not in ["metadata", "interpro_vocab", "go_vocab"]
         ]
         if self.uses_entryid:
+            # Convert potential Accession Numbers to EntryIDs
             self.proteins = [
                 self.rev_pid_mapping.get(pid, pid) for pid in self.proteins
             ]
-        # show prot sample
-        print("Sample proteins:", self.proteins[:5])
 
         # Load GO annotations to determine train/val/test splits
         self._load_split_masks(config)
@@ -114,13 +112,18 @@ class SwissProtDataset:
                 splits[split_name] = set(split_df["EntryID"].tolist())
 
         # Ensure all proteins in splits are in SwissProt.
-        protein_set = set(self.proteins)
+        swissprot_proteins = set(self.proteins)
         for split in splits:
-            missing = list(splits[split] - protein_set)
+            missing = list(splits[split] - swissprot_proteins)
             if missing:
                 logger.warning(
-                    f"{len(missing)} proteins features not found in protein set for split '{split}'.\nPlaceholder empty features will be used."
+                    f"{len(missing)} proteins not found in available protein feature set for split '{split}'.\nPlaceholder empty features will be used."
                 )
+        self.proteins = list(
+            swissprot_proteins.union(splits["train"])
+            .union(splits["val"])
+            .union(splits["test"])
+        )
 
         # Remove proteins from val/test if they are also in train
         # This should only happen if training on the full SwissProt release.
@@ -142,14 +145,11 @@ class SwissProtDataset:
         self.test_mask = torch.zeros(num_proteins, dtype=torch.bool)
 
         for pid in self.train_proteins:
-            if pid in self.protein_to_idx:
-                self.train_mask[self.protein_to_idx[pid]] = True
+            self.train_mask[self.protein_to_idx[pid]] = True
         for pid in self.val_proteins:
-            if pid in self.protein_to_idx:
-                self.val_mask[self.protein_to_idx[pid]] = True
+            self.val_mask[self.protein_to_idx[pid]] = True
         for pid in self.test_proteins:
-            if pid in self.protein_to_idx:
-                self.test_mask[self.protein_to_idx[pid]] = True
+            self.test_mask[self.protein_to_idx[pid]] = True
 
         logger.info(
             f"Loaded splits - Train: {len(self.train_proteins)}, Val: {len(self.val_proteins)}, Test: {len(self.test_proteins)}"
@@ -323,9 +323,12 @@ class SwissProtDataset:
             batch["protein"].go[mask] = 0.0
 
         # Set protein node features as concatenation of InterPro and GO one hots.
-        batch["protein"].x = torch.cat(
-            [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
-        )
+        batch["protein"].x = torch.stack(all_interpro_features)
+
+        # # Set protein node features as concatenation of InterPro and GO one hots.
+        # batch["protein"].x = torch.cat(
+        #     [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
+        # )
 
         # Add amino acid nodes and features
         batch["aa"].x = torch.cat(all_aa_features, dim=0)
