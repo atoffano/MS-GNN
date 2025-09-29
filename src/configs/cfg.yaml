@@ -4,9 +4,9 @@ model:
   edge_attrs: false
 
 trainer:
-  epochs: 10
+  epochs: 1
   device: cuda
-  compile: false  # Whether to use torch.compile
+  compile: true  # Whether to use torch.compile
   num_workers: 12
 
 optimizer:
@@ -19,7 +19,7 @@ scheduler:
   gamma: 0.5
 
 data:
-  dataset: 'ATGO'
+  dataset: 'D1'
   subontology: ['MFO']  # One or more from ['CCO', 'MFO', 'BPO']
   train_on_swissprot: False  # Whether to train on SwissProt or original train dataset
   exp_only: true  # If training on SwissProt, whether to use only experimental annotations
@@ -32,7 +32,7 @@ run:
     val: true
     test: true
   test_only: false  # Whether to run evaluation only on the test set (no validation)
-  save_model: true
+  save_model: false
   project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
 
 checkpoint:

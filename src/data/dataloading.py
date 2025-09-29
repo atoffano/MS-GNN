@@ -111,19 +111,17 @@ class SwissProtDataset:
                 print("Head after mapping:", split_df.head())
                 splits[split_name] = set(split_df["EntryID"].tolist())
 
-        # Ensure all proteins in splits are in SwissProt.
         swissprot_proteins = set(self.proteins)
         for split in splits:
             missing = list(splits[split] - swissprot_proteins)
             if missing:
                 logger.warning(
-                    f"{len(missing)} proteins not found in available protein feature set for split '{split}'.\nPlaceholder empty features will be used."
+                    f"{len(missing)} proteins not found in available protein feature set for split '{split}'."
                 )
-        self.proteins = list(
-            swissprot_proteins.union(splits["train"])
-            .union(splits["val"])
-            .union(splits["test"])
-        )
+        if missing:
+            logger.warning(
+                f"Missing proteins will be ignored during training and eval."
+            )
 
         # Remove proteins from val/test if they are also in train
         # This should only happen if training on the full SwissProt release.
@@ -291,9 +289,14 @@ class SwissProtDataset:
                 # Load features
                 interpro_feat = protein_graph["protein"].interpro.squeeze(0)
                 aa_feat = protein_graph["aa"].x
-                go_feat = self.convert_go_terms_to_onehot(
-                    protein_graph["protein"][f"go_terms_{self.subontology}"]
-                )
+
+                # check if protein in train annots
+                if protein_id in self.train_proteins:
+                    go_feat = self.convert_go_terms_to_onehot(
+                        protein_graph["protein"][f"go_terms_{self.subontology}"]
+                    )
+                else:
+                    go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
 
             all_interpro_features.append(interpro_feat)
             all_go_features.append(go_feat)
@@ -322,13 +325,12 @@ class SwissProtDataset:
             mask = mask_val | mask_test
             batch["protein"].go[mask] = 0.0
 
-        # Set protein node features as concatenation of InterPro and GO one hots.
-        batch["protein"].x = torch.stack(all_interpro_features)
+        # batch["protein"].x = torch.stack(all_interpro_features)
 
-        # # Set protein node features as concatenation of InterPro and GO one hots.
-        # batch["protein"].x = torch.cat(
-        #     [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
-        # )
+        # Set protein node features as concatenation of InterPro and GO one hots.
+        batch["protein"].x = torch.cat(
+            [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
+        )
 
         # Add amino acid nodes and features
         batch["aa"].x = torch.cat(all_aa_features, dim=0)
