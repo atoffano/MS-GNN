@@ -76,9 +76,7 @@ def save_predictions(config, model, loader, device, dataset, split=None):
             batch_size = batch["protein"].batch_size
             protein_ids = batch["protein"].protein_ids[:batch_size]
             if dataset.uses_entryid:
-                protein_ids = [
-                    dataset.rev_pid_mapping[idx.item()] for idx in protein_ids
-                ]
+                protein_ids = [dataset.rev_pid_mapping[idx] for idx in protein_ids]
             scores = torch.sigmoid(out[:batch_size]).cpu().numpy()
             for i, pid in enumerate(protein_ids):
                 for j, score in enumerate(scores[i]):

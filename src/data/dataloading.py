@@ -100,7 +100,6 @@ class SwissProtDataset:
                 self.train_annots[pid]["term"] = self.train_annots[pid]["term"].split(
                     "; "
                 )
-            print("train head:", train_df.head())
 
         # Load val and test
         dataset_name = config["data"]["dataset"]
@@ -108,7 +107,6 @@ class SwissProtDataset:
             split_path = f"./data/{dataset_name}/{dataset_name}_{subontology}_{split_name}_annotations.tsv"
             if Path(split_path).exists():
                 split_df = pd.read_csv(split_path, sep="\t")
-                print("Head after mapping:", split_df.head())
                 splits[split_name] = set(split_df["EntryID"].tolist())
 
         swissprot_proteins = set(self.proteins)
@@ -143,11 +141,14 @@ class SwissProtDataset:
         self.test_mask = torch.zeros(num_proteins, dtype=torch.bool)
 
         for pid in self.train_proteins:
-            self.train_mask[self.protein_to_idx[pid]] = True
+            if pid in self.proteins:
+                self.train_mask[self.protein_to_idx[pid]] = True
         for pid in self.val_proteins:
-            self.val_mask[self.protein_to_idx[pid]] = True
+            if pid in self.proteins:
+                self.val_mask[self.protein_to_idx[pid]] = True
         for pid in self.test_proteins:
-            self.test_mask[self.protein_to_idx[pid]] = True
+            if pid in self.proteins:
+                self.test_mask[self.protein_to_idx[pid]] = True
 
         logger.info(
             f"Loaded splits - Train: {len(self.train_proteins)}, Val: {len(self.val_proteins)}, Test: {len(self.test_proteins)}"
@@ -289,14 +290,9 @@ class SwissProtDataset:
                 # Load features
                 interpro_feat = protein_graph["protein"].interpro.squeeze(0)
                 aa_feat = protein_graph["aa"].x
-
-                # check if protein in train annots
-                if protein_id in self.train_proteins:
-                    go_feat = self.convert_go_terms_to_onehot(
-                        protein_graph["protein"][f"go_terms_{self.subontology}"]
-                    )
-                else:
-                    go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
+                go_feat = self.convert_go_terms_to_onehot(
+                    protein_graph["protein"][f"go_terms_{self.subontology}"]
+                )
 
             all_interpro_features.append(interpro_feat)
             all_go_features.append(go_feat)
