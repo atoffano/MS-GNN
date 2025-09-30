@@ -38,7 +38,7 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
         ):
             batch = batch.to(device)
             optimizer.zero_grad()
-            out = model(batch)
+            out = model(batch.x_dict, batch.edge_index_dict, batch)
 
             loss = criterion(
                 out,
@@ -100,7 +100,7 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
         for _ in range(num_batches):
             val_batch = next(iter(val_loader))
             val_batch = val_batch.to(device)
-            val_out = model(val_batch)
+            val_out = model(val_batch.x_dict, val_batch.edge_index_dict, val_batch)
             val_loss = criterion(
                 val_out,
                 val_batch["protein"].y,

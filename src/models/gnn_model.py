@@ -60,8 +60,7 @@ class ProteinGNN(torch.nn.Module):
 
         self.lin_out = Linear(hidden_channels, out_channels)
 
-    def forward(self, batch):
-        x_dict, edge_index_dict = batch.x_dict, batch.edge_index_dict
+    def forward(self, x_dict, edge_index_dict, batch):
         edge_attrs_dict = batch.edge_attr_dict if self.edge_attrs else None
         x_dict = self.lin_in(x_dict)
         x_dict = {k: self.prelu1[k](v) for k, v in x_dict.items()}
