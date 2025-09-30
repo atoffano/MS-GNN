@@ -92,7 +92,7 @@ class SwissProtDataset:
             splits["train"] = set(train_df["EntryID"].tolist())
             if config["data"]["train_on_swissprot"] and self.uses_entryid:
                 splits["train"] = set(
-                    train_df["EntryID"].map(self.pid_mapping).tolist()
+                    [self.rev_pid_mapping.get(pid, pid) for pid in splits["train"]]
                 )
             # Store train annotations for on-the-fly GO term loading
             self.train_annots = train_df.set_index("EntryID").to_dict(orient="index")
@@ -100,6 +100,7 @@ class SwissProtDataset:
                 self.train_annots[pid]["term"] = self.train_annots[pid]["term"].split(
                     "; "
                 )
+        logger.info(f"Using {len(splits['train'])} train proteins from {train_path}")
 
         # Load val and test
         dataset_name = config["data"]["dataset"]
@@ -321,12 +322,12 @@ class SwissProtDataset:
             mask = mask_val | mask_test
             batch["protein"].go[mask] = 0.0
 
-        # batch["protein"].x = torch.stack(all_interpro_features)
+        batch["protein"].x = torch.stack(all_interpro_features)
 
         # Set protein node features as concatenation of InterPro and GO one hots.
-        batch["protein"].x = torch.cat(
-            [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
-        )
+        # batch["protein"].x = torch.cat(
+        #     [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
+        # )
 
         # Add amino acid nodes and features
         batch["aa"].x = torch.cat(all_aa_features, dim=0)

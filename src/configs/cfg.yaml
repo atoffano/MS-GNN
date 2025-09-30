@@ -27,7 +27,7 @@ data:
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
 
 run:
-  qualifier: default  # Additional string to append to run_id for uniqueness
+  qualifier: NOGO  # Additional string to append to run_id for uniqueness
   save_predictions:
     val: true
     test: true

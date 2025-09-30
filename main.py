@@ -1,3 +1,4 @@
+import argparse
 import tqdm
 import torch
 import yaml
@@ -6,6 +7,7 @@ import wandb
 import os
 import datetime
 from torch_geometric.explain import Explainer, CaptumExplainer, AttentionExplainer
+
 from src.utils.visualize import visualize_graph_via_networkx, plot_aa_edge_histogram
 from src.data.dataloading import SwissProtDataset, define_loaders
 from src.models.gnn_model import ProteinGNN
@@ -119,7 +121,10 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
 
 
 def main():
-    config_path = "src/configs/cfg.yaml"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default="src/configs/toy_cfg.yaml")
+    args = parser.parse_args()
+    config_path = args.config
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
