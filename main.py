@@ -6,9 +6,7 @@ import logging
 import wandb
 import os
 import datetime
-from torch_geometric.explain import Explainer, CaptumExplainer, AttentionExplainer
 
-from src.utils.visualize import visualize_graph_via_networkx, plot_aa_edge_histogram
 from src.data.dataloading import SwissProtDataset, define_loaders
 from src.models.gnn_model import ProteinGNN
 from src.utils.evaluation import save_predictions, evaluate, compute_metrics, plot_aupr

@@ -27,12 +27,12 @@ data:
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
 
 run:
-  qualifier: NOGO  # Additional string to append to run_id for uniqueness
+  qualifier: 2layerGNN  # Additional string to append to run_id for uniqueness
   save_predictions:
     val: true
     test: true
   test_only: false  # Whether to run evaluation only on the test set (no validation)
-  save_model: false
+  save_model: true
   project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
 
 checkpoint:

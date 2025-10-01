@@ -7,10 +7,8 @@ import matplotlib.pyplot as plt
 import os
 from torch_geometric.explain import Explainer, CaptumExplainer
 from torch_geometric.loader import NeighborLoader
-from src.data.dataloading import make_batch_transform
-from src.data.dataloading import SwissProtDataset, define_loaders
+from src.data.dataloading import SwissProtDataset, make_batch_transform
 from src.models.gnn_model import ProteinGNN
-from src.utils.visualize import visualize_graph_via_networkx, plot_aa_edge_histogram
 from src.utils.helpers import timeit
 
 logging.basicConfig(
@@ -165,7 +163,7 @@ def plot_systemic_explanation(path, hetero_explanation, dataset, batch):
     pos = nx.spring_layout(G, seed=42)
     nodes = nx.draw_networkx_nodes(G, pos, node_color=node_colors, cmap=plt.cm.viridis)
     edges = nx.draw_networkx_edges(
-        G, pos, edge_color=edge_colors, edge_cmap=plt.cm.plasma
+        G, pos, edge_color=edge_colors, edge_cmap=plt.cm.viridis
     )
     nx.draw_networkx_labels(G, pos, labels=labels, font_size=9)
 
