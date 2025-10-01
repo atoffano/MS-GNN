@@ -322,12 +322,12 @@ class SwissProtDataset:
             mask = mask_val | mask_test
             batch["protein"].go[mask] = 0.0
 
-        batch["protein"].x = torch.stack(all_interpro_features)
+        # batch["protein"].x = torch.stack(all_interpro_features)
 
         # Set protein node features as concatenation of InterPro and GO one hots.
-        # batch["protein"].x = torch.cat(
-        #     [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
-        # )
+        batch["protein"].x = torch.cat(
+            [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
+        )
 
         # Add amino acid nodes and features
         batch["aa"].x = torch.cat(all_aa_features, dim=0)
