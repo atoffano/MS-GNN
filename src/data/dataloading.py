@@ -1,6 +1,7 @@
 import torch
 from torch_geometric.data import HeteroData
 from torch_geometric.loader import NeighborLoader
+import torch_geometric.transforms as T
 import pandas as pd
 import pickle
 from pathlib import Path
@@ -67,6 +68,8 @@ class SwissProtDataset:
 
         # Create the protein-protein heterograph
         self.data = self._create_protein_graph(config)
+        # transform = T.Compose([T.ToUndirected(), T.AddRemainingSelfLoops()])
+        # self.data = transform(self.data)
 
         logger.info(
             f"Created protein graph with {self.data['protein'].num_nodes} proteins"
@@ -141,15 +144,17 @@ class SwissProtDataset:
         self.val_mask = torch.zeros(num_proteins, dtype=torch.bool)
         self.test_mask = torch.zeros(num_proteins, dtype=torch.bool)
 
-        for pid in self.train_proteins:
-            if pid in self.proteins:
-                self.train_mask[self.protein_to_idx[pid]] = True
-        for pid in self.val_proteins:
-            if pid in self.proteins:
-                self.val_mask[self.protein_to_idx[pid]] = True
-        for pid in self.test_proteins:
-            if pid in self.proteins:
-                self.test_mask[self.protein_to_idx[pid]] = True
+        def fill_mask(ids):
+            valid = [
+                self.protein_to_idx[pid] for pid in ids if pid in self.protein_to_idx
+            ]
+            if valid:
+                return torch.tensor(valid, dtype=torch.long)
+            return torch.empty(0, dtype=torch.long)
+
+        self.train_mask[fill_mask(self.train_proteins)] = True
+        self.val_mask[fill_mask(self.val_proteins)] = True
+        self.test_mask[fill_mask(self.test_proteins)] = True
 
         logger.info(
             f"Loaded splits - Train: {len(self.train_proteins)}, Val: {len(self.val_proteins)}, Test: {len(self.test_proteins)}"

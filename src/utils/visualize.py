@@ -1,186 +1,237 @@
-from typing import Any, Dict, List, Optional
 import torch
-import matplotlib.pyplot as plt
-import numpy as np
 import networkx as nx
+import matplotlib.pyplot as plt
+import os
+from src.utils.helpers import timeit
 
 
-def visualize_graph_via_networkx(
-    hetero_explanation,
-    path: Optional[str] = None,
-    cutoff_edge: float = 0.0,
-    cutoff_node: float = 0.0,
-    node_labels: Optional[Dict[str, List[str]]] = None,
-    edge_types_to_plot: Optional[List[tuple]] = None,
-) -> Any:
+@timeit
+def plot_systemic_explanation(path, hetero_explanation, dataset):
     """
-    Visualize the graph explanation using NetworkX.
-
-    Args:
-        hetero_explanation: The explanation object.
-        path: Path to save the plot. If None, show the plot.
-        cutoff_edge: Minimum edge mask value to include.
-        cutoff_node: Minimum node importance to include.
-        node_labels: Dictionary of node labels.
-        edge_types_to_plot: List of edge types to plot, e.g., [("protein", "aa2protein", "protein")]. If None, plot all edge types.
+    Plot explanations from a heterogeneous explainer using the SwissProtDataset
+    for protein name resolution and protein ID mapping.
+    Produces a plot per batch protein, normalized per subgraph, labeling nodes with their full names.
+    Simplified: assume all nodes in the returned batch are involved.
     """
-    plots = {}
-    edge_types = (
-        edge_types_to_plot if edge_types_to_plot else hetero_explanation.edge_types
+    batch_proteins = hetero_explanation.batch["protein"].detach().cpu()
+    edge_mask = (
+        hetero_explanation[("protein", "aligned_with", "protein")]["edge_mask"]
+        .detach()
+        .cpu()
     )
-    for edge_type in edge_types:
-        if edge_type not in hetero_explanation.edge_types:
-            continue  # Skip if edge_type not in explanation
-        src_type, _, dst_type = edge_type
-        edge_index = hetero_explanation[edge_type].edge_index
-        edge_mask = hetero_explanation[edge_type].edge_mask
+    edge_index = (
+        hetero_explanation[("protein", "aligned_with", "protein")]["edge_index"]
+        .detach()
+        .cpu()
+    )
 
-        # Filter edges based on cutoff
-        mask = edge_mask >= cutoff_edge
-        edge_index = edge_index[:, mask]
-        edge_mask = edge_mask[mask]
+    # edge_mask_z = zscore(edge_mask)
+    edge_mask_z = edge_mask
 
-        # Get node masks and compute importance (sum over features)
-        src_node_mask = hetero_explanation[src_type].node_mask
-        dst_node_mask = hetero_explanation[dst_type].node_mask
-        src_node_importance = src_node_mask.sum(dim=1)
-        dst_node_importance = dst_node_mask.sum(dim=1)
+    src_local, dst_local = edge_index[0], edge_index[1]
 
-        # Filter nodes based on cutoff
-        src_nodes = edge_index[0].unique()
-        dst_nodes = edge_index[1].unique()
-        src_keep = src_nodes[src_node_importance[src_nodes] >= cutoff_node]
-        dst_keep = dst_nodes[dst_node_importance[dst_nodes] >= cutoff_node]
-
-        # Further filter edges to only include kept nodes
-        src_mask = torch.isin(edge_index[0], src_keep)
-        dst_mask = torch.isin(edge_index[1], dst_keep)
-        keep_mask = src_mask & dst_mask
-        edge_index = edge_index[:, keep_mask]
-        edge_mask = edge_mask[keep_mask]
-
-        # Get all nodes after filtering
-        all_nodes = torch.cat([edge_index[0], edge_index[1]]).unique()
-
-        g = nx.DiGraph()
-        node_size = 800
-
-        # Create node to label mapping and add nodes
-        node_to_label = {}
-        for node in all_nodes.tolist():
-            if node in edge_index[0]:
-                nt = src_type
-            else:
-                nt = dst_type
-            labels = node_labels.get(nt, None) if node_labels else None
-            label = str(node) if labels is None else labels[node]
-            node_to_label[node] = label
-            importance = hetero_explanation[nt].node_mask[node].sum().item()
-            g.add_node(label, importance=importance)
-
-        # Add edges
-        for i, (src, dst) in enumerate(edge_index.t().tolist()):
-            w = edge_mask[i].item()
-            g.add_edge(node_to_label[src], node_to_label[dst], weight=w)
-
-        # Plot
-        fig, ax = plt.subplots()
-        pos = nx.spring_layout(g)
-
-        # Node colors based on importance
-        node_colors = [g.nodes[n]["importance"] for n in g.nodes]
-        if node_colors:
-            min_imp = min(node_colors)
-            max_imp = max(node_colors)
-            if max_imp > min_imp:
-                node_colors = [(c - min_imp) / (max_imp - min_imp) for c in node_colors]
-            else:
-                node_colors = [0.5] * len(node_colors)
-
-        # Edge colors and widths based on weight
-        edge_colors = [g.edges[e]["weight"] for e in g.edges]
-        edge_widths = [w * 10 for w in edge_colors]  # Scale width
-        if edge_colors:
-            min_w = min(edge_colors)
-            max_w = max(edge_colors)
-            if max_w > min_w:
-                edge_colors = [(c - min_w) / (max_w - min_w) for c in edge_colors]
-            else:
-                edge_colors = [0.5] * len(edge_colors)
-
-        # Draw
-        nx.draw_networkx_nodes(
-            g,
-            pos,
-            node_size=node_size,
-            node_color=node_colors,
-            cmap=plt.cm.viridis,
-            ax=ax,
+    G = nx.Graph()
+    for local_idx, global_idx in enumerate(batch_proteins["n_id"].tolist()):
+        G.add_node(
+            local_idx,
+            global_id=global_idx,
+            label=dataset.idx_to_protein.get(global_idx, str(global_idx)),
         )
-        nx.draw_networkx_edges(
-            g, pos, edge_color=edge_colors, width=edge_widths, arrowstyle="->", ax=ax
+    for local_idx in range(edge_index.size(1)):
+        G.add_edge(
+            src_local[local_idx].item(),
+            dst_local[local_idx].item(),
+            color=float(edge_mask_z[local_idx].item()),
         )
-        nx.draw_networkx_labels(g, pos, font_size=10, ax=ax)
 
-        if path is not None:
-            suffix = "_".join(edge_type)
-            plt.savefig(f"{path}_{suffix}.png")
-        else:
-            plt.show()
-        plt.close()
-        plots[edge_type] = fig
+    edge_colors = [data for (_, _, data) in G.edges(data="color")]
+    labels = {n: G.nodes[n]["label"] for n in G.nodes()}
 
-    return plots
+    pos = nx.spring_layout(G, seed=42)
+    nodes = nx.draw_networkx_nodes(G, pos, cmap=plt.cm.viridis)
+    edges = nx.draw_networkx_edges(
+        G, pos, edge_color=edge_colors, edge_cmap=plt.cm.viridis
+    )
+    nx.draw_networkx_labels(G, pos, labels=labels, font_size=9)
 
-
-def plot_aa_edge_histogram(
-    hetero_explanation,
-    edge_type: tuple = ("aa", "aa2protein", "protein"),
-    path: Optional[str] = None,
-    aa_labels: Optional[List[str]] = None,
-) -> Any:
-    """
-    Scatter plot for all 'aa' nodes where:
-      - x axis: aa node (label if provided, otherwise index)
-      - y axis: summed node-feature importance for that aa node
-
-    Returns dict with figure, values (per-aa summed importance) and indices.
-    """
-
-    # Resolve node mask for 'aa' and compute summed importance per node
-    aa_node_mask = hetero_explanation["aa"].node_mask  # shape [num_aa, num_features]
-    aa_importance = aa_node_mask.sum(dim=1).detach().cpu().numpy()  # shape [num_aa]
-
-    num_aa = aa_importance.shape[0]
-    indices = np.arange(num_aa)
-
-    # Labels for x axis
-    if aa_labels is not None:
-        labels = [str(l) for l in aa_labels]
-        # If label list shorter/longer than nodes, fallback to indices for missing ones
-        if len(labels) < num_aa:
-            labels = labels + [str(i) for i in range(len(labels), num_aa)]
-    else:
-        labels = [str(i) for i in range(num_aa)]
-
-    # Create scatter plot
-    figsize = (max(6, int(num_aa * 0.15)), 4)  # scale width with number of nodes
-    fig, ax = plt.subplots(figsize=figsize)
-    ax.scatter(indices, aa_importance, color="C0", s=20)
-    ax.set_xlabel("aa node")
-    ax.set_ylabel("Summed node feature importance")
-    ax.set_title(f"Per-aa summed importance (edge_type={edge_type})")
-
-    # X ticks: show all if few nodes, otherwise rotate and reduce fontsize
-    ax.set_xticks(indices)
-    ax.set_xticklabels(labels, rotation=90, fontsize=6 if num_aa > 30 else 8)
-
-    plt.tight_layout()
-
-    if path is not None:
-        plt.savefig(path)
-    else:
-        plt.show()
+    protein = dataset.idx_to_protein[batch_proteins["n_id"][0].item()]
+    plt.title(f"Protein-Protein Explanation: {protein}")
+    plt.colorbar(nodes, label="Node color (edge z-score mean)")
+    plt.colorbar(edges, label="Edge z-score")
+    filename = f"{path}/explanations/{protein}_system_explanation.png"
+    os.makedirs(f"{path}/explanations", exist_ok=True)
+    plt.savefig(filename)
+    plt.show()
     plt.close()
 
-    return {"fig": fig, "values": aa_importance, "indices": indices.tolist()}
+
+@timeit
+def plot_protein_explanation(path, hetero_explanation, dataset):
+    """
+    Generate one amino-acid-to-protein explanation plot per protein node in the batch
+    as a scatter plot ordered by residue, coloring points by edge-mask z-score.
+    """
+    edge_mask = (
+        hetero_explanation[("aa", "belongs_to", "protein")]["edge_mask"].detach().cpu()
+    )
+    edge_index = (
+        hetero_explanation[("aa", "belongs_to", "protein")]["edge_index"].detach().cpu()
+    )
+
+    edge_mask_z = edge_mask
+
+    # edge_mask_z = zscore(edge_mask)
+    # edge_mask_z = torch.log1p(edge_mask_z)
+
+    src_local, dst_local = edge_index[0], edge_index[1]
+
+    protein_batch = hetero_explanation.batch["protein"].detach().cpu()
+    protein_global_ids = protein_batch["n_id"].tolist()
+    root_global = int(protein_global_ids[0])
+    root_label = dataset.idx_to_protein.get(root_global, str(root_global))
+
+    explanations_dir = os.path.join(path, "explanations")
+    os.makedirs(explanations_dir, exist_ok=True)
+
+    for dst_val in torch.unique(dst_local, sorted=True).tolist():
+        mask = dst_local == dst_val
+        if torch.count_nonzero(mask) == 0:
+            continue
+
+        aa_indices = src_local[mask]
+        edge_importance_z = edge_mask_z[mask].view(-1)
+
+        target_idx = int(dst_val)
+        target_global = int(protein_global_ids[target_idx])
+        target_label = dataset.idx_to_protein.get(target_global, str(target_global))
+
+        sort_idx = torch.argsort(aa_indices)
+        aa_sorted = aa_indices[sort_idx]
+        edge_z_sorted = edge_importance_z[sort_idx]
+
+        x_positions = torch.arange(len(aa_sorted), dtype=torch.float32)
+
+        plt.figure(figsize=(8, 4))
+        scatter = plt.scatter(
+            x_positions.numpy(),
+            edge_z_sorted.numpy(),
+            c=edge_z_sorted.numpy(),
+            cmap=plt.cm.viridis,
+        )
+        plt.colorbar(scatter, label="Edge z-score")
+        plt.xlabel("Residue")
+        plt.ylabel("Edge Importance")
+        plt.title(f"AA-Protein Explanation: {target_label}")
+        plt.tight_layout()
+
+        filename = os.path.join(
+            explanations_dir,
+            f"{root_label}_{target_label}_aa_explanation.png",
+        )
+        plt.savefig(filename)
+        plt.show()
+        plt.close()
+
+
+def _mean_attention(attention_weights: torch.Tensor) -> torch.Tensor:
+    """Averages attention weights over all heads if multiple heads are present."""
+    if attention_weights.dim() > 1:
+        return attention_weights.mean(dim=-1)
+    return attention_weights.view(-1)
+
+
+def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
+    key = ("protein", "aligned_with", "protein")
+    if layer_attention is None or key not in layer_attention:
+        return
+    edge_index, attn_weights = layer_attention[key]
+    edge_index = edge_index.detach().cpu()
+    attn_values = _mean_attention(attn_weights.detach().cpu())
+
+    protein_ids = batch["protein"].n_id.detach().cpu().tolist()
+    G = nx.Graph()
+    for local_idx, global_idx in enumerate(protein_ids):
+        G.add_node(
+            local_idx,
+            global_id=global_idx,
+            label=dataset.idx_to_protein.get(global_idx, str(global_idx)),
+        )
+
+    src_local, dst_local = edge_index[0], edge_index[1]
+    for idx in range(edge_index.size(1)):
+        G.add_edge(
+            src_local[idx].item(),
+            dst_local[idx].item(),
+            color=float(attn_values[idx].item()),
+        )
+
+    edge_colors = [data for (_, _, data) in G.edges(data="color")]
+    labels = {n: G.nodes[n]["label"] for n in G.nodes()}
+
+    pos = nx.spring_layout(G, seed=42)
+    nx.draw_networkx_nodes(G, pos, cmap=plt.cm.viridis)
+    edges = nx.draw_networkx_edges(
+        G, pos, edge_color=edge_colors, edge_cmap=plt.cm.viridis
+    )
+    nx.draw_networkx_labels(G, pos, labels=labels, font_size=9)
+
+    root_label = dataset.idx_to_protein.get(protein_ids[0], str(protein_ids[0]))
+    plt.title(f"Protein-Protein Attention (Layer {layer_idx}): {root_label}")
+    plt.colorbar(edges, label="Attention weight")
+    filename = f"{path}/explanations/{root_label}_system_attention_layer{layer_idx}.png"
+    os.makedirs(f"{path}/explanations", exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.show()
+    plt.close()
+
+
+def plot_protein_attention(path, layer_attention, dataset, batch, layer_idx):
+    key = ("aa", "belongs_to", "protein")
+    if layer_attention is None or key not in layer_attention:
+        return
+    edge_index, attn_weights = layer_attention[key]
+    edge_index = edge_index.detach().cpu()
+    attn_values = _mean_attention(attn_weights.detach().cpu())
+
+    src_local, dst_local = edge_index[0], edge_index[1]
+    protein_ids = batch["protein"].n_id.detach().cpu().tolist()
+    root_label = dataset.idx_to_protein.get(protein_ids[0], str(protein_ids[0]))
+
+    explanations_dir = os.path.join(path, "explanations")
+    os.makedirs(explanations_dir, exist_ok=True)
+
+    for dst_val in torch.unique(dst_local, sorted=True).tolist():
+        mask = dst_local == dst_val
+        if torch.count_nonzero(mask) == 0:
+            continue
+
+        aa_indices = src_local[mask]
+        attention_sorted = attn_values[mask][torch.argsort(aa_indices)]
+
+        target_idx = int(dst_val)
+        target_global = int(protein_ids[target_idx])
+        target_label = dataset.idx_to_protein.get(target_global, str(target_global))
+
+        x_positions = torch.arange(len(aa_indices), dtype=torch.float32)
+
+        plt.figure(figsize=(8, 4))
+        scatter = plt.scatter(
+            x_positions.numpy(),
+            attention_sorted.numpy(),
+            c=attention_sorted.numpy(),
+            cmap=plt.cm.viridis,
+        )
+        plt.colorbar(scatter, label="Attention weight")
+        plt.xlabel("Residue")
+        plt.ylabel("Attention")
+        plt.title(f"AA-Protein Attention (Layer {layer_idx}): {target_label}")
+        plt.tight_layout()
+
+        filename = os.path.join(
+            explanations_dir,
+            f"{root_label}_{target_label}_aa_attention_layer{layer_idx}.png",
+        )
+        plt.savefig(filename)
+        plt.show()
+        plt.close()

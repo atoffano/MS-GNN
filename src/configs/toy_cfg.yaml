@@ -4,7 +4,7 @@ model:
   edge_attrs: false
 
 trainer:
-  epochs: 10
+  epochs: 2
   device: cuda
   compile: false  # Whether to use torch.compile
   num_workers: 0

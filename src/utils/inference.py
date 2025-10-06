@@ -2,19 +2,37 @@ import torch
 import yaml
 import logging
 import argparse
-import networkx as nx
-import matplotlib.pyplot as plt
-import os
-from torch_geometric.explain import Explainer, CaptumExplainer
+from torch_geometric.explain import (
+    Explainer,
+    CaptumExplainer,
+)
 from torch_geometric.loader import NeighborLoader
 from src.data.dataloading import SwissProtDataset, make_batch_transform
 from src.models.gnn_model import ProteinGNN
+from src.utils.visualize import (
+    plot_systemic_explanation,
+    plot_protein_explanation,
+    plot_systemic_attention,
+    plot_protein_attention,
+)
 from src.utils.helpers import timeit
+import pickle
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+def zscore(tensor: torch.Tensor) -> torch.Tensor:
+    tensor = tensor.float()
+    if tensor.numel() == 0:
+        return tensor
+    mean = tensor.mean()
+    std = tensor.std(unbiased=False)
+    if std.item() < 1e-12:
+        return torch.zeros_like(tensor)
+    return (tensor - mean) / std
 
 
 def load_model_and_config(model_path, device):
@@ -23,16 +41,16 @@ def load_model_and_config(model_path, device):
     with open(f"{model_path}/cfg.yaml", "r") as f:
         config = yaml.safe_load(f)
 
-    # Create dataset to get vocab sizes
+    logger.info(f"Loading dataset..")
     dataset = SwissProtDataset(config)
-
-    # Initialize model
+    logger.info(f"Loaded dataset.\n Loading model..")
     model = ProteinGNN(config, dataset)
-
-    # Load pretrained weights
     state_dict = torch.load(
         f"{model_path}/model.pth", map_location=device, weights_only=True
     )
+    for key in list(state_dict.keys()):
+        if key.startswith("_orig_mod."):
+            state_dict[key.replace("_orig_mod.", "")] = state_dict.pop(key)
     model.load_state_dict(state_dict)
     model = model.to(device)
     model.eval()
@@ -99,172 +117,6 @@ def generate_explanations(model, batch, device):
     return hetero_explanation
 
 
-@timeit
-def plot_systemic_explanation(path, hetero_explanation, dataset, batch):
-    """
-    Plot explanations from a heterogeneous explainer using the SwissProtDataset
-    for protein name resolution and protein ID mapping.
-    Produces a plot per batch protein, normalized per subgraph, labeling nodes with their full names.
-    Simplified: assume all nodes in the returned batch are involved.
-    """
-    batch_proteins = hetero_explanation.batch["protein"].detach().cpu()
-    edge_mask = (
-        hetero_explanation[("protein", "aligned_with", "protein")]["edge_mask"]
-        .detach()
-        .cpu()
-    )
-    edge_index = (
-        hetero_explanation[("protein", "aligned_with", "protein")]["edge_index"]
-        .detach()
-        .cpu()
-    )
-    node_mask = hetero_explanation["protein"]["node_mask"].detach().cpu()
-
-    # Flatten node_mask if multidimensional (keep one score per protein node)
-    if node_mask.dim() > 1:
-        node_mask_flat = node_mask.sum(dim=1)
-    else:
-        node_mask_flat = node_mask
-
-    # Local indices inside the batch for edges (these index into node_mask_flat)
-    src_local, dst_local = edge_index[0], edge_index[1]
-
-    # Normalize node mask across all batch nodes
-    n_min, n_max = node_mask_flat.min(), node_mask_flat.max()
-    node_mask_norm = (node_mask_flat - n_min) / (n_max - n_min + 1e-8)
-
-    # Normalize edge mask across edges
-    e_min, e_max = edge_mask.min(), edge_mask.max()
-    edge_mask_norm = (edge_mask - e_min) / (e_max - e_min + 1e-8)
-
-    # Construct NetworkX graph using local node ids (0..N-1) and local edge indices
-    G = nx.Graph()
-    for local_idx, global_idx in enumerate(batch_proteins["n_id"].tolist()):
-        G.add_node(
-            local_idx,
-            global_id=global_idx,
-            label=dataset.idx_to_protein.get(global_idx, str(global_idx)),
-            color=float(node_mask_norm[local_idx].item()),
-        )
-
-    # Add edges using local indices and corresponding normalized edge importance
-    for k in range(edge_index.shape[1]):
-        s = int(src_local[k].item())
-        d = int(dst_local[k].item())
-        G.add_edge(s, d, color=float(edge_mask_norm[k].item()))
-
-    # Prepare colors and labels using the local node ids
-    node_colors = [G.nodes[n]["color"] for n in G.nodes()]
-    edge_colors = [data for (_, _, data) in G.edges(data="color")]
-
-    # Use textual labels (mapped from local->global->name) for plotting
-    labels = {n: G.nodes[n]["label"] for n in G.nodes()}
-
-    pos = nx.spring_layout(G, seed=42)
-    nodes = nx.draw_networkx_nodes(G, pos, node_color=node_colors, cmap=plt.cm.viridis)
-    edges = nx.draw_networkx_edges(
-        G, pos, edge_color=edge_colors, edge_cmap=plt.cm.viridis
-    )
-    nx.draw_networkx_labels(G, pos, labels=labels, font_size=9)
-
-    protein = dataset.idx_to_protein[batch_proteins["n_id"][0].item()]
-    plt.title(f"Protein-Protein Explanation: {protein}")
-    plt.colorbar(nodes, label="Node mask")
-    plt.colorbar(edges, label="Edge mask")
-    filename = f"{path}/explanations/{protein}_system_explanation.png"
-    os.makedirs(f"{path}/explanations", exist_ok=True)
-    plt.savefig(filename)
-    plt.show()
-    plt.close()
-
-
-@timeit
-def plot_protein_explanation(path, hetero_explanation, dataset, batch):
-    """
-    Generate one amino-acid-to-protein explanation plot per protein node in the batch,
-    normalizing node and edge importances per subgraph and naming outputs with dataset labels.
-    """
-    edge_mask = (
-        hetero_explanation[("aa", "belongs_to", "protein")]["edge_mask"].detach().cpu()
-    )
-    edge_index = (
-        hetero_explanation[("aa", "belongs_to", "protein")]["edge_index"].detach().cpu()
-    )
-    node_mask = hetero_explanation["aa"]["node_mask"].detach().cpu()
-
-    if node_mask.dim() > 1:
-        node_mask_flat = node_mask.sum(dim=1)
-    else:
-        node_mask_flat = node_mask
-
-    src_local, dst_local = edge_index[0], edge_index[1]
-    unique_targets = torch.unique(dst_local, sorted=True)
-
-    protein_batch = hetero_explanation.batch["protein"].detach().cpu()
-    protein_global_ids = protein_batch["n_id"].tolist()
-    root_global = int(protein_global_ids[0])
-    root_label = dataset.idx_to_protein.get(root_global, str(root_global))
-
-    for dst_val in unique_targets.tolist():
-        mask = dst_local == dst_val
-        if torch.count_nonzero(mask) == 0:
-            continue
-
-        aa_indices = src_local[mask]
-        edge_importance = edge_mask[mask]
-        aa_importance = node_mask_flat[aa_indices]
-
-        node_min = aa_importance.min()
-        node_max = aa_importance.max()
-        node_norm = (aa_importance - node_min) / (node_max - node_min + 1e-8)
-
-        edge_min = edge_importance.min()
-        edge_max = edge_importance.max()
-        edge_norm = (edge_importance - edge_min) / (edge_max - edge_min + 1e-8)
-
-        target_idx = int(dst_val)
-        if target_idx >= len(protein_global_ids):
-            continue
-        target_global = int(protein_global_ids[target_idx])
-        target_label = dataset.idx_to_protein.get(target_global, str(target_global))
-
-        G = nx.Graph()
-        protein_node_id = ("protein", target_idx)
-        protein_color = float(node_norm.max().item()) if node_norm.numel() > 0 else 0.0
-        G.add_node(protein_node_id, label=target_label, color=protein_color)
-
-        for aa_local, n_score, e_score in zip(
-            aa_indices.tolist(), node_norm.tolist(), edge_norm.tolist()
-        ):
-            aa_node_id = ("aa", aa_local)
-            G.add_node(aa_node_id, label=f"AA_{aa_local}", color=float(n_score))
-            G.add_edge(aa_node_id, protein_node_id, color=float(e_score))
-
-        node_colors = [attrs["color"] for _, attrs in G.nodes(data=True)]
-        edge_colors = [color for _, _, color in G.edges(data="color")]
-        labels = {node: attrs["label"] for node, attrs in G.nodes(data=True)}
-
-        plt.figure(figsize=(8, 6))
-        pos = nx.spring_layout(G, seed=42)
-        nodes = nx.draw_networkx_nodes(
-            G, pos, node_color=node_colors, cmap=plt.cm.viridis
-        )
-        edges = nx.draw_networkx_edges(
-            G, pos, edge_color=edge_colors, edge_cmap=plt.cm.plasma
-        )
-        nx.draw_networkx_labels(G, pos, labels=labels, font_size=9)
-
-        plt.title(f"AA-Protein Explanation: {target_label}")
-        plt.colorbar(nodes, label="AA node mask")
-        plt.colorbar(edges, label="Edge mask")
-        plt.tight_layout()
-        filename = f"{path}/explanations/{root_label}_{target_label}_aa_explanation.png"
-        os.makedirs(f"{path}/explanations", exist_ok=True)
-        plt.savefig(filename)
-        plt.show()
-        plt.close()
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Generate explanations for pretrained protein function prediction model"
@@ -284,21 +136,54 @@ def main():
 
     args = parser.parse_args()
 
-    # Setup device
+    # load /home/atoffano/PFP_layer/results/D1/20251002_001234_D1_2layerGNN/explanations/hetero_explanation.pkl and /home/atoffano/PFP_layer/results/D1/20251002_001234_D1_2layerGNN/explanations/dataset.pkl
+    # with open(f"{args.model_path}/explanations/hetero_explanation.pkl", "rb") as f:
+    #     hetero_explanation = pickle.load(f)
+    # with open(f"{args.model_path}/explanations/dataset.pkl", "rb") as f:
+    #     dataset = pickle.load(f)
+
+    # plot_systemic_explanation(args.model_path, hetero_explanation, dataset)
+    # plot_protein_explanation(args.model_path, hetero_explanation, dataset)
+
+    # # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
     # Load model and config
     config, model, dataset = load_model_and_config(args.model_path, device)
     loader = get_loader(dataset, args.proteins)
-    # Get batch for explanation
+
     for batch in loader:
-        # Generate explanations
+        batch = batch.to(device)
+        # Get attention scores
+        _, attn = model(
+            batch.x_dict,
+            batch.edge_index_dict,
+            batch=batch,
+            return_attention_weights=True,
+        )
+        for idx, layer_attention in enumerate(attn, start=1):
+            plot_systemic_attention(
+                args.model_path, layer_attention, dataset, batch, idx
+            )
+            plot_protein_attention(
+                args.model_path, layer_attention, dataset, batch, idx
+            )
+
+        logger.info(f"Generating explanations..")
         hetero_explanation = generate_explanations(model, batch, device)
+
+        # # Save hetero_explanation and dataset as pkl
+        # os.makedirs(f"{args.model_path}/explanations", exist_ok=True)
+        # with open(f"{args.model_path}/explanations/hetero_explanation.pkl", "wb") as f:
+        #     pickle.dump(hetero_explanation, f)
+        # with open(f"{args.model_path}/explanations/dataset.pkl", "wb") as f:
+        #     pickle.dump(dataset, f)
+
         # Plot protein-protein explanation
-        plot_systemic_explanation(args.model_path, hetero_explanation, dataset, batch)
-        plot_protein_explanation(args.model_path, hetero_explanation, dataset, batch)
-        # create_visualizations(hetero_explanation, batch, args.model_path)
+        logger.info(f"Plotting explanations..")
+        plot_systemic_explanation(args.model_path, hetero_explanation, dataset)
+        plot_protein_explanation(args.model_path, hetero_explanation, dataset)
 
     logger.info(
         f"Explanation generation completed! Results saved to: {args.model_path}"
