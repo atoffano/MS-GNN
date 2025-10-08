@@ -2,26 +2,139 @@ import torch
 import yaml
 import logging
 import argparse
+import numpy as np
+import os
+from typing import Dict, List, Sequence, Tuple
 from torch_geometric.explain import (
     Explainer,
     CaptumExplainer,
 )
 from torch_geometric.loader import NeighborLoader
-from src.data.dataloading import SwissProtDataset, make_batch_transform
+from src.data.dataloading import (
+    SwissProtDataset,
+    make_batch_transform,
+)
 from src.models.gnn_model import ProteinGNN
 from src.utils.visualize import (
     plot_systemic_explanation,
     plot_protein_explanation,
     plot_systemic_attention,
     plot_protein_attention,
+    ensure_structure,
+    render_structure_colormap,
+    analyze_attention_captum_correlation,
 )
 from src.utils.helpers import timeit
-import pickle
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+def _edge_scores_to_residues(
+    edge_index: torch.Tensor,
+    scores: torch.Tensor,
+    *,
+    target_nodes: int,
+) -> Dict[int, List[Tuple[int, float]]]:
+    """
+    Convert AA→protein edge scores into per-residue lists.
+    Returns {protein_local_idx: [(resi_1_based, score), ...]}.
+    """
+    residue_dict: Dict[int, List[Tuple[int, float]]] = {}
+    aa_idx = edge_index[0]
+    prot_idx = edge_index[1]
+    flat_scores = scores.view(-1)
+
+    for protein_local in range(target_nodes):
+        mask = prot_idx == protein_local
+        if mask.sum() == 0:
+            continue
+        aa_local = aa_idx[mask]
+        vals = flat_scores[mask]
+        order = torch.argsort(aa_local)
+        residue_list = [
+            (int(aa_local[o].item()) + 1, float(vals[o].item())) for o in order
+        ]
+        residue_dict[protein_local] = residue_list
+    return residue_dict
+
+
+def export_layer_attention_3d(
+    output_dir: str,
+    dataset,
+    batch,
+    layer_idx: int,
+    layer_attention,
+) -> None:
+    key = ("aa", "belongs_to", "protein")
+    if layer_attention is None or key not in layer_attention:
+        return
+
+    edge_index, attn_weights = layer_attention[key]
+    residue_scores = _edge_scores_to_residues(
+        edge_index.detach().cpu(),
+        attn_weights.detach().cpu(),
+        target_nodes=batch["protein"].batch_size,
+    )
+
+    protein_ids = batch["protein"].n_id.detach().cpu().tolist()
+    for local_idx, per_residue in residue_scores.items():
+        uniprot_id = dataset.idx_to_protein[protein_ids[local_idx]]
+        # sequence = dataset.load_protein_graph(uniprot_id)["protein"].sequence
+        res_score = [(resi, score) for resi, score in per_residue]
+
+        pdb_path = ensure_structure(uniprot_id, os.path.join(output_dir, "structures"))
+        image_path = os.path.join(
+            output_dir,
+            "structures",
+            f"{uniprot_id}_attention_layer{layer_idx}.png",
+        )
+        render_structure_colormap(
+            pdb_path,
+            res_score,
+            image_path,
+            colormap="rainbow",
+            title=f"{uniprot_id} – Attention L{layer_idx}",
+        )
+
+
+def export_captum_3d(
+    output_dir: str,
+    dataset,
+    batch,
+    hetero_explanation,
+) -> None:
+    logger.info("Exporting Captum explanations to 3D renderings...")
+    key = ("aa", "belongs_to", "protein")
+
+    edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
+    edge_scores = hetero_explanation[key]["edge_mask"].detach().cpu()
+    residue_scores = _edge_scores_to_residues(
+        edge_index,
+        edge_scores,
+        target_nodes=batch["protein"].batch_size,
+    )
+
+    protein_ids = batch["protein"].n_id.detach().cpu().tolist()
+    for local_idx, per_residue in residue_scores.items():
+        uniprot_id = dataset.idx_to_protein[protein_ids[local_idx]]
+        # sequence = dataset.load_protein_graph(uniprot_id)["protein"].sequence
+        res_score = [(resi, score) for resi, score in per_residue]
+        pdb_path = ensure_structure(uniprot_id, os.path.join(output_dir, "structures"))
+        image_path = os.path.join(
+            output_dir,
+            "structures",
+            f"{uniprot_id}_captum.png",
+        )
+        render_structure_colormap(
+            pdb_path,
+            res_score,
+            image_path,
+            colormap="rainbow",
+            title=f"{uniprot_id} – Captum",
+        )
 
 
 def zscore(tensor: torch.Tensor) -> torch.Tensor:
@@ -135,22 +248,11 @@ def main():
     )
 
     args = parser.parse_args()
-
-    # load /home/atoffano/PFP_layer/results/D1/20251002_001234_D1_2layerGNN/explanations/hetero_explanation.pkl and /home/atoffano/PFP_layer/results/D1/20251002_001234_D1_2layerGNN/explanations/dataset.pkl
-    # with open(f"{args.model_path}/explanations/hetero_explanation.pkl", "rb") as f:
-    #     hetero_explanation = pickle.load(f)
-    # with open(f"{args.model_path}/explanations/dataset.pkl", "rb") as f:
-    #     dataset = pickle.load(f)
-
-    # plot_systemic_explanation(args.model_path, hetero_explanation, dataset)
-    # plot_protein_explanation(args.model_path, hetero_explanation, dataset)
-
-    # # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
     # Load model and config
-    config, model, dataset = load_model_and_config(args.model_path, device)
+    _, model, dataset = load_model_and_config(args.model_path, device)
     loader = get_loader(dataset, args.proteins)
 
     for batch in loader:
@@ -172,18 +274,26 @@ def main():
 
         logger.info(f"Generating explanations..")
         hetero_explanation = generate_explanations(model, batch, device)
-
-        # # Save hetero_explanation and dataset as pkl
-        # os.makedirs(f"{args.model_path}/explanations", exist_ok=True)
-        # with open(f"{args.model_path}/explanations/hetero_explanation.pkl", "wb") as f:
-        #     pickle.dump(hetero_explanation, f)
-        # with open(f"{args.model_path}/explanations/dataset.pkl", "wb") as f:
-        #     pickle.dump(dataset, f)
-
         # Plot protein-protein explanation
         logger.info(f"Plotting explanations..")
         plot_systemic_explanation(args.model_path, hetero_explanation, dataset)
         plot_protein_explanation(args.model_path, hetero_explanation, dataset)
+
+        export_captum_3d(args.model_path, dataset, batch, hetero_explanation)
+        if attn is not None:
+            for idx, layer_attention in enumerate(attn, start=1):
+                plot_systemic_attention(
+                    args.model_path, layer_attention, dataset, batch, idx
+                )
+                plot_protein_attention(
+                    args.model_path, layer_attention, dataset, batch, idx
+                )
+                export_layer_attention_3d(
+                    args.model_path, dataset, batch, idx, layer_attention
+                )
+            analyze_attention_captum_correlation(
+                args.model_path, dataset, batch, attn, hetero_explanation
+            )
 
     logger.info(
         f"Explanation generation completed! Results saved to: {args.model_path}"
