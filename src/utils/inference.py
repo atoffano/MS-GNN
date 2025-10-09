@@ -4,7 +4,7 @@ import logging
 import argparse
 import numpy as np
 import os
-from typing import Dict, List, Sequence, Tuple
+from typing import Callable, Dict, List, Sequence, Tuple
 from torch_geometric.explain import (
     Explainer,
     CaptumExplainer,
@@ -23,6 +23,8 @@ from src.utils.visualize import (
     ensure_structure,
     render_structure_colormap,
     analyze_attention_captum_correlation,
+    build_plot_context,
+    resolve_plot_target,
 )
 from src.utils.helpers import timeit
 
@@ -49,16 +51,43 @@ def _edge_scores_to_residues(
 
     for protein_local in range(target_nodes):
         mask = prot_idx == protein_local
-        if mask.sum() == 0:
+        if not torch.any(mask):
             continue
         aa_local = aa_idx[mask]
         vals = flat_scores[mask]
         order = torch.argsort(aa_local)
-        residue_list = [
-            (int(aa_local[o].item()) + 1, float(vals[o].item())) for o in order
-        ]
-        residue_dict[protein_local] = residue_list
+        aa_sorted = aa_local[order] + 1  # convert to 1-based indexing
+        vals_sorted = vals[order]
+        residue_dict[protein_local] = list(
+            zip(aa_sorted.tolist(), vals_sorted.tolist())
+        )
     return residue_dict
+
+
+def _render_residue_structures(
+    context,
+    dataset,
+    protein_ids: Sequence[int],
+    residue_scores: Dict[int, List[Tuple[int, float]]],
+    *,
+    suffix: str,
+    colormap: str,
+    title_factory: Callable[[str], str],
+) -> None:
+    for local_idx, residues in residue_scores.items():
+        if not residues:
+            continue
+        uniprot_id = dataset.idx_to_protein[protein_ids[local_idx]]
+        out_dir, prefix = resolve_plot_target(context, local_idx)
+        pdb_path = ensure_structure(uniprot_id, out_dir)
+        image_path = os.path.join(out_dir, f"{prefix}_{suffix}.png")
+        render_structure_colormap(
+            pdb_path,
+            residues,
+            image_path,
+            colormap=colormap,
+            title=title_factory(uniprot_id),
+        )
 
 
 def export_layer_attention_3d(
@@ -79,25 +108,17 @@ def export_layer_attention_3d(
         target_nodes=batch["protein"].batch_size,
     )
 
-    protein_ids = batch["protein"].n_id.detach().cpu().tolist()
-    for local_idx, per_residue in residue_scores.items():
-        uniprot_id = dataset.idx_to_protein[protein_ids[local_idx]]
-        # sequence = dataset.load_protein_graph(uniprot_id)["protein"].sequence
-        res_score = [(resi, score) for resi, score in per_residue]
-
-        pdb_path = ensure_structure(uniprot_id, os.path.join(output_dir, "structures"))
-        image_path = os.path.join(
-            output_dir,
-            "structures",
-            f"{uniprot_id}_attention_layer{layer_idx}.png",
-        )
-        render_structure_colormap(
-            pdb_path,
-            res_score,
-            image_path,
-            colormap="rainbow",
-            title=f"{uniprot_id} – Attention L{layer_idx}",
-        )
+    context = build_plot_context(output_dir, dataset, batch)
+    title_factory = lambda uid, idx=layer_idx: f"{uid} – Attention L{idx}"
+    _render_residue_structures(
+        context,
+        dataset,
+        context.protein_ids,
+        residue_scores,
+        suffix=f"attention_layer{layer_idx}",
+        colormap="rainbow",
+        title_factory=title_factory,
+    )
 
 
 def export_captum_3d(
@@ -117,35 +138,16 @@ def export_captum_3d(
         target_nodes=batch["protein"].batch_size,
     )
 
-    protein_ids = batch["protein"].n_id.detach().cpu().tolist()
-    for local_idx, per_residue in residue_scores.items():
-        uniprot_id = dataset.idx_to_protein[protein_ids[local_idx]]
-        # sequence = dataset.load_protein_graph(uniprot_id)["protein"].sequence
-        res_score = [(resi, score) for resi, score in per_residue]
-        pdb_path = ensure_structure(uniprot_id, os.path.join(output_dir, "structures"))
-        image_path = os.path.join(
-            output_dir,
-            "structures",
-            f"{uniprot_id}_captum.png",
-        )
-        render_structure_colormap(
-            pdb_path,
-            res_score,
-            image_path,
-            colormap="rainbow",
-            title=f"{uniprot_id} – Captum",
-        )
-
-
-def zscore(tensor: torch.Tensor) -> torch.Tensor:
-    tensor = tensor.float()
-    if tensor.numel() == 0:
-        return tensor
-    mean = tensor.mean()
-    std = tensor.std(unbiased=False)
-    if std.item() < 1e-12:
-        return torch.zeros_like(tensor)
-    return (tensor - mean) / std
+    context = build_plot_context(output_dir, dataset, batch)
+    _render_residue_structures(
+        context,
+        dataset,
+        context.protein_ids,
+        residue_scores,
+        suffix="captum",
+        colormap="rainbow",
+        title_factory=lambda uid: f"{uid} – Captum",
+    )
 
 
 def load_model_and_config(model_path, device):
@@ -230,6 +232,15 @@ def generate_explanations(model, batch, device):
     return hetero_explanation
 
 
+def export_attention_artifacts(output_dir, dataset, batch, attentions):
+    if attentions is None:
+        return
+    for idx, layer_attention in enumerate(attentions, start=1):
+        plot_systemic_attention(output_dir, layer_attention, dataset, batch, idx)
+        plot_protein_attention(output_dir, layer_attention, dataset, batch, idx)
+        export_layer_attention_3d(output_dir, dataset, batch, idx, layer_attention)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate explanations for pretrained protein function prediction model"
@@ -257,43 +268,25 @@ def main():
 
     for batch in loader:
         batch = batch.to(device)
-        # Get attention scores
-        _, attn = model(
+        preds, attn = model(
             batch.x_dict,
             batch.edge_index_dict,
             batch=batch,
             return_attention_weights=True,
         )
-        for idx, layer_attention in enumerate(attn, start=1):
-            plot_systemic_attention(
-                args.model_path, layer_attention, dataset, batch, idx
-            )
-            plot_protein_attention(
-                args.model_path, layer_attention, dataset, batch, idx
-            )
 
-        logger.info(f"Generating explanations..")
+        logger.info("Generating explanations..")
         hetero_explanation = generate_explanations(model, batch, device)
-        # Plot protein-protein explanation
-        logger.info(f"Plotting explanations..")
+
+        logger.info("Plotting explanations..")
         plot_systemic_explanation(args.model_path, hetero_explanation, dataset)
         plot_protein_explanation(args.model_path, hetero_explanation, dataset)
 
         export_captum_3d(args.model_path, dataset, batch, hetero_explanation)
-        if attn is not None:
-            for idx, layer_attention in enumerate(attn, start=1):
-                plot_systemic_attention(
-                    args.model_path, layer_attention, dataset, batch, idx
-                )
-                plot_protein_attention(
-                    args.model_path, layer_attention, dataset, batch, idx
-                )
-                export_layer_attention_3d(
-                    args.model_path, dataset, batch, idx, layer_attention
-                )
-            analyze_attention_captum_correlation(
-                args.model_path, dataset, batch, attn, hetero_explanation
-            )
+        export_attention_artifacts(args.model_path, dataset, batch, attn)
+        analyze_attention_captum_correlation(
+            args.model_path, dataset, batch, attn, hetero_explanation
+        )
 
     logger.info(
         f"Explanation generation completed! Results saved to: {args.model_path}"

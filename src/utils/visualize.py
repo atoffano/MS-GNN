@@ -1,15 +1,20 @@
-import torch
-import networkx as nx
-import matplotlib.pyplot as plt
-import os
-import pymol2
 import logging
-from src.utils.helpers import timeit
-
 import os
+from dataclasses import dataclass
+from typing import Sequence, Tuple
+
+import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
 import requests
-from typing import Dict, Sequence, Tuple
+import torch
+
+from src.utils.helpers import timeit
+
+try:
+    import pymol2
+except ImportError:  # pragma: no cover
+    pymol2 = None
 
 
 logging.basicConfig(
@@ -85,6 +90,99 @@ def ensure_structure(uniprot_id: str, out_dir: str) -> str:
     )
 
 
+@dataclass
+class ProteinPlotContext:
+    root_label: str
+    root_global: int
+    root_dir: str
+    neighbor_dir: str
+    protein_ids: list[int]
+    labels: dict[int, str]
+
+
+_PLOT_SEED = 42
+
+
+def _draw_weighted_protein_graph(
+    context: ProteinPlotContext,
+    edge_index: torch.Tensor,
+    weights: torch.Tensor,
+    *,
+    title: str,
+    colorbar_label: str,
+    filename_suffix: str,
+) -> None:
+    edge_index = edge_index.detach().cpu()
+    weights = weights.detach().cpu().view(-1)
+
+    G = nx.Graph()
+    for local_idx, label in context.labels.items():
+        G.add_node(local_idx, label=label)
+
+    src, dst = edge_index
+    for idx in range(edge_index.size(1)):
+        G.add_edge(
+            int(src[idx]),
+            int(dst[idx]),
+            color=float(weights[idx].item()),
+        )
+
+    pos = nx.spring_layout(G, seed=_PLOT_SEED)
+    nx.draw_networkx_nodes(G, pos, node_color="#d9d9d9")
+
+    edges = None
+    if G.number_of_edges():
+        edge_colors = [data for (_, _, data) in G.edges(data="color")]
+        edges = nx.draw_networkx_edges(
+            G,
+            pos,
+            edge_color=edge_colors,
+            edge_cmap=plt.cm.viridis,
+        )
+    nx.draw_networkx_labels(G, pos, labels=context.labels, font_size=9)
+    plt.title(title)
+    if edges is not None:
+        plt.colorbar(edges, label=colorbar_label)
+    plt.tight_layout()
+
+    filename = os.path.join(
+        context.root_dir,
+        f"{context.root_label}_{filename_suffix}.png",
+    )
+    plt.savefig(filename)
+    plt.close()
+
+
+def build_plot_context(base_path: str, dataset, batch) -> ProteinPlotContext:
+    protein_ids = batch["protein"].n_id.detach().cpu().tolist()
+    root_global = int(protein_ids[0])
+    labels = {
+        idx: dataset.idx_to_protein.get(global_id, str(global_id))
+        for idx, global_id in enumerate(protein_ids)
+    }
+    root_label = labels[0]
+    root_dir = os.path.join(base_path, "explanations", root_label)
+    neighbor_dir = os.path.join(root_dir, "neighbors")
+    os.makedirs(root_dir, exist_ok=True)
+    os.makedirs(neighbor_dir, exist_ok=True)
+    return ProteinPlotContext(
+        root_label=root_label,
+        root_global=root_global,
+        root_dir=root_dir,
+        neighbor_dir=neighbor_dir,
+        protein_ids=protein_ids,
+        labels=labels,
+    )
+
+
+def resolve_plot_target(context: ProteinPlotContext, local_idx: int) -> tuple[str, str]:
+    is_root = context.protein_ids[local_idx] == context.root_global
+    target_label = context.labels[local_idx]
+    if is_root:
+        return context.root_dir, context.root_label
+    return context.neighbor_dir, f"{context.root_label}_{target_label}"
+
+
 def render_structure_colormap(
     pdb_path: str,
     residue_scores: Sequence[Tuple[int, float]],
@@ -143,70 +241,24 @@ def render_structure_colormap(
 
 @timeit
 def plot_systemic_explanation(path, hetero_explanation, dataset):
-    """
-    Plot explanations from a heterogeneous explainer using the SwissProtDataset
-    for protein name resolution and protein ID mapping.
-    Produces a plot per batch protein, normalized per subgraph, labeling nodes with their full names.
-    Simplified: assume all nodes in the returned batch are involved.
-    """
-    batch_proteins = hetero_explanation.batch["protein"].detach().cpu()
-    edge_mask = (
-        hetero_explanation[("protein", "aligned_with", "protein")]["edge_mask"]
-        .detach()
-        .cpu()
+    context = build_plot_context(path, dataset, hetero_explanation.batch)
+    key = ("protein", "aligned_with", "protein")
+    edge_mask = hetero_explanation[key]["edge_mask"].detach().cpu().view(-1)
+    edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
+
+    _draw_weighted_protein_graph(
+        context,
+        edge_index,
+        edge_mask,
+        title=f"Protein-Protein Explanation: {context.root_label}",
+        colorbar_label="Edge importance",
+        filename_suffix="system_explanation",
     )
-    edge_index = (
-        hetero_explanation[("protein", "aligned_with", "protein")]["edge_index"]
-        .detach()
-        .cpu()
-    )
-
-    # edge_mask_z = zscore(edge_mask)
-    edge_mask_z = edge_mask
-
-    src_local, dst_local = edge_index[0], edge_index[1]
-
-    G = nx.Graph()
-    for local_idx, global_idx in enumerate(batch_proteins["n_id"].tolist()):
-        G.add_node(
-            local_idx,
-            global_id=global_idx,
-            label=dataset.idx_to_protein.get(global_idx, str(global_idx)),
-        )
-    for local_idx in range(edge_index.size(1)):
-        G.add_edge(
-            src_local[local_idx].item(),
-            dst_local[local_idx].item(),
-            color=float(edge_mask_z[local_idx].item()),
-        )
-
-    edge_colors = [data for (_, _, data) in G.edges(data="color")]
-    labels = {n: G.nodes[n]["label"] for n in G.nodes()}
-
-    pos = nx.spring_layout(G, seed=42)
-    nodes = nx.draw_networkx_nodes(G, pos)
-    edges = nx.draw_networkx_edges(
-        G, pos, edge_color=edge_colors, edge_cmap=plt.cm.viridis
-    )
-    nx.draw_networkx_labels(G, pos, labels=labels, font_size=9)
-
-    protein = dataset.idx_to_protein[batch_proteins["n_id"][0].item()]
-    plt.title(f"Protein-Protein Explanation: {protein}")
-    plt.colorbar(nodes, label="Node color (edge z-score mean)")
-    plt.colorbar(edges, label="Edge z-score")
-    filename = f"{path}/explanations/{protein}_system_explanation.png"
-    os.makedirs(f"{path}/explanations", exist_ok=True)
-    plt.savefig(filename)
-    plt.show()
-    plt.close()
 
 
 @timeit
 def plot_protein_explanation(path, hetero_explanation, dataset):
-    """
-    Generate one amino-acid-to-protein explanation plot per protein node in the batch
-    as a scatter plot ordered by residue, coloring points by edge-mask z-score.
-    """
+    context = build_plot_context(path, dataset, hetero_explanation.batch)
     edge_mask = (
         hetero_explanation[("aa", "belongs_to", "protein")]["edge_mask"].detach().cpu()
     )
@@ -260,12 +312,9 @@ def plot_protein_explanation(path, hetero_explanation, dataset):
         plt.title(f"AA-Protein Explanation: {target_label}")
         plt.tight_layout()
 
-        filename = os.path.join(
-            explanations_dir,
-            f"{root_label}_{target_label}_aa_explanation.png",
-        )
+        out_dir, prefix = resolve_plot_target(context, target_idx)
+        filename = os.path.join(out_dir, f"{prefix}_aa_explanation.png")
         plt.savefig(filename)
-        plt.show()
         plt.close()
 
 
@@ -285,6 +334,7 @@ def analyze_attention_captum_correlation(
     *,
     layer_to_plot: int = 2,
 ) -> None:
+    context = build_plot_context(output_dir, dataset, batch)
     key = ("aa", "belongs_to", "protein")
 
     captum_edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
@@ -342,11 +392,10 @@ def analyze_attention_captum_correlation(
         return
 
     attn_arr, captum_arr = scatter_data
-    explanations_dir = os.path.join(output_dir, "explanations")
-    os.makedirs(explanations_dir, exist_ok=True)
-    root_global = int(batch["protein"].n_id.detach().cpu()[0].item())
-    root_label = dataset.idx_to_protein.get(root_global, str(root_global))
-
+    plot_path = os.path.join(
+        context.root_dir,
+        f"{context.root_label}_attn_layer{layer_to_plot}_captum_scatter.png",
+    )
     plt.figure(figsize=(6, 5))
     plt.scatter(attn_arr, captum_arr, alpha=0.6)
     # Add regression line in red
@@ -354,63 +403,34 @@ def analyze_attention_captum_correlation(
     plt.plot(attn_arr, m * attn_arr + b, color="red")
     plt.xlabel(f"Attention Layer {layer_to_plot}")
     plt.ylabel("Captum Score")
-    plt.title(f"Attention vs Captum (Layer {layer_to_plot}) – {root_label}")
+    plt.title(f"Attention vs Captum (Layer {layer_to_plot}) – {context.root_label}")
     plt.tight_layout()
-    plot_path = os.path.join(
-        explanations_dir,
-        f"{root_label}_attn_layer{layer_to_plot}_captum_scatter.png",
-    )
     plt.savefig(plot_path)
     plt.close()
 
 
 def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
+    context = build_plot_context(path, dataset, batch)
     key = ("protein", "aligned_with", "protein")
     if layer_attention is None or key not in layer_attention:
         return
+
     edge_index, attn_weights = layer_attention[key]
     edge_index = edge_index.detach().cpu()
-    attn_values = _mean_attention(attn_weights.detach().cpu())
+    attn_values = _mean_attention(attn_weights).detach().cpu()
 
-    protein_ids = batch["protein"].n_id.detach().cpu().tolist()
-    G = nx.Graph()
-    for local_idx, global_idx in enumerate(protein_ids):
-        G.add_node(
-            local_idx,
-            global_id=global_idx,
-            label=dataset.idx_to_protein.get(global_idx, str(global_idx)),
-        )
-
-    src_local, dst_local = edge_index[0], edge_index[1]
-    for idx in range(edge_index.size(1)):
-        G.add_edge(
-            src_local[idx].item(),
-            dst_local[idx].item(),
-            color=float(attn_values[idx].item()),
-        )
-
-    edge_colors = [data for (_, _, data) in G.edges(data="color")]
-    labels = {n: G.nodes[n]["label"] for n in G.nodes()}
-
-    pos = nx.spring_layout(G, seed=42)
-    nx.draw_networkx_nodes(G, pos, cmap=plt.cm.viridis)
-    edges = nx.draw_networkx_edges(
-        G, pos, edge_color=edge_colors, edge_cmap=plt.cm.viridis
+    _draw_weighted_protein_graph(
+        context,
+        edge_index,
+        attn_values,
+        title=f"Protein-Protein Attention (Layer {layer_idx}): {context.root_label}",
+        colorbar_label="Attention weight",
+        filename_suffix=f"system_attention_layer{layer_idx}",
     )
-    nx.draw_networkx_labels(G, pos, labels=labels, font_size=9)
-
-    root_label = dataset.idx_to_protein.get(protein_ids[0], str(protein_ids[0]))
-    plt.title(f"Protein-Protein Attention (Layer {layer_idx}): {root_label}")
-    plt.colorbar(edges, label="Attention weight")
-    filename = f"{path}/explanations/{root_label}_system_attention_layer{layer_idx}.png"
-    os.makedirs(f"{path}/explanations", exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(filename)
-    plt.show()
-    plt.close()
 
 
 def plot_protein_attention(path, layer_attention, dataset, batch, layer_idx):
+    context = build_plot_context(path, dataset, batch)
     key = ("aa", "belongs_to", "protein")
     if layer_attention is None or key not in layer_attention:
         return
@@ -452,10 +472,10 @@ def plot_protein_attention(path, layer_attention, dataset, batch, layer_idx):
         plt.title(f"AA-Protein Attention (Layer {layer_idx}): {target_label}")
         plt.tight_layout()
 
+        out_dir, prefix = resolve_plot_target(context, target_idx)
         filename = os.path.join(
-            explanations_dir,
-            f"{root_label}_{target_label}_aa_attention_layer{layer_idx}.png",
+            out_dir,
+            f"{prefix}_aa_attention_layer{layer_idx}.png",
         )
         plt.savefig(filename)
-        plt.show()
         plt.close()
