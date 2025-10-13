@@ -6,10 +6,89 @@ from torch_geometric.data import HeteroData
 from pathlib import Path
 import logging
 from tqdm.auto import tqdm
-import numpy as np
-from collections import defaultdict
+from multiprocessing import Pool, cpu_count
 
 logger = logging.getLogger(__name__)
+
+_WORKER_STATE = {}
+
+
+def _init_worker(
+    interpro_dict, go_annotations, interpro_vocab_size, output_dir, h5_path
+):
+    global _WORKER_STATE
+    _WORKER_STATE = {
+        "interpro_dict": interpro_dict,
+        "go_annotations": go_annotations,
+        "interpro_vocab_size": interpro_vocab_size,
+        "output_dir": Path(output_dir),
+        "h5_path": h5_path,
+    }
+
+
+def _build_protein_graph(
+    protein_id, embeddings, sequence, interpro_dict, go_annotations, interpro_vocab_size
+):
+    seq_len = len(sequence)
+    if embeddings.shape[0] != seq_len:
+        logger.warning(
+            f"Embedding length mismatch for {protein_id}: {embeddings.shape[0]} vs {seq_len}"
+        )
+        return None
+    data = HeteroData()
+    data["aa"].x = torch.tensor(embeddings, dtype=torch.float32)
+    data["aa"].num_nodes = seq_len
+    data["protein"].num_nodes = 1
+    if protein_id in interpro_dict:
+        data["protein"].interpro = interpro_dict[protein_id].unsqueeze(0)
+    else:
+        data["protein"].interpro = torch.zeros(
+            1, interpro_vocab_size, dtype=torch.float32
+        )
+    for subontology in ["BPO", "CCO", "MFO"]:
+        data["protein"][f"go_terms_{subontology}"] = {}
+        experimental_terms = []
+        curated_terms = []
+        if protein_id in go_annotations and subontology in go_annotations[protein_id]:
+            experimental_terms = go_annotations[protein_id][subontology].get(
+                "experimental", []
+            )
+            curated_terms = go_annotations[protein_id][subontology].get("curated", [])
+        data["protein"][f"go_terms_{subontology}"]["experimental"] = experimental_terms
+        data["protein"][f"go_terms_{subontology}"]["curated"] = curated_terms
+    aa_indices = torch.arange(seq_len)
+    protein_indices = torch.zeros(seq_len, dtype=torch.long)
+    data["aa", "belongs_to", "protein"].edge_index = torch.stack(
+        [aa_indices, protein_indices]
+    )
+    data["protein"].protein_id = protein_id
+    data["protein"].sequence = sequence
+    data["protein"].sequence_length = seq_len
+    return data
+
+
+def _process_protein(protein_id):
+    try:
+        with h5py.File(_WORKER_STATE["h5_path"], "r") as h5f:
+            group = h5f[protein_id]
+            embeddings = group["embeddings"][:]
+            sequence = group.attrs["sequence"]
+        protein_graph = _build_protein_graph(
+            protein_id,
+            embeddings,
+            sequence,
+            _WORKER_STATE["interpro_dict"],
+            _WORKER_STATE["go_annotations"],
+            _WORKER_STATE["interpro_vocab_size"],
+        )
+        if protein_graph is None:
+            return False, protein_id, None, None
+        output_path = _WORKER_STATE["output_dir"] / f"{protein_id}.pt"
+        torch.save(protein_graph, output_path)
+        return True, protein_id, None, embeddings.shape[1]
+    except Exception as exc:
+        logger.error(f"Failed to process {protein_id}: {exc}")
+        return False, protein_id, exc, None
 
 
 class ProteinGraphPreprocessor:
@@ -20,7 +99,7 @@ class ProteinGraphPreprocessor:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Load annotations
-        self.interpro_dict = self._load_interpro_annotations()
+        self.interpro_dict, self.interpro_vocab_size = self._load_interpro_annotations()
         self.go_annotations = self._load_all_go_annotations()
         self.go_vocab_sizes = self._load_go_vocab_from_obo()
 
@@ -47,7 +126,7 @@ class ProteinGraphPreprocessor:
         with open(self.output_dir / "interpro_vocab.pkl", "wb") as f:
             pickle.dump({"ipr_to_idx": ipr_to_idx, "vocab_size": len(ipr_ids)}, f)
 
-        return interpro_dict
+        return interpro_dict, len(ipr_ids)
 
     def _load_go_vocab_from_obo(self):
         """Load GO vocabulary from go.obo file and determine sizes per subontology."""
@@ -158,130 +237,41 @@ class ProteinGraphPreprocessor:
 
         return go_annotations
 
-    def create_protein_graph(self, protein_id, embeddings, sequence):
-        """Create a HeteroData graph for a single protein."""
-        seq_len = len(sequence)
-
-        # Validate embeddings shape
-        if embeddings.shape[0] != seq_len:
-            logger.warning(
-                f"Embedding length mismatch for {protein_id}: {embeddings.shape[0]} vs {seq_len}"
-            )
-            return None
-
-        # Create hetero data
-        data = HeteroData()
-
-        # Amino acid nodes
-        data["aa"].x = torch.tensor(embeddings, dtype=torch.float32)
-        data["aa"].num_nodes = seq_len
-
-        # Protein node (single node)
-        data["protein"].num_nodes = 1
-
-        # InterPro features for protein
-        if protein_id in self.interpro_dict:
-            data["protein"].interpro = self.interpro_dict[protein_id].unsqueeze(0)
-        else:
-            # Default empty interpro vector
-            with open(self.output_dir / "interpro_vocab.pkl", "rb") as f:
-                interpro_info = pickle.load(f)
-            data["protein"].interpro = torch.zeros(
-                1, interpro_info["vocab_size"], dtype=torch.float32
-            )
-
-        # GO annotations as nested dictionaries per subontology and annotation type
-        for subontology in ["BPO", "CCO", "MFO"]:
-            # Initialize the nested structure
-            data["protein"][f"go_terms_{subontology}"] = {}
-
-            # Get experimental annotations
-            experimental_terms = []
-            if (
-                protein_id in self.go_annotations
-                and subontology in self.go_annotations[protein_id]
-                and "experimental" in self.go_annotations[protein_id][subontology]
-            ):
-                experimental_terms = self.go_annotations[protein_id][subontology][
-                    "experimental"
-                ]
-
-            # Get curated annotations
-            curated_terms = []
-            if (
-                protein_id in self.go_annotations
-                and subontology in self.go_annotations[protein_id]
-                and "curated" in self.go_annotations[protein_id][subontology]
-            ):
-                curated_terms = self.go_annotations[protein_id][subontology]["curated"]
-
-            # Store both types of annotations
-            data["protein"][f"go_terms_{subontology}"][
-                "experimental"
-            ] = experimental_terms
-            data["protein"][f"go_terms_{subontology}"]["curated"] = curated_terms
-
-        # AA to protein edges (all AAs connect to the single protein node)
-        aa_indices = torch.arange(seq_len)
-        protein_indices = torch.zeros(seq_len, dtype=torch.long)
-        data["aa", "belongs_to", "protein"].edge_index = torch.stack(
-            [aa_indices, protein_indices]
-        )
-
-        # Store metadata
-        data["protein"].protein_id = protein_id
-        data["protein"].sequence = sequence
-        data["protein"].sequence_length = seq_len
-
-        return data
-
     def process_embeddings_h5(self):
         """Process all proteins from H5 embeddings file."""
-        successful = 0
-        failed = 0
-
-        with h5py.File(
-            "./data/swissprot/2024_01/swissprot_esm1b_per_aa.h5", "r"
-        ) as h5f:
+        h5_path = "./data/swissprot/2024_01/swissprot_esm1b_per_aa.h5"
+        with h5py.File(h5_path, "r") as h5f:
             protein_ids = list(h5f.keys())
 
-            for protein_id in tqdm(protein_ids, desc="Processing proteins"):
-                try:
-                    # Load embeddings and sequence
-                    embeddings = h5f[protein_id]["embeddings"][:]
-                    sequence = h5f[protein_id].attrs["sequence"]
+        successful = 0
+        failed = 0
+        embedding_dim = None
+        num_workers = max(1, min(cpu_count(), len(protein_ids)))
 
-                    # Create protein graph
-                    protein_graph = self.create_protein_graph(
-                        protein_id, embeddings, sequence
-                    )
-
-                    if protein_graph is not None:
-                        # Save individual protein graph
-                        output_path = self.output_dir / f"{protein_id}.pt"
-                        torch.save(protein_graph, output_path)
-                        successful += 1
-                    else:
-                        failed += 1
-
-                except Exception as e:
-                    logger.error(f"Failed to process {protein_id}: {e}")
+        with Pool(
+            processes=num_workers,
+            initializer=_init_worker,
+            initargs=(
+                self.interpro_dict,
+                self.go_annotations,
+                self.interpro_vocab_size,
+                str(self.output_dir),
+                h5_path,
+            ),
+        ) as pool:
+            for success, _, _, emb_dim in tqdm(
+                pool.imap_unordered(_process_protein, protein_ids),
+                total=len(protein_ids),
+                desc="Processing proteins",
+            ):
+                if success:
+                    successful += 1
+                    if embedding_dim is None and emb_dim is not None:
+                        embedding_dim = emb_dim
+                else:
                     failed += 1
 
         logger.info(f"Successfully processed {successful} proteins, failed: {failed}")
-
-        # Save metadata
-        metadata = {
-            "total_proteins": successful,
-            "embedding_dim": embeddings.shape[1] if successful > 0 else 1280,
-            "interpro_vocab_size": len(self.interpro_dict) if self.interpro_dict else 0,
-            "go_vocab_sizes": self.go_vocab_sizes,
-            "has_experimental_annotations": True,
-            "has_curated_annotations": True,
-        }
-
-        with open(self.output_dir / "metadata.pkl", "wb") as f:
-            pickle.dump(metadata, f)
 
         return successful, failed
 

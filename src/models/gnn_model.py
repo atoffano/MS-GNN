@@ -71,6 +71,7 @@ class ProteinGNN(torch.nn.Module):
         )
         self.conv1 = HeteroGATConv(
             edge_types=[
+                ("aa", "close_to", "aa"),
                 ("aa", "belongs_to", "protein"),
                 ("protein", "aligned_with", "protein"),
             ],
@@ -103,6 +104,7 @@ class ProteinGNN(torch.nn.Module):
 
         self.conv2 = HeteroGATConv(
             edge_types=[
+                ("aa", "close_to", "aa"),
                 ("aa", "belongs_to", "protein"),
                 ("protein", "aligned_with", "protein"),
             ],

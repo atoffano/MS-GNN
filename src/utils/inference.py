@@ -2,7 +2,6 @@ import torch
 import yaml
 import logging
 import argparse
-import numpy as np
 import os
 from typing import Callable, Dict, List, Sequence, Tuple
 from torch_geometric.explain import (
@@ -79,7 +78,8 @@ def _render_residue_structures(
             continue
         uniprot_id = dataset.idx_to_protein[protein_ids[local_idx]]
         out_dir, prefix = resolve_plot_target(context, local_idx)
-        pdb_path = ensure_structure(uniprot_id, out_dir)
+        pdb_id = dataset.pid_mapping[uniprot_id] if dataset.uses_entryid else uniprot_id
+        pdb_path = ensure_structure(pdb_id, out_dir)
         image_path = os.path.join(out_dir, f"{prefix}_{suffix}.png")
         render_structure_colormap(
             pdb_path,
@@ -204,19 +204,24 @@ def generate_explanations(model, batch, device):
     # Create explainer
     explainer = Explainer(
         model,
-        algorithm=CaptumExplainer("IntegratedGradients"),
+        algorithm=CaptumExplainer("Saliency"),
         explanation_type="model",
-        node_mask_type="attributes",
+        node_mask_type=None,
         edge_mask_type="object",
         model_config=dict(
-            mode="multiclass_classification",
+            mode="binary_classification",
             task_level="node",
-            return_type="raw",
+            return_type="probs",
         ),
     )
 
-    # Generate explanations
+    # Generate explanations for each target class
+
     logger.info("Generating explanations...")
+    sample_pos = torch.where(batch["protein"].y == 1)[1]
+    sample_neg = torch.where(batch["protein"].y == 0)[1]
+    sample_neg = sample_neg[: len(sample_pos)]
+
     hetero_explanation = explainer(
         batch.x_dict,
         batch.edge_index_dict,
@@ -228,6 +233,18 @@ def generate_explanations(model, batch, device):
     logger.info(
         f"Generated explanations in {hetero_explanation.available_explanations}"
     )
+
+    for key in [
+        ("aa", "belongs_to", "protein"),
+        ("protein", "aligned_with", "protein"),
+    ]:
+        hetero_explanation[key]["edge_mask"] = hetero_explanation[key][
+            "edge_mask"
+        ].abs()
+        # Apply min max scaling
+        em = hetero_explanation[key]["edge_mask"]
+        em = (em - em.min()) / (em.max() - em.min() + 1e-8)
+        hetero_explanation[key]["edge_mask"] = em
 
     return hetero_explanation
 
@@ -262,7 +279,6 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    # Load model and config
     _, model, dataset = load_model_and_config(args.model_path, device)
     loader = get_loader(dataset, args.proteins)
 

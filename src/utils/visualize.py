@@ -266,17 +266,10 @@ def plot_protein_explanation(path, hetero_explanation, dataset):
         hetero_explanation[("aa", "belongs_to", "protein")]["edge_index"].detach().cpu()
     )
 
-    edge_mask_z = edge_mask
-
-    # edge_mask_z = zscore(edge_mask)
-    # edge_mask_z = torch.log1p(edge_mask_z)
-
     src_local, dst_local = edge_index[0], edge_index[1]
 
     protein_batch = hetero_explanation.batch["protein"].detach().cpu()
     protein_global_ids = protein_batch["n_id"].tolist()
-    root_global = int(protein_global_ids[0])
-    root_label = dataset.idx_to_protein.get(root_global, str(root_global))
 
     explanations_dir = os.path.join(path, "explanations")
     os.makedirs(explanations_dir, exist_ok=True)
@@ -287,7 +280,7 @@ def plot_protein_explanation(path, hetero_explanation, dataset):
             continue
 
         aa_indices = src_local[mask]
-        edge_importance_z = edge_mask_z[mask].view(-1)
+        edge_importance_z = edge_mask[mask].view(-1)
 
         target_idx = int(dst_val)
         target_global = int(protein_global_ids[target_idx])
@@ -306,7 +299,7 @@ def plot_protein_explanation(path, hetero_explanation, dataset):
             c=edge_z_sorted.numpy(),
             cmap=plt.cm.viridis,
         )
-        plt.colorbar(scatter, label="Edge z-score")
+        plt.colorbar(scatter, label="Edge attribution")
         plt.xlabel("Residue")
         plt.ylabel("Edge Importance")
         plt.title(f"AA-Protein Explanation: {target_label}")
@@ -367,9 +360,13 @@ def analyze_attention_captum_correlation(
             continue
         attn_arr = np.asarray(shared_attn, dtype=np.float32)
         captum_arr = np.asarray(shared_captum, dtype=np.float32)
-        # zscore normalization
-        attn_arr = (attn_arr - attn_arr.mean()) / (attn_arr.std() + 1e-9)
-        captum_arr = (captum_arr - captum_arr.mean()) / (captum_arr.std() + 1e-9)
+        # min max normalization
+        attn_arr = (attn_arr - attn_arr.min()) / (
+            attn_arr.max() - attn_arr.min() + 1e-9
+        )
+        captum_arr = (captum_arr - captum_arr.min()) / (
+            captum_arr.max() - captum_arr.min() + 1e-9
+        )
 
         if (
             np.std(attn_arr) < 1e-12
@@ -440,7 +437,6 @@ def plot_protein_attention(path, layer_attention, dataset, batch, layer_idx):
 
     src_local, dst_local = edge_index[0], edge_index[1]
     protein_ids = batch["protein"].n_id.detach().cpu().tolist()
-    root_label = dataset.idx_to_protein.get(protein_ids[0], str(protein_ids[0]))
 
     explanations_dir = os.path.join(path, "explanations")
     os.makedirs(explanations_dir, exist_ok=True)
