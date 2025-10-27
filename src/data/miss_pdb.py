@@ -1,3 +1,11 @@
+"""Missing PDB structure identification and handling.
+
+This script identifies proteins from the SwissProt dataset that lack both
+AlphaFold and ESMFold structure predictions. It generates a FASTA file
+containing sequences that need structure prediction, which can then be
+processed by the folding pipeline.
+"""
+
 import sys
 from pathlib import Path
 

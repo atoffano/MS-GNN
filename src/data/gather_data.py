@@ -1,3 +1,16 @@
+"""SwissProt data download and preprocessing utilities.
+
+This module provides functions to download and preprocess data required for
+protein function prediction, including:
+- AlphaFold protein structures from the SwissProt database
+- InterPro domain annotations
+- STRING database protein interactions
+- Filtering data to match the SwissProt protein set
+
+The preprocessing pipeline ensures all required data sources are downloaded,
+extracted, and filtered to contain only proteins in the target dataset.
+"""
+
 import gzip
 import logging
 import shutil

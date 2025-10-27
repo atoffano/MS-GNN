@@ -1,3 +1,10 @@
+"""Graph structure validation and diagnostics.
+
+This script checks protein graph files for structural integrity, identifying
+graphs missing structural information (no amino acid contacts) or that cannot
+be loaded. Results are written to FASTA files for further processing.
+"""
+
 import os
 import torch
 import tqdm

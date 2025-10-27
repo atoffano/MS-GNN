@@ -1,3 +1,14 @@
+"""Model inference and interpretability utilities.
+
+This module provides tools for running inference with trained models and generating
+explanations for predictions using attention mechanisms and Captum attribution methods.
+It includes functionality for:
+- Model inference on protein data
+- Attention weight analysis
+- Captum-based attribution (IntegratedGradients, GradientShap)
+- Correlation analysis between attention and attribution scores
+"""
+
 import torch
 import yaml
 import logging

@@ -1,3 +1,16 @@
+"""Main training script for PFP_layer protein function prediction model.
+
+This script provides the main training loop for the heterogeneous Graph Neural Network
+model used for protein function prediction. It handles dataset loading, model initialization,
+training, validation, and evaluation across Gene Ontology subontologies.
+
+The script supports:
+- Training on SwissProt or custom datasets
+- Multi-ontology prediction (MFO, BPO, CCO)
+- Model checkpointing and prediction saving
+- Weights & Biases integration for experiment tracking
+"""
+
 import argparse
 import tqdm
 import torch

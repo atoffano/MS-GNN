@@ -1,3 +1,16 @@
+"""ESM (Evolutionary Scale Modeling) embedding generation for protein residues.
+
+This module generates per-residue embeddings using the ESM-1b language model.
+The embeddings capture evolutionary and structural information at the amino acid
+level and are used as node features in the protein graphs.
+
+Features:
+- Batch processing for efficient computation
+- HDF5 storage for large-scale embedding datasets
+- Support for local ESM model checkpoints
+- Memory-efficient processing with configurable batch sizes
+"""
+
 import argparse
 import logging
 import warnings

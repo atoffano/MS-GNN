@@ -1,3 +1,16 @@
+"""ESMFold structure prediction for proteins.
+
+This module generates 3D protein structures using ESMFold for sequences that
+lack AlphaFold predictions. It provides batch processing capabilities and
+handles large proteins through intelligent batching strategies.
+
+The module supports:
+- Structure prediction using Facebook's ESMFold model
+- Batching by total amino acid count for memory efficiency
+- Automatic fallback for large proteins
+- Local and remote model checkpoint support
+"""
+
 import argparse
 import math
 from pathlib import Path

@@ -1,3 +1,11 @@
+"""BEPROF evaluation metrics for protein function prediction.
+
+This module implements evaluation metrics compatible with the BEPROF (Benchmark of
+Protein Function) framework. It includes functions for computing F-max, AUPR, and
+other performance metrics for multi-label GO term prediction, along with utilities
+for handling GO term hierarchies and information content.
+"""
+
 import warnings
 import numpy as np
 import scipy.sparse as ssp

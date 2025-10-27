@@ -1,3 +1,9 @@
+"""Multi-label classification metrics for GO term prediction.
+
+This module provides metric functions for evaluating multi-label predictions,
+including accuracy and F1-score calculations for Gene Ontology term assignments.
+"""
+
 import torch
 
 def multilabel_accuracy(preds, targets, threshold=0.5):

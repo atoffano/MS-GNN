@@ -1,3 +1,17 @@
+"""Heterogeneous Graph Neural Network model for protein function prediction.
+
+This module defines the core GNN architecture used for predicting Gene Ontology terms.
+The model uses a heterogeneous graph structure with protein and amino acid nodes,
+connected through multiple edge types including protein-protein alignments and
+amino acid to protein relationships.
+
+The architecture consists of:
+- Input projection layers for different node types
+- Multiple Graph Attention (GAT) convolutional layers
+- Skip connections with concatenation
+- Output layer for multi-label GO term classification
+"""
+
 from collections import defaultdict
 import torch
 from torch.nn import PReLU

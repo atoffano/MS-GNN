@@ -1,3 +1,17 @@
+"""Heterogeneous graph construction for protein function prediction.
+
+This module creates individual protein graphs combining multiple data sources:
+- Protein sequences and metadata
+- ESM embeddings for amino acid residues
+- 3D structure information (AlphaFold/ESMFold)
+- InterPro domain annotations
+- Gene Ontology term annotations (MFO, BPO, CCO)
+
+The resulting graphs are heterogeneous with protein and amino acid nodes,
+connected through various edge types including spatial contacts and protein
+membership relationships.
+"""
+
 import argparse
 import logging
 import multiprocessing as mp

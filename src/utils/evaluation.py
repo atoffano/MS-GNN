@@ -1,3 +1,12 @@
+"""Evaluation utilities for model predictions and metrics computation.
+
+This module provides functions for evaluating protein function predictions, including:
+- Computing precision-recall metrics (AUPR, F-max)
+- Saving model predictions to files
+- Generating evaluation plots and visualizations
+- Integration with BEPROF evaluation framework
+"""
+
 import pandas as pd
 import os
 import sys

@@ -1,3 +1,17 @@
+"""PyTorch Geometric data loading for heterogeneous protein graphs.
+
+This module provides the SwissProtDataset class and data loaders for training
+the protein function prediction model. It handles:
+- Loading preprocessed protein graphs from disk
+- Managing train/validation/test splits based on GO annotations
+- Creating neighborhood sampling loaders for efficient batch processing
+- On-demand feature loading for proteins
+- Handling multiple GO subontologies (MFO, BPO, CCO)
+
+The dataset maintains a static protein-protein graph structure while loading
+individual protein features dynamically to manage memory efficiently.
+"""
+
 import torch
 from torch_geometric.data import HeteroData
 from torch_geometric.loader import NeighborLoader

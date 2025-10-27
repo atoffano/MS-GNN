@@ -1,3 +1,10 @@
+"""Utility decorator for timing function execution.
+
+This module provides a simple timing decorator to measure and log the execution
+time of functions, useful for performance profiling during data processing and
+model training.
+"""
+
 import time
 
 def timeit(func):
