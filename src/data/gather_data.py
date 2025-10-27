@@ -173,6 +173,11 @@ def process_interpro_annotations(
 def get_stringdb(
     base_dir,
 ):
+    """Download and filter STRING database protein interactions.
+    
+    Args:
+        base_dir: Base directory path for data storage
+    """
     stringdb_url = (
         "https://stringdb-downloads.org/download/stream/protein.links.detailed.v12.0.onlyAB.tsv.gz",
     )
