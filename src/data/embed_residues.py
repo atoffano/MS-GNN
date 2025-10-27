@@ -41,6 +41,14 @@ DEFAULT_MAX_AA_PER_BATCH = 4000
 def load_esm_model(
     local_checkpoint: Optional[Path] = None,
 ) -> Tuple[torch.nn.Module, esm.Alphabet]:
+    """Load ESM-1b protein language model.
+    
+    Args:
+        local_checkpoint: Optional path to local model checkpoint
+        
+    Returns:
+        Tuple of (model, alphabet)
+    """
     if local_checkpoint:
         checkpoint = Path(local_checkpoint)
         if not checkpoint.exists():
@@ -56,6 +64,15 @@ def load_esm_model(
 def batched_by_length(
     records: Iterable[SeqRecord], max_aa: int
 ) -> Iterable[List[SeqRecord]]:
+    """Batch sequences by total amino acid count.
+    
+    Args:
+        records: Iterable of sequence records
+        max_aa: Maximum total amino acids per batch
+        
+    Yields:
+        Batches of sequence records
+    """
     batch: List[SeqRecord] = []
     total_len = 0
 
@@ -82,6 +99,12 @@ def batched_by_length(
 
 
 class ResidueEmbedder:
+    """ESM-based protein residue embedder.
+    
+    Generates per-residue embeddings for protein sequences using ESM-1b
+    language model, with support for long sequences via windowing.
+    """
+    
     def __init__(
         self,
         local_checkpoint: Optional[Path] = None,
@@ -89,6 +112,14 @@ class ResidueEmbedder:
         max_aa_per_batch: int = DEFAULT_MAX_AA_PER_BATCH,
         esm_batch_size: int = ESM_BATCH_SIZE,
     ):
+        """Initialize ResidueEmbedder.
+        
+        Args:
+            local_checkpoint: Optional path to local ESM model checkpoint
+            h5_path: Path to output HDF5 file for embeddings
+            max_aa_per_batch: Maximum total amino acids per batch
+            esm_batch_size: Batch size for ESM model inference
+        """
         self.h5_path = Path(h5_path)
         self.max_aa_per_batch = max(1, max_aa_per_batch)
         self.esm_batch_size = max(1, esm_batch_size)
@@ -112,6 +143,17 @@ class ResidueEmbedder:
         )
 
     def embed_sequence(self, seq_id: str, sequence: str) -> torch.Tensor:
+        """Generate embeddings for a single protein sequence.
+        
+        For long sequences, uses overlapping windows and averages embeddings.
+        
+        Args:
+            seq_id: Sequence identifier
+            sequence: Amino acid sequence string
+            
+        Returns:
+            Tensor of per-residue embeddings, shape (length, embedding_dim)
+        """
         length = len(sequence)
         if length == 0:
             raise ValueError(f"Sequence {seq_id} is empty")
@@ -175,6 +217,14 @@ class ResidueEmbedder:
         return torch.from_numpy(averaged).clone()
 
     def embed_batch(self, records: List[SeqRecord]) -> Dict[str, torch.Tensor]:
+        """Generate embeddings for a batch of sequences.
+        
+        Args:
+            records: List of BioPython SeqRecord objects
+            
+        Returns:
+            Dictionary mapping sequence IDs to embedding tensors
+        """
         results: Dict[str, torch.Tensor] = {}
         long_sequences: List[Tuple[str, str]] = []
         short_sequences: List[Tuple[str, str]] = []
@@ -216,6 +266,15 @@ class ResidueEmbedder:
         fasta_path: Path,
         overwrite: bool = False,
     ) -> Tuple[int, int, int]:
+        """Process a FASTA file and save embeddings to HDF5.
+        
+        Args:
+            fasta_path: Path to input FASTA file
+            overwrite: If True, recompute embeddings even if they exist
+            
+        Returns:
+            Tuple of (total_sequences, written, skipped)
+        """
         fasta_path = Path(fasta_path)
         if not fasta_path.exists():
             raise FileNotFoundError(f"FASTA not found: {fasta_path}")
@@ -291,6 +350,11 @@ class ResidueEmbedder:
 
 
 def main() -> None:
+    """Main entry point for residue embedding generation.
+    
+    Processes a FASTA file and generates ESM embeddings for all sequences,
+    storing results in an HDF5 file.
+    """
     parser = argparse.ArgumentParser(
         description="Embed UniProt sequences into per-residue ESM1b representations."
     )
