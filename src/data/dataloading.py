@@ -29,6 +29,19 @@ class SwissProtDataset:
     """Dataset that maintains a static protein-protein graph and loads individual protein features on-demand."""
 
     def __init__(self, config):
+        """Initialize SwissProtDataset.
+        
+        Loads protein graphs, vocabularies, GO annotations, and creates the
+        static protein-protein graph structure for the dataset.
+        
+        Args:
+            config: Configuration dictionary with dataset parameters including:
+                - data.dataset: Dataset name (e.g., 'D1')
+                - data.protein_graphs: Path to preprocessed protein graphs
+                - data.subontology: GO subontology to use (MFO, BPO, or CCO)
+                - data.train_on_swissprot: Whether to train on full SwissProt
+                - data.exp_only: Whether to use only experimental annotations
+        """
         self.config = config
         if config["data"]["dataset"] in ["D1"]:
             self.uses_entryid = True  # D1 uses EntryIDs
@@ -452,7 +465,17 @@ class SwissProtDataset:
 
 
 def make_batch_transform(dataset, mode):
+    """Create a batch transformation function for the data loader.
+    
+    Args:
+        dataset: SwissProtDataset instance
+        mode: Dataset mode ('train', 'val', or 'test')
+        
+    Returns:
+        Function that transforms batches by adding mode and loading features
+    """
     def batch_transform(batch):
+        """Transform batch by adding mode and loading protein features."""
         batch["mode"] = mode
         batch = dataset.get_batch_features(batch)
         return batch

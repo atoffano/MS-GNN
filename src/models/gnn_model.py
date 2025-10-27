@@ -26,7 +26,19 @@ from src.utils.helpers import timeit
 
 
 class HeteroGATConv(torch.nn.Module):
+    """Heterogeneous Graph Attention Convolution layer.
+    
+    Applies GATv2 convolution to each edge type in a heterogeneous graph
+    and aggregates results by destination node type.
+    """
+    
     def __init__(self, edge_types, channels):
+        """Initialize HeteroGATConv layer.
+        
+        Args:
+            edge_types: List of edge type tuples (src_type, relation, dst_type)
+            channels: Number of output channels
+        """
         super().__init__()
         self.convs = torch.nn.ModuleDict()
         for edge_type in edge_types:
@@ -41,6 +53,20 @@ class HeteroGATConv(torch.nn.Module):
         return_attention_weights=None,
         **kwargs,
     ):
+        """Forward pass through heterogeneous GAT layer.
+        
+        Args:
+            x_dict: Dictionary of node features by node type
+            edge_index_dict: Dictionary of edge indices by edge type
+            edge_attr_dict: Optional dictionary of edge attributes
+            return_attention_weights: If True, return attention weights
+            **kwargs: Additional arguments
+            
+        Returns:
+            tuple: (out_dict, attention_dict) where out_dict contains aggregated
+                   node features by type, and attention_dict contains attention
+                   weights if requested
+        """
         out_dict = defaultdict(list)
         attention_dict = {} if return_attention_weights else None
         for edge_type, edge_index in edge_index_dict.items():
@@ -66,7 +92,19 @@ class HeteroGATConv(torch.nn.Module):
 
 
 class ProteinGNN(torch.nn.Module):
+    """Protein function prediction Graph Neural Network.
+    
+    Multi-layer heterogeneous GNN with GAT convolutions, skip connections,
+    and batch normalization for predicting Gene Ontology terms.
+    """
+    
     def __init__(self, config, dataset):
+        """Initialize ProteinGNN model.
+        
+        Args:
+            config: Configuration dictionary with model hyperparameters
+            dataset: SwissProtDataset containing vocabulary sizes and metadata
+        """
         super().__init__()
         self.edge_attrs = config["model"]["edge_attrs"]
         hidden_channels = config["model"]["hidden_channels"]
@@ -117,6 +155,18 @@ class ProteinGNN(torch.nn.Module):
         self.lin_out = Linear(hidden_channels, out_channels)
 
     def forward(self, x_dict, edge_index_dict, batch, return_attention_weights=None):
+        """Forward pass through the protein GNN.
+        
+        Args:
+            x_dict: Dictionary of node features by node type
+            edge_index_dict: Dictionary of edge indices by edge type
+            batch: Batch object containing graph structure and metadata
+            return_attention_weights: If True, return attention weights from GAT layers
+            
+        Returns:
+            torch.Tensor: Predicted GO term scores (or probabilities during inference)
+            tuple: If return_attention_weights=True, returns (predictions, attentions)
+        """
         edge_attr_dict = batch.edge_attr_dict if self.edge_attrs else None
 
         # Input linear
