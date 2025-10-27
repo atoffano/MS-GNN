@@ -172,6 +172,11 @@ def build_close_contact_edges(
 
 
 def load_interpro_annotations() -> Tuple[Dict[str, torch.Tensor], int]:
+    """Load and vectorize InterPro domain annotations.
+    
+    Returns:
+        Tuple of (protein_to_interpro_vector_dict, interpro_vocab_size)
+    """
     df = pd.read_csv(INTERPRO_TSV, sep="\t")
     ipr_ids = sorted(df["IPR"].unique())
     ipr_to_idx = {ipr: i for i, ipr in enumerate(ipr_ids)}
@@ -191,6 +196,11 @@ def load_interpro_annotations() -> Tuple[Dict[str, torch.Tensor], int]:
 
 
 def load_go_vocab() -> Dict[str, int]:
+    """Load GO term vocabulary from OBO file.
+    
+    Returns:
+        Dictionary mapping ontology names to vocabulary sizes
+    """
     namespace_map = {
         "biological_process": "BPO",
         "cellular_component": "CCO",
