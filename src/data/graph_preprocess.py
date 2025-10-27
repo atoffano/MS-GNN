@@ -1,16 +1,19 @@
+import argparse
 import logging
 import warnings
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+import os
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
-import concurrent.futures
 import numpy as np
 import pandas as pd
 import pickle
 import torch
 from Bio import SeqIO
 from Bio.PDB import PDBParser
+from Bio.SeqRecord import SeqRecord
 from torch_geometric.data import HeteroData
 from tqdm.auto import tqdm
 import esm
@@ -30,7 +33,6 @@ GO_OBO_PATH = Path("./data/go.obo")
 GO_ANNOTATION_TEMPLATE = DATA_ROOT / "swissprot_2024_01_{onto}_annotations.tsv"
 GO_EXP_ANNOTATION_TEMPLATE = DATA_ROOT / "swissprot_2024_01_{onto}_exp_annotations.tsv"
 
-PDB_DIR = DATA_ROOT / "alphafold_pdb"
 STRUCTURE_MISSING_PATH = OUTPUT_DIR / "structure_missing.fasta"
 
 ESM_CHECKPOINT = Path("../torch_cache/esm1b_t33_650M_UR50S.pt")
@@ -40,8 +42,41 @@ CONTACT_CUTOFF = 10.0
 CONTACT_CHUNK = 512
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-PDB_DIR.mkdir(parents=True, exist_ok=True)
 STRUCTURE_MISSING_PATH.touch(exist_ok=True)
+
+WORKER_INTERPRO: Dict[str, torch.Tensor] = {}
+WORKER_GO: Dict[str, Dict[str, Dict[str, List[str]]]] = {}
+WORKER_INTERPRO_SIZE: int = 0
+
+
+def _init_worker(interpro_dict, go_annotations, interpro_vocab_size):
+    global WORKER_INTERPRO, WORKER_GO, WORKER_INTERPRO_SIZE
+    WORKER_INTERPRO = interpro_dict
+    WORKER_GO = go_annotations
+    WORKER_INTERPRO_SIZE = interpro_vocab_size
+
+
+def _build_and_save_protein_graph(
+    args: Tuple[str, str, torch.Tensor],
+) -> Tuple[str, bool, Optional[str]]:
+    protein_id, sequence, embeddings = args
+    try:
+        data = build_protein_graph(
+            protein_id,
+            embeddings,
+            sequence,
+            WORKER_INTERPRO,
+            WORKER_GO,
+            WORKER_INTERPRO_SIZE,
+        )
+        if data is None:
+            return protein_id, False, "Graph construction returned None"
+        add_close_contact_edges(data, protein_id)
+        torch.save(data, OUTPUT_DIR / f"{protein_id}.pt")
+        return protein_id, True, None
+    except Exception as exc:
+        logger.error("Worker failure for %s: %s", protein_id, exc)
+        return protein_id, False, str(exc)
 
 
 # ---------------------------------------------------------------------
@@ -105,35 +140,19 @@ def build_close_contact_edges(
 # ---------------------------------------------------------------------
 # ESM embedding and annotation handling
 # ---------------------------------------------------------------------
-def load_esm_model() -> Tuple[torch.nn.Module, esm.Alphabet]:
+def load_esm_model(
+    local_checkpoint: Optional[Path] = None,
+) -> Tuple[torch.nn.Module, esm.Alphabet]:
+    if local_checkpoint:
+        checkpoint = Path(local_checkpoint)
+        if not checkpoint.exists():
+            raise FileNotFoundError(f"Local ESM checkpoint not found: {checkpoint}")
+        logger.info("Loading ESM model from local checkpoint %s", checkpoint)
+        return esm.pretrained.load_model_and_alphabet_local(checkpoint)
+
     model_name = "esm1b_t33_650M_UR50S"
-
-    def load_online():
-        logger.info("Attempting to download %s", model_name)
-        return esm.pretrained.esm1b_t33_650M_UR50S()
-
-    local_loader = lambda: (
-        esm.pretrained.load_model_and_alphabet_local(ESM_CHECKPOINT)
-        if ESM_CHECKPOINT.exists()
-        else None
-    )
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(load_online)
-        try:
-            model, alphabet = future.result(timeout=15)
-            logger.info("Loaded ESM model online")
-            return model, alphabet
-        except concurrent.futures.TimeoutError:
-            logger.warning("Online ESM load timed out after 15 s")
-        except Exception as exc:
-            logger.warning("Online ESM load failed: %s", exc)
-
-    if local_loader:
-        logger.info("Falling back to local checkpoint %s", ESM_CHECKPOINT)
-        return local_loader()
-
-    raise RuntimeError("Unable to load ESM1b model.")
+    logger.info("Downloading ESM model %s", model_name)
+    return esm.pretrained.esm1b_t33_650M_UR50S()
 
 
 def load_interpro_annotations() -> Tuple[Dict[str, torch.Tensor], int]:
@@ -269,18 +288,27 @@ def build_protein_graph(
 
 
 def add_close_contact_edges(data: HeteroData, protein_id: str) -> None:
-    pdb_path = PDB_DIR / f"AF-{protein_id}-F1-model_v6.pdb"
-    if not pdb_path.is_file():
-        with open(STRUCTURE_MISSING_PATH, "a") as fasta_out:
-            fasta_out.write(f">{protein_id}\n{data['protein'].sequence}\n")
-        logger.warning(
-            "No structure found for %s; storing sequence in missing list.", protein_id
-        )
-        data["aa", "close_to", "aa"].edge_index = torch.empty((2, 0), dtype=torch.long)
-        data["aa", "close_to", "aa"].edge_attr = torch.empty((0,), dtype=torch.float32)
-        return
+    af_path = DATA_ROOT / f"alphafold_pdb/AF-{protein_id}-F1-model_v6.pdb"
+    esmfold_path = DATA_ROOT / f"esmfold_pdb/ESM-{protein_id}-model_v1.pdb"
+    if not af_path.is_file():
+        if not esmfold_path.is_file():
+            with open(STRUCTURE_MISSING_PATH, "a") as fasta_out:
+                fasta_out.write(f">{protein_id}\n{data['protein'].sequence}\n")
+            logger.warning(
+                "No structure found for %s; storing sequence in missing list.",
+                protein_id,
+            )
+            data["aa", "close_to", "aa"].edge_index = torch.empty(
+                (2, 0), dtype=torch.long
+            )
+            data["aa", "close_to", "aa"].edge_attr = torch.empty(
+                (0,), dtype=torch.float32
+            )
+            return
+        else:
+            af_path = esmfold_path  # Use ESMFold structure if AlphaFold is missing
 
-    coords = load_ca_coordinates(pdb_path)
+    coords = load_ca_coordinates(af_path)
     num_nodes = data["aa"].num_nodes
     if coords.size(0) < num_nodes:
         logger.warning(
@@ -312,30 +340,58 @@ def add_close_contact_edges(data: HeteroData, protein_id: str) -> None:
 # Embedding executor
 # ---------------------------------------------------------------------
 class ProteinGraphPreprocessor:
-    def __init__(self):
+    def __init__(
+        self,
+        local_checkpoint: Optional[Path] = None,
+        embed_batch_size: int = DEFAULT_SEQUENCE_BATCH_SIZE,
+        num_workers: Optional[int] = None,
+    ):
+        self.output_dir = OUTPUT_DIR
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        logger.info("Using device %s", self.device)
+        self.mp_context = mp.get_context("spawn")
+
         self.output_dir = OUTPUT_DIR
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("Using device %s", self.device)
 
-        self.model, self.alphabet = load_esm_model()
+        self.model, self.alphabet = load_esm_model(local_checkpoint=local_checkpoint)
         self.model = self.model.to(self.device).eval()
         self.batch_converter = self.alphabet.get_batch_converter()
+        logger.info("Loaded ESM model to %s", self.device)
 
         self.max_tokens = getattr(
             getattr(self.model, "args", None), "max_positions", None
         )
         self.window_len = (self.max_tokens - 2) if self.max_tokens else None
         self.window_stride = max(1, self.window_len // 2) if self.window_len else None
-
-        self.interpro_dict, self.interpro_vocab_size = load_interpro_annotations()
-        self.go_annotations = load_go_annotations()
-        self.go_vocab_sizes = load_go_vocab()
-
-        logger.info("InterPro entries: %d", len(self.interpro_dict))
-        logger.info("GO vocab sizes: %s", self.go_vocab_sizes)
         logger.info(
             "ESM window length: %s",
             self.window_len if self.window_len else "unbounded",
+        )
+
+        self.interpro_dict, self.interpro_vocab_size = load_interpro_annotations()
+        logger.info("InterPro entries: %d", len(self.interpro_dict))
+
+        self.go_annotations = load_go_annotations()
+        logger.info("GO annotations for proteins: %d", len(self.go_annotations))
+        self.go_vocab_sizes = load_go_vocab()
+        logger.info("GO vocab sizes: %s", self.go_vocab_sizes)
+
+        self.embed_batch_size = max(1, embed_batch_size)
+        available_cpus = os.cpu_count() or 1
+        resolved_workers = (
+            num_workers
+            if num_workers and num_workers > 0
+            else max(1, available_cpus - 1)
+        )
+        self.num_workers = resolved_workers
+        self.max_inflight = max(self.num_workers, self.num_workers * 2)
+        logger.info(
+            "Embedding batch size: %d | CPU workers: %d | Max in-flight jobs: %d",
+            self.embed_batch_size,
+            self.num_workers,
+            self.max_inflight,
         )
 
     def embed_sequence(self, seq_id: str, seq: str) -> torch.Tensor:
@@ -351,7 +407,7 @@ class ProteinGraphPreprocessor:
                 reps = self.model(
                     tokens, repr_layers=[ESM_LAYER], return_contacts=False
                 )["representations"][ESM_LAYER]
-            return reps[0, 1 : 1 + L].cpu().to(torch.float32)
+            return reps[0, 1 : 1 + L].cpu().to(torch.float32).clone()
 
         starts = list(range(0, L, self.window_stride))
         if starts[-1] + self.window_len < L:
@@ -395,49 +451,140 @@ class ProteinGraphPreprocessor:
 
         counts[counts == 0] = 1
         emb = (acc / counts[:, None]).astype(np.float32)
-        return torch.from_numpy(emb)
+        return torch.from_numpy(emb).clone()
+
+    def embed_batch(self, records: List[SeqRecord]) -> Dict[str, torch.Tensor]:
+        results: Dict[str, torch.Tensor] = {}
+        short_sequences: List[Tuple[str, str]] = []
+
+        for record in records:
+            seq_id = record.id
+            sequence = str(record.seq)
+            if not sequence:
+                raise ValueError(f"Sequence {seq_id} is empty")
+            if self.window_len and len(sequence) > self.window_len:
+                results[seq_id] = self.embed_sequence(seq_id, sequence)
+            else:
+                short_sequences.append((seq_id, sequence))
+
+        for start in range(0, len(short_sequences), ESM_BATCH_SIZE):
+            chunk = short_sequences[start : start + ESM_BATCH_SIZE]
+            batch = [(seq_id, seq) for seq_id, seq in chunk]
+            _, _, tokens = self.batch_converter(batch)
+            tokens = tokens.to(self.device)
+            with torch.no_grad():
+                reps = (
+                    self.model(tokens, repr_layers=[ESM_LAYER], return_contacts=False)[
+                        "representations"
+                    ][ESM_LAYER]
+                    .detach()
+                    .cpu()
+                )
+            for (seq_id, seq), rep in zip(chunk, reps):
+                L = len(seq)
+                results[seq_id] = rep[1 : 1 + L].to(torch.float32).clone()
+
+        return results
 
     def process_fasta(self) -> Tuple[int, int]:
         if not FASTA_PATH.exists():
             raise FileNotFoundError(f"FASTA not found: {FASTA_PATH}")
 
         records = list(SeqIO.parse(str(FASTA_PATH), "fasta"))
+        if not records:
+            logger.warning("No sequences found in FASTA %s", FASTA_PATH)
+            return 0, 0
+
         success = 0
         failed = 0
+        pending = set()
 
-        for record in tqdm(records, desc="Embedding proteins", unit="protein"):
-            protein_id = record.id
-            sequence = str(record.seq)
-            try:
-                print(
-                    f"Processing protein {protein_id} with sequence length {len(sequence)}"
-                )
-                embeddings = self.embed_sequence(protein_id, sequence)
-                data = build_protein_graph(
-                    protein_id,
-                    embeddings,
-                    sequence,
-                    self.interpro_dict,
-                    self.go_annotations,
-                    self.interpro_vocab_size,
-                )
-                if data is None:
-                    failed += 1
+        with ProcessPoolExecutor(
+            max_workers=self.num_workers,
+            mp_context=self.mp_context,
+            initializer=_init_worker,
+            initargs=(
+                self.interpro_dict,
+                self.go_annotations,
+                self.interpro_vocab_size,
+            ),
+        ) as executor, tqdm(
+            total=len(records),
+            desc="Embedding + graph building",
+            unit="protein",
+        ) as progress:
+            for batch_start in range(0, len(records), self.embed_batch_size):
+                batch_records = records[
+                    batch_start : batch_start + self.embed_batch_size
+                ]
+                try:
+                    embeddings_map = self.embed_batch(batch_records)
+                except Exception as exc:
+                    logger.error(
+                        "Failed to embed batch starting at %d: %s", batch_start, exc
+                    )
+                    failed += len(batch_records)
+                    progress.update(len(batch_records))
                     continue
-                add_close_contact_edges(data, protein_id)
-                torch.save(data, self.output_dir / f"{protein_id}.pt")
-                success += 1
-            except Exception as exc:
-                logger.error("Failed to process %s: %s", protein_id, exc)
-                failed += 1
+
+                for record in batch_records:
+                    protein_id = record.id
+                    sequence = str(record.seq)
+                    embeddings = embeddings_map.get(protein_id)
+                    if embeddings is None:
+                        logger.error("Missing embeddings for %s", protein_id)
+                        failed += 1
+                        progress.update(1)
+                        continue
+                    future = executor.submit(
+                        _build_and_save_protein_graph,
+                        (protein_id, sequence, embeddings),
+                    )
+                    pending.add(future)
+                    if len(pending) >= self.max_inflight:
+                        done_future = next(as_completed(pending))
+                        protein_id, ok, error = done_future.result()
+                        if ok:
+                            success += 1
+                        else:
+                            failed += 1
+                            if error:
+                                logger.error(
+                                    "Graph build failed for %s: %s", protein_id, error
+                                )
+                        progress.update(1)
+                        pending.remove(done_future)
+
+            if pending:
+                for done_future in as_completed(pending):
+                    protein_id, ok, error = done_future.result()
+                    if ok:
+                        success += 1
+                    else:
+                        failed += 1
+                        if error:
+                            logger.error(
+                                "Graph build failed for %s: %s", protein_id, error
+                            )
+                    progress.update(1)
+                pending.clear()
 
         logger.info("Finished embeddings: success=%d failed=%d", success, failed)
         return success, failed
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Protein graph preprocessing")
+    parser.add_argument(
+        "--local",
+        type=Path,
+        default=None,
+        help=f"Path to a local ESM checkpoint (defaults to online download).",
+    )
+    args = parser.parse_args()
+
     logger.info("Starting protein graph preprocessing")
-    preprocessor = ProteinGraphPreprocessor()
+    preprocessor = ProteinGraphPreprocessor(local_checkpoint=args.local)
     success, failed = preprocessor.process_fasta()
     logger.info("Processing complete - Successful: %d, Failed: %d", success, failed)
     print("Embedding preprocessing complete!")

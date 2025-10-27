@@ -331,7 +331,11 @@ def analyze_attention_captum_correlation(
     key = ("aa", "belongs_to", "protein")
 
     captum_edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
-    captum_scores = hetero_explanation[key]["edge_mask"].detach().cpu().view(-1)
+    captum_scores = hetero_explanation[key]["edge_mask"].detach().cpu()
+    seed_mask = captum_edge_index[1] == 0  # analyze edges to root protein only
+    captum_edge_index = captum_edge_index[:, seed_mask]
+    captum_scores = captum_scores[seed_mask]
+
     edge_to_captum = {
         (int(captum_edge_index[0, i]), int(captum_edge_index[1, i])): float(
             captum_scores[i].item()
@@ -346,6 +350,8 @@ def analyze_attention_captum_correlation(
         edge_index, attn_weights = layer_attention[key]
         edge_index = edge_index.detach().cpu()
         attn_vals = _mean_attention(attn_weights.detach().cpu())
+        edge_index = edge_index[:, seed_mask]  # edges nattn to root protein only
+        attn_vals = attn_vals[seed_mask]
 
         shared_attn, shared_captum = [], []
         for i in range(edge_index.size(1)):

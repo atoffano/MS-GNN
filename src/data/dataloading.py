@@ -181,60 +181,147 @@ class SwissProtDataset:
 
     def _create_protein_graph(self, config):
         """Creates the high-level protein network."""
-        alignment_path = (
-            f"{config['run']['project_path']}{config['data']['alignment_path'][1:]}"
-        )
-        alignment_df = pd.read_csv(
-            alignment_path,
-            sep="\t",
-            header=None,
-            names=[
-                "protein1",
-                "protein2",
-                "identity",
-                "aln_len",
-                "mismatch",
-                "gapopen",
-                "qstart",
-                "qend",
-                "sstart",
-                "send",
-                "evalue",
-                "bitscore",
-            ],
-        )
-        if self.uses_entryid:
-            alignment_df["protein1"] = alignment_df["protein1"].map(
-                self.rev_pid_mapping
+
+        def alignment_edge_data():
+            alignment_path = (
+                f"{config['run']['project_path']}{config['data']['alignment_path'][1:]}"
             )
-            alignment_df["protein2"] = alignment_df["protein2"].map(
-                self.rev_pid_mapping
+            alignment_df = pd.read_csv(
+                alignment_path,
+                sep="\t",
+                header=None,
+                names=[
+                    "protein1",
+                    "protein2",
+                    "identity",
+                    "aln_len",
+                    "mismatch",
+                    "gapopen",
+                    "qstart",
+                    "qend",
+                    "sstart",
+                    "send",
+                    "evalue",
+                    "bitscore",
+                ],
+            )
+            if self.uses_entryid:
+                alignment_df["protein1"] = alignment_df["protein1"].map(
+                    self.rev_pid_mapping
+                )
+                alignment_df["protein2"] = alignment_df["protein2"].map(
+                    self.rev_pid_mapping
+                )
+
+            # Convert to indices
+            source_indices = alignment_df["protein1"].map(self.protein_to_idx).tolist()
+            target_indices = alignment_df["protein2"].map(self.protein_to_idx).tolist()
+            # Protein-protein edges
+            edge_index = torch.tensor(
+                [source_indices, target_indices], dtype=torch.long
+            )
+            if config["model"]["edge_attrs"]:
+                features = alignment_df.drop(columns=["protein1", "protein2"])
+                means = features.mean()
+                stds = features.std()
+                normalized_features = (features - means) / stds
+                edge_attrs = torch.tensor(
+                    normalized_features.values, dtype=torch.float32
+                )
+            else:
+                edge_attrs = None
+
+            return edge_index, edge_attrs
+
+        def stringdb_edge_data():
+            stringdb_mapping = (
+                pd.read_csv(
+                    f"./data/swissprot/2024_01/idmapping_swissprot_stringdb.tsv",  # Most up to date mapping
+                    sep="\t",
+                    usecols=["From", "To"],
+                )
+                .set_index("From")
+                .to_dict()["To"]
+            )
+            rev_stringdb_mapping = {v: k for k, v in stringdb_mapping.items()}
+
+            stringdb_path = (
+                f"{config['run']['project_path']}{config['data']['stringdb_path'][1:]}"
+            )
+            stringdb_df = pd.read_csv(
+                stringdb_path,
+                sep="\t",
+                header=None,
+                names=[
+                    "protein1",
+                    "protein2",
+                    "neighborhood",
+                    "fusion",
+                    "cooccurence",
+                    "coexpression",
+                    "experimental",
+                    "database",
+                    "textmining",
+                    "combined_score",
+                ],
             )
 
-        # Convert to indices
-        source_indices = alignment_df["protein1"].map(self.protein_to_idx).tolist()
-        target_indices = alignment_df["protein2"].map(self.protein_to_idx).tolist()
+            stringdb_df["protein1"] = stringdb_df["protein1"].map(rev_stringdb_mapping)
+            stringdb_df["protein2"] = stringdb_df["protein2"].map(rev_stringdb_mapping)
+
+            # Keep proteins in SwissProt
+            stringdb_df = stringdb_df[
+                stringdb_df["protein1"].isin(stringdb_mapping)
+                & stringdb_df["protein2"].isin(stringdb_mapping)
+            ]
+
+            if self.uses_entryid:
+                stringdb_df["protein1"] = stringdb_df["protein1"].map(
+                    self.rev_pid_mapping
+                )
+                stringdb_df["protein2"] = stringdb_df["protein2"].map(
+                    self.rev_pid_mapping
+                )
+
+            # Convert to indices
+            source_indices = stringdb_df["protein1"].map(self.protein_to_idx).tolist()
+            target_indices = stringdb_df["protein2"].map(self.protein_to_idx).tolist()
+            # Protein-protein edges
+            edge_index = torch.tensor(
+                [source_indices, target_indices], dtype=torch.long
+            )
+            if config["model"]["edge_attrs"]:
+                features = stringdb_df.drop(columns=["protein1", "protein2"])
+                means = features.mean()
+                stds = features.std()
+                normalized_features = (features - means) / stds
+                edge_attrs = torch.tensor(
+                    normalized_features.values, dtype=torch.float32
+                )
+            else:
+                edge_attrs = None
+
+            return edge_index, edge_attrs
 
         data = HeteroData()
+        logger.info("Creating protein-protein graph edges...")
+        alignment_edge_index, alignment_edge_attrs = alignment_edge_data()
+        logger.info(f"Alignment edges: {alignment_edge_index.shape[1]}")
+        # stringdb_edge_index, stringdb_edge_attrs = stringdb_edge_data()
+        # logger.info(f"STRINGdb edges: {stringdb_edge_index.shape[1]}")
 
         # Protein nodes - aa features are added later when batching
         num_proteins = len(self.proteins)
         data["protein"].num_nodes = num_proteins
 
-        # Protein-protein edges
-        protein_edge_index = torch.tensor(
-            [source_indices, target_indices], dtype=torch.long
-        )
-        if config["model"]["edge_attrs"]:
-            features = alignment_df.drop(columns=["protein1", "protein2"])
-            means = features.mean()
-            stds = features.std()
-            normalized_features = (features - means) / stds
-            edge_attrs = torch.tensor(normalized_features.values, dtype=torch.float32)
-            data["protein", "aligned_with", "protein"].edge_attr = edge_attrs
+        data["protein", "aligned_with", "protein"].edge_index = alignment_edge_index
+        # data["protein", "stringdb", "protein"].edge_index = stringdb_edge_index
 
-        data["protein", "aligned_with", "protein"].edge_index = protein_edge_index
-        logger.info(f"Built protein-protein graph with {len(source_indices)} edges")
+        if config["model"]["edge_attrs"]:
+            logger.info("Adding edge attributes...")
+            data["protein", "aligned_with", "protein"].edge_attr = alignment_edge_attrs
+            data["protein", "stringdb", "protein"].edge_attr = stringdb_edge_attrs
+
         return data
 
     def load_protein_graph(self, protein_id):

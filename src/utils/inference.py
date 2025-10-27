@@ -204,8 +204,8 @@ def generate_explanations(model, batch, device):
     # Create explainer
     explainer = Explainer(
         model,
-        algorithm=CaptumExplainer("Saliency"),
-        explanation_type="model",
+        algorithm=CaptumExplainer("IntegratedGradients"),
+        explanation_type="phenomenon",
         node_mask_type=None,
         edge_mask_type="object",
         model_config=dict(
@@ -221,41 +221,34 @@ def generate_explanations(model, batch, device):
     sample_pos = torch.where(batch["protein"].y == 1)[1]
     sample_neg = torch.where(batch["protein"].y == 0)[1]
     sample_neg = sample_neg[: len(sample_pos)]
+    # Target a torch tensor of len batch["protein"].y, filled with 0 except on pos 1 where 1
+    for idx in sample_pos:
+        logger.info(f"Computing attributions for predicted GO term {idx.item()}")
+        target = torch.zeros(
+            batch["protein"].y.size(1), dtype=torch.long, device=device
+        )
+        hetero_explanation = explainer(
+            batch.x_dict,
+            batch.edge_index_dict,
+            batch=batch,
+            target=target,
+            index=None,  # Transformed in Captum to a binary classification target. Leave as none
+            # index=sample_pos,
+        )
 
-    hetero_explanation = explainer(
-        batch.x_dict,
-        batch.edge_index_dict,
-        batch=batch,
-        target=None,
-        index=torch.arange(batch["protein"].batch_size),
-    )
+        for key in [
+            ("aa", "belongs_to", "protein"),
+            ("protein", "aligned_with", "protein"),
+        ]:
+            hetero_explanation[key]["edge_mask"] = hetero_explanation[key][
+                "edge_mask"
+            ].abs()
+            # Apply min max scaling
+            em = hetero_explanation[key]["edge_mask"]
+            em = (em - em.min()) / (em.max() - em.min() + 1e-8)
+            hetero_explanation[key]["edge_mask"] = em
 
-    logger.info(
-        f"Generated explanations in {hetero_explanation.available_explanations}"
-    )
-
-    for key in [
-        ("aa", "belongs_to", "protein"),
-        ("protein", "aligned_with", "protein"),
-    ]:
-        hetero_explanation[key]["edge_mask"] = hetero_explanation[key][
-            "edge_mask"
-        ].abs()
-        # Apply min max scaling
-        em = hetero_explanation[key]["edge_mask"]
-        em = (em - em.min()) / (em.max() - em.min() + 1e-8)
-        hetero_explanation[key]["edge_mask"] = em
-
-    return hetero_explanation
-
-
-def export_attention_artifacts(output_dir, dataset, batch, attentions):
-    if attentions is None:
-        return
-    for idx, layer_attention in enumerate(attentions, start=1):
-        plot_systemic_attention(output_dir, layer_attention, dataset, batch, idx)
-        plot_protein_attention(output_dir, layer_attention, dataset, batch, idx)
-        export_layer_attention_3d(output_dir, dataset, batch, idx, layer_attention)
+        return hetero_explanation
 
 
 def main():
@@ -307,6 +300,15 @@ def main():
     logger.info(
         f"Explanation generation completed! Results saved to: {args.model_path}"
     )
+
+
+def export_attention_artifacts(output_dir, dataset, batch, attentions):
+    if attentions is None:
+        return
+    for idx, layer_attention in enumerate(attentions, start=1):
+        plot_systemic_attention(output_dir, layer_attention, dataset, batch, idx)
+        plot_protein_attention(output_dir, layer_attention, dataset, batch, idx)
+        export_layer_attention_3d(output_dir, dataset, batch, idx, layer_attention)
 
 
 if __name__ == "__main__":

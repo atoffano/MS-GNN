@@ -111,7 +111,7 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
                 val_batch["protein"].y,
             )
             val_loss_sum += val_loss.item() / val_batch["protein"].batch_size
-            all_scores.append(torch.sigmoid(val_out).cpu().numpy())
+            all_scores.append(val_out.cpu().numpy())
             all_targets.append(val_batch["protein"].y.cpu().numpy())
 
     precision, recall, aupr, fmax = compute_metrics(all_scores, all_targets)

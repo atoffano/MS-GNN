@@ -71,42 +71,22 @@ class ProteinGNN(torch.nn.Module):
         )
         self.conv1 = HeteroGATConv(
             edge_types=[
-                ("aa", "close_to", "aa"),
+                # ("aa", "close_to", "aa"),
                 ("aa", "belongs_to", "protein"),
                 ("protein", "aligned_with", "protein"),
+                # ("protein", "stringdb", "protein"),
             ],
             channels=hidden_channels,
         )
-        # self.conv1 = HeteroConv(
-        #     {
-        #         ("aa", "belongs_to", "protein"): GATv2Conv(
-        #             in_channels=(-1, -1),
-        #             out_channels=hidden_channels,
-        #             add_self_loops=False,
-        #         ),
-        #         ("protein", "aligned_with", "protein"): GATv2Conv(
-        #             (-1, -1),
-        #             hidden_channels,
-        #             add_self_loops=False,
-        #             edge_dim=(
-        #                 dataset.data.num_edge_features[
-        #                     ("protein", "aligned_with", "protein")
-        #                 ]
-        #                 if self.edge_attrs
-        #                 else None
-        #             ),
-        #         ),
-        #     },
-        #     aggr="sum",
-        # )
         self.prelu_gnn1 = PReLU()
         self.bn_gnn1 = BatchNorm(hidden_channels)
 
         self.conv2 = HeteroGATConv(
             edge_types=[
-                ("aa", "close_to", "aa"),
+                # ("aa", "close_to", "aa"),
                 ("aa", "belongs_to", "protein"),
                 ("protein", "aligned_with", "protein"),
+                # ("protein", "stringdb", "protein"),
             ],
             channels=hidden_channels,
         )
@@ -169,7 +149,11 @@ class ProteinGNN(torch.nn.Module):
 
         x_prot = self.lin_out(x_prot)
 
+        if not self.training:
+            x_prot = torch.sigmoid(x_prot)
+
         if return_attention_weights:
             attentions = (attn1, attn2)
             return x_prot, attentions
+
         return x_prot
