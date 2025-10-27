@@ -59,6 +59,19 @@ def build_and_save_protein_graph(
     go_annotations: Dict[str, Dict[str, Dict[str, List[str]]]],
     interpro_vocab_size: int,
 ) -> Tuple[bool, Optional[str], bool]:
+    """Build and save a heterogeneous protein graph to disk.
+    
+    Args:
+        protein_id: Unique protein identifier
+        sequence: Amino acid sequence
+        h5f: Open HDF5 file containing ESM embeddings
+        interpro_dict: Dictionary mapping protein IDs to InterPro annotations
+        go_annotations: Nested dict of GO term annotations by ontology
+        interpro_vocab_size: Size of InterPro vocabulary
+        
+    Returns:
+        Tuple of (success, error_message, embeddings_missing)
+    """
 
     if protein_id not in h5f:
         return False, "Embeddings missing in H5", True
@@ -86,6 +99,14 @@ def build_and_save_protein_graph(
 
 
 def load_ca_coordinates(pdb_path: Path) -> torch.Tensor:
+    """Load C-alpha atom coordinates from a PDB file.
+    
+    Args:
+        pdb_path: Path to PDB structure file
+        
+    Returns:
+        Tensor of C-alpha coordinates, shape (n_residues, 3)
+    """
     parser = PDBParser(QUIET=True)
     structure = parser.get_structure(pdb_path.stem, str(pdb_path))
     ca_coords: List[np.ndarray] = []
@@ -107,6 +128,16 @@ def build_close_contact_edges(
     cutoff: float = CONTACT_CUTOFF,
     chunk_size: int = CONTACT_CHUNK,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Build edges between spatially close amino acid residues.
+    
+    Args:
+        coords: C-alpha coordinates tensor, shape (n_residues, 3)
+        cutoff: Distance threshold in Angstroms for defining contacts
+        chunk_size: Chunk size for memory-efficient distance computation
+        
+    Returns:
+        Tuple of (edge_index, edge_distances)
+    """
     n = coords.size(0)
     if n <= 1:
         return (
