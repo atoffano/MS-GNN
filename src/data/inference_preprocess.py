@@ -1,3 +1,16 @@
+"""End-to-end preprocessing pipeline for single protein inference.
+
+This module provides a complete preprocessing workflow for preparing individual
+proteins for inference with a trained model. It handles all required steps:
+- ESM embedding generation
+- Structure prediction via ESMFold (if needed)
+- InterPro domain annotation via InterProScan API
+- Graph construction with all node and edge features
+
+This is particularly useful for inference on new, unannotated proteins where
+the full preprocessing pipeline must be run on-the-fly.
+"""
+
 import argparse
 import json
 import logging

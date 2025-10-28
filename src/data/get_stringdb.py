@@ -1,3 +1,11 @@
+"""STRING database integration for protein-protein interactions.
+
+This module downloads and filters STRING database protein interaction data
+to include only interactions relevant to the SwissProt protein set. STRING
+provides experimentally validated and computationally predicted protein-protein
+interactions that can be used as edges in the heterogeneous graph.
+"""
+
 import os
 import gzip
 import requests

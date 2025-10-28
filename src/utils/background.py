@@ -1,3 +1,10 @@
+"""Background file generation for Gene Ontology annotation evaluation.
+
+This module provides utilities to create background files used in protein function
+prediction evaluation. It merges GO annotations from different ontologies (CCO, BPO, MFO)
+and prepares data for information content calculations and evaluation metrics.
+"""
+
 import pandas as pd
 import argparse
 import pickle

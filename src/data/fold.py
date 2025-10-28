@@ -1,3 +1,16 @@
+"""ESMFold structure prediction for proteins.
+
+This module generates 3D protein structures using ESMFold for sequences that
+lack AlphaFold predictions. It provides batch processing capabilities and
+handles large proteins through intelligent batching strategies.
+
+The module supports:
+- Structure prediction using Facebook's ESMFold model
+- Batching by total amino acid count for memory efficiency
+- Automatic fallback for large proteins
+- Local and remote model checkpoint support
+"""
+
 import argparse
 import math
 from pathlib import Path
@@ -17,6 +30,11 @@ MISSING_FASTA = DATA_DIR / "structure_missing.fasta"
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for ESMFold structure generation.
+    
+    Returns:
+        Parsed arguments namespace with fasta and local flags
+    """
     parser = argparse.ArgumentParser(
         description="Generate ESMFold structures for sequences lacking Alphafold PDBs."
     )
@@ -30,6 +48,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def read_fasta(path: Path) -> List[Tuple[str, str]]:
+    """Read sequences from a FASTA file.
+    
+    Args:
+        path: Path to FASTA file
+        
+    Returns:
+        List of (sequence_id, sequence) tuples
+    """
     records: List[Tuple[str, str]] = []
     header = None
     pieces: List[str] = []
@@ -51,6 +77,12 @@ def read_fasta(path: Path) -> List[Tuple[str, str]]:
 
 
 def write_fasta(records: Iterable[Tuple[str, str]], path: Path) -> None:
+    """Write sequences to a FASTA file.
+    
+    Args:
+        records: Iterable of (sequence_id, sequence) tuples
+        path: Output path for FASTA file
+    """
     with path.open("w", encoding="utf-8") as handle:
         for rid, seq in records:
             handle.write(f">{rid}\n{seq}\n")
@@ -59,6 +91,14 @@ def write_fasta(records: Iterable[Tuple[str, str]], path: Path) -> None:
 def load_model(
     local: bool,
 ) -> Tuple[AutoTokenizer, EsmForProteinFolding, torch.device]:
+    """Load ESMFold model and tokenizer.
+    
+    Args:
+        local: If True, use local checkpoint; otherwise download from HuggingFace
+        
+    Returns:
+        Tuple of (tokenizer, model, device)
+    """
     tokenizer = AutoTokenizer.from_pretrained(
         "facebook/esmfold_v1", local_files_only=local
     )
@@ -78,6 +118,15 @@ def load_model(
 
 
 def convert_outputs_to_pdb(raw_outputs, seq_lengths: List[int]) -> List[str]:
+    """Convert ESMFold model outputs to PDB format strings.
+    
+    Args:
+        raw_outputs: Dictionary of model outputs from ESMFold
+        seq_lengths: List of sequence lengths for each protein in batch
+        
+    Returns:
+        List of PDB format strings
+    """
     final_atom_positions = atom14_to_atom37(raw_outputs["positions"][-1], raw_outputs)
     outputs_np = {k: v.to("cpu").numpy() for k, v in raw_outputs.items()}
     final_atom_positions = final_atom_positions.cpu().numpy()
@@ -137,7 +186,18 @@ def batched_by_length(records: List[Tuple[str, str]], max_aa: int = 1000):
 def generate_pdb_batch(
     batch: List[Tuple[str, str]], tokenizer, model, device, truncation=False
 ) -> Tuple[List[str], dict, List[int]]:
-    """Generate model outputs for a batch. Returns (seq_ids, raw_outputs, seq_lengths)"""
+    """Generate ESMFold model outputs for a batch of sequences.
+    
+    Args:
+        batch: List of (sequence_id, sequence) tuples
+        tokenizer: ESMFold tokenizer
+        model: ESMFold model
+        device: Torch device
+        truncation: Whether to truncate sequences longer than max_length
+        
+    Returns:
+        Tuple of (sequence_ids, model_outputs, sequence_lengths)
+    """
     sequences = [seq for _, seq in batch]
     seq_ids = [seq_id for seq_id, _ in batch]
     seq_lengths = [len(seq) for seq in sequences]
@@ -156,6 +216,15 @@ def generate_pdb_batch(
 
 
 def fold(batch, tokenizer, model, device, truncation):
+    """Generate and save PDB files for a batch of sequences.
+    
+    Args:
+        batch: List of (sequence_id, sequence) tuples
+        tokenizer: ESMFold tokenizer
+        model: ESMFold model
+        device: Torch device
+        truncation: Whether to truncate sequences longer than max_length
+    """
     seq_ids, outputs, seq_lengths = generate_pdb_batch(
         batch, tokenizer, model, device, truncation=truncation
     )
@@ -168,6 +237,11 @@ def fold(batch, tokenizer, model, device, truncation):
 
 
 def main() -> None:
+    """Main function to generate ESMFold structures for missing proteins.
+    
+    Reads input FASTA, checks for existing structures, and generates
+    new PDB files using ESMFold for proteins lacking AlphaFold predictions.
+    """
     args = parse_args()
 
     sequences = read_fasta(args.fasta)

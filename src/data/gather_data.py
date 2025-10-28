@@ -1,3 +1,16 @@
+"""SwissProt data download and preprocessing utilities.
+
+This module provides functions to download and preprocess data required for
+protein function prediction, including:
+- AlphaFold protein structures from the SwissProt database
+- InterPro domain annotations
+- STRING database protein interactions
+- Filtering data to match the SwissProt protein set
+
+The preprocessing pipeline ensures all required data sources are downloaded,
+extracted, and filtered to contain only proteins in the target dataset.
+"""
+
 import gzip
 import logging
 import shutil
@@ -160,6 +173,11 @@ def process_interpro_annotations(
 def get_stringdb(
     base_dir,
 ):
+    """Download and filter STRING database protein interactions.
+    
+    Args:
+        base_dir: Base directory path for data storage
+    """
     stringdb_url = (
         "https://stringdb-downloads.org/download/stream/protein.links.detailed.v12.0.onlyAB.tsv.gz",
     )

@@ -1,3 +1,17 @@
+"""Heterogeneous graph construction for protein function prediction.
+
+This module creates individual protein graphs combining multiple data sources:
+- Protein sequences and metadata
+- ESM embeddings for amino acid residues
+- 3D structure information (AlphaFold/ESMFold)
+- InterPro domain annotations
+- Gene Ontology term annotations (MFO, BPO, CCO)
+
+The resulting graphs are heterogeneous with protein and amino acid nodes,
+connected through various edge types including spatial contacts and protein
+membership relationships.
+"""
+
 import argparse
 import logging
 import multiprocessing as mp
@@ -45,6 +59,19 @@ def build_and_save_protein_graph(
     go_annotations: Dict[str, Dict[str, Dict[str, List[str]]]],
     interpro_vocab_size: int,
 ) -> Tuple[bool, Optional[str], bool]:
+    """Build and save a heterogeneous protein graph to disk.
+    
+    Args:
+        protein_id: Unique protein identifier
+        sequence: Amino acid sequence
+        h5f: Open HDF5 file containing ESM embeddings
+        interpro_dict: Dictionary mapping protein IDs to InterPro annotations
+        go_annotations: Nested dict of GO term annotations by ontology
+        interpro_vocab_size: Size of InterPro vocabulary
+        
+    Returns:
+        Tuple of (success, error_message, embeddings_missing)
+    """
 
     if protein_id not in h5f:
         return False, "Embeddings missing in H5", True
@@ -72,6 +99,14 @@ def build_and_save_protein_graph(
 
 
 def load_ca_coordinates(pdb_path: Path) -> torch.Tensor:
+    """Load C-alpha atom coordinates from a PDB file.
+    
+    Args:
+        pdb_path: Path to PDB structure file
+        
+    Returns:
+        Tensor of C-alpha coordinates, shape (n_residues, 3)
+    """
     parser = PDBParser(QUIET=True)
     structure = parser.get_structure(pdb_path.stem, str(pdb_path))
     ca_coords: List[np.ndarray] = []
@@ -93,6 +128,16 @@ def build_close_contact_edges(
     cutoff: float = CONTACT_CUTOFF,
     chunk_size: int = CONTACT_CHUNK,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Build edges between spatially close amino acid residues.
+    
+    Args:
+        coords: C-alpha coordinates tensor, shape (n_residues, 3)
+        cutoff: Distance threshold in Angstroms for defining contacts
+        chunk_size: Chunk size for memory-efficient distance computation
+        
+    Returns:
+        Tuple of (edge_index, edge_distances)
+    """
     n = coords.size(0)
     if n <= 1:
         return (
@@ -127,6 +172,11 @@ def build_close_contact_edges(
 
 
 def load_interpro_annotations() -> Tuple[Dict[str, torch.Tensor], int]:
+    """Load and vectorize InterPro domain annotations.
+    
+    Returns:
+        Tuple of (protein_to_interpro_vector_dict, interpro_vocab_size)
+    """
     df = pd.read_csv(INTERPRO_TSV, sep="\t")
     ipr_ids = sorted(df["IPR"].unique())
     ipr_to_idx = {ipr: i for i, ipr in enumerate(ipr_ids)}
@@ -146,6 +196,11 @@ def load_interpro_annotations() -> Tuple[Dict[str, torch.Tensor], int]:
 
 
 def load_go_vocab() -> Dict[str, int]:
+    """Load GO term vocabulary from OBO file.
+    
+    Returns:
+        Dictionary mapping ontology names to vocabulary sizes
+    """
     namespace_map = {
         "biological_process": "BPO",
         "cellular_component": "CCO",

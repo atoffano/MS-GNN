@@ -1,3 +1,10 @@
+"""Protein alignment using DIAMOND for sequence similarity search.
+
+This script provides functionality to run DIAMOND (a fast sequence aligner) for
+protein-protein alignment. It's used to find sequence similarities between proteins
+which are then used as edges in the protein-protein graph.
+"""
+
 import subprocess
 
 # Paths

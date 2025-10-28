@@ -1,3 +1,11 @@
+"""BEPROF evaluation metrics for protein function prediction.
+
+This module implements evaluation metrics compatible with the BEPROF (Benchmark of
+Protein Function) framework. It includes functions for computing F-max, AUPR, and
+other performance metrics for multi-label GO term prediction, along with utilities
+for handling GO term hierarchies and information content.
+"""
+
 import warnings
 import numpy as np
 import scipy.sparse as ssp
@@ -12,6 +20,11 @@ import tqdm
 
 
 def parse_args():
+    """Parse command-line arguments for BEPROF evaluation.
+    
+    Returns:
+        Parsed arguments namespace
+    """
     parser = argparse.ArgumentParser(description="uniprot_API")
     parser.add_argument("--predict")
     parser.add_argument("--output_path")
@@ -37,6 +50,17 @@ ROOT_GO_TERMS = {"GO:0003674", "GO:0008150", "GO:0005575"}
 
 
 def fmax(go, targets, scores, idx_goid):
+    """Calculate F-max score with information content weighting.
+    
+    Args:
+        go: GO ontology object with IC calculation methods
+        targets: Target annotations matrix
+        scores: Prediction scores matrix
+        idx_goid: List mapping indices to GO term IDs
+        
+    Returns:
+        Tuple of F-max metrics including IC-weighted and depth-weighted versions
+    """
     targets = ssp.csr_matrix(targets)
 
     fmax_ = 0.0, 0.0, 0.0
@@ -163,12 +187,26 @@ def fmax(go, targets, scores, idx_goid):
 
 
 def read_pkl(pklfile):
+    """Load data from a pickle file.
+    
+    Args:
+        pklfile: Path to pickle file
+        
+    Returns:
+        Unpickled data object
+    """
     with open(pklfile, "rb") as fr:
         data = pkl.load(fr)
     return data
 
 
 def save_pkl(pklfile, data):
+    """Save data to a pickle file.
+    
+    Args:
+        pklfile: Path to output pickle file
+        data: Data object to pickle
+    """
     with open(pklfile, "wb") as fw:
         pkl.dump(data, fw)
 

@@ -1,3 +1,17 @@
+"""Complete graph preprocessing pipeline for protein datasets.
+
+This module orchestrates the full preprocessing pipeline for creating protein
+graphs from raw data, combining multiple data sources and processing steps:
+- ESM embedding generation for residues
+- 3D structure loading and contact computation
+- InterPro domain annotation integration
+- GO term annotation processing
+- Protein-protein alignment via DIAMOND
+
+Unlike create_graphs.py which builds individual graphs, this module manages
+the entire preprocessing workflow with proper ordering and dependency handling.
+"""
+
 import argparse
 import logging
 import warnings

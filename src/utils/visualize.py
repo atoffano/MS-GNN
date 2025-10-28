@@ -1,3 +1,14 @@
+"""Visualization utilities for model interpretability and analysis.
+
+This module provides comprehensive visualization tools for understanding model
+predictions and internal representations, including:
+- Attention weight visualization on protein structures
+- Attribution score plotting
+- Network graph visualizations
+- PyMOL integration for 3D structure rendering
+- Correlation analysis between attention and attribution methods
+"""
+
 import logging
 import os
 from dataclasses import dataclass

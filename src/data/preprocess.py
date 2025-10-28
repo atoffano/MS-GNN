@@ -1,3 +1,11 @@
+"""InterPro annotation preprocessing for SwissProt proteins.
+
+This script downloads and processes InterPro protein domain annotations,
+filtering them to include only proteins present in the SwissProt dataset.
+InterPro annotations provide functional domain information that serves as
+additional node features in the protein graphs.
+"""
+
 import pandas as pd
 import requests
 import gzip

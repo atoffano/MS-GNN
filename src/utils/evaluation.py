@@ -1,3 +1,12 @@
+"""Evaluation utilities for model predictions and metrics computation.
+
+This module provides functions for evaluating protein function predictions, including:
+- Computing precision-recall metrics (AUPR, F-max)
+- Saving model predictions to files
+- Generating evaluation plots and visualizations
+- Integration with BEPROF evaluation framework
+"""
+
 import pandas as pd
 import os
 import sys
@@ -58,6 +67,16 @@ def plot_aupr(precision, recall, aupr=None):
 
 @timeit
 def save_predictions(config, model, loader, device, dataset, split=None):
+    """Save model predictions to a TSV file.
+    
+    Args:
+        config: Configuration dictionary
+        model: Trained ProteinGNN model
+        loader: DataLoader for the dataset split
+        device: torch.device for computation
+        dataset: SwissProtDataset instance
+        split: Dataset split name ('train', 'val', or 'test')
+    """
     model.eval()
     go_idx_to_term = {
         v: k for k, v in dataset.go_vocab_info[dataset.subontology]["go_to_idx"].items()
@@ -305,6 +324,12 @@ def convert_predictions(pred_file, subontology):
 
 
 def setup_logging(output_dir, subontology):
+    """Set up logging configuration for evaluation.
+    
+    Args:
+        output_dir: Directory to store log files
+        subontology: GO subontology name (MFO, BPO, or CCO)
+    """
     import logging
 
     log_dir = os.path.join(output_dir, "logs")

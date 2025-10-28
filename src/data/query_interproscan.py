@@ -1,3 +1,14 @@
+"""InterProScan REST API client for protein domain annotation.
+
+This module provides a client interface to the InterProScan 5 REST API for
+querying protein domain and family annotations. InterProScan integrates
+multiple protein signature databases (Pfam, SMART, ProSite, etc.) and
+returns unified IPR accessions for detected domains.
+
+The client handles job submission, polling, and result parsing for
+on-demand protein annotation during inference.
+"""
+
 import requests
 import time
 
