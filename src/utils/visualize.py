@@ -11,8 +11,9 @@ predictions and internal representations, including:
 
 import logging
 import os
+import shutil
 from dataclasses import dataclass
-from typing import Sequence, Tuple
+from typing import Sequence, Tuple, Optional
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -80,24 +81,57 @@ def _download_alphafold(uniprot_id: str, dest_path: str) -> bool:
 
 def ensure_structure(uniprot_id: str, out_dir: str) -> str:
     """
-    Download a structure for the UniProt ID, preferring PDB (RCSB) entries,
-    falling back to AlphaFold if no experimental structure exists.
-    Returns the local PDB path.
+    Get structure for the UniProt ID, checking local caches before downloading.
+    Priority:
+    1. Check out_dir cache
+    2. Check data/swissprot/2024_01/alphafold_pdb
+    3. Check data/swissprot/2024_01/esmfold_pdb
+    4. Download from PDB (RCSB)
+    5. Download from AlphaFold
+
+    Returns the local PDB path in out_dir.
     """
     os.makedirs(out_dir, exist_ok=True)
     pdb_path = os.path.join(out_dir, f"{uniprot_id}.pdb")
+
+    # Check if already in output directory cache
     if os.path.exists(pdb_path):
-        logger.info(f"Got PDB structure for {uniprot_id} from local cache")
+        logger.info(f"Got PDB structure for {uniprot_id} from output directory cache")
         return pdb_path
 
+    # Get base directory relative to this file (src/utils/visualize.py)
+    current_file_dir = os.path.dirname(os.path.abspath(__file__))
+    base_data_dir = os.path.join(
+        current_file_dir, "..", "..", "data", "swissprot", "2024_01"
+    )
+
+    # Check local data directories
+    local_cache_dirs = [
+        os.path.join(base_data_dir, "alphafold_pdb"),
+        os.path.join(base_data_dir, "esmfold_pdb"),
+    ]
+
+    for cache_dir in local_cache_dirs:
+        cache_path = os.path.join(cache_dir, f"{uniprot_id}.pdb")
+        if os.path.exists(cache_path):
+            shutil.copy2(cache_path, pdb_path)
+            logger.info(
+                f"Got PDB structure for {uniprot_id} from local cache: {cache_dir}"
+            )
+            return pdb_path
+
+    # Try downloading from PDB
     if _download_pdb(uniprot_id, pdb_path):
         logger.info(f"Downloaded PDB structure for {uniprot_id} from RCSB")
         return pdb_path
+
+    # Fall back to AlphaFold download
     if _download_alphafold(uniprot_id, pdb_path):
         logger.info(f"Downloaded PDB structure for {uniprot_id} from AlphaFold")
         return pdb_path
+
     raise FileNotFoundError(
-        f"No structure available for UniProt ID {uniprot_id} from PDB or AlphaFold"
+        f"No structure available for UniProt ID {uniprot_id} from local caches, PDB, or AlphaFold"
     )
 
 
@@ -251,24 +285,98 @@ def render_structure_colormap(
 
 
 @timeit
-def plot_systemic_explanation(path, hetero_explanation, dataset):
+def plot_systemic_explanation(
+    path: str,
+    hetero_explanation,
+    dataset,
+    title_suffix: Optional[str] = None,
+    go_term: Optional[str] = None,
+):
+    """Plot protein-protein explanation graph.
+
+    Args:
+        path: Output directory
+        hetero_explanation: Explanation object
+        dataset: Dataset object
+        title_suffix: Optional suffix to add to plot title (e.g., "GO: term_name")
+        go_term: Optional GO term ID for subdirectory organization
+    """
     context = build_plot_context(path, dataset, hetero_explanation.batch)
     key = ("protein", "aligned_with", "protein")
     edge_mask = hetero_explanation[key]["edge_mask"].detach().cpu().view(-1)
     edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
 
-    _draw_weighted_protein_graph(
-        context,
-        edge_index,
-        edge_mask,
-        title=f"Protein-Protein Explanation: {context.root_label}",
-        colorbar_label="Edge importance",
-        filename_suffix="system_explanation",
-    )
+    title = f"Protein-Protein Explanation: {context.root_label}"
+    if title_suffix:
+        title += f" ({title_suffix})"
+
+    # Determine output directory
+    if go_term:
+        go_subdir = go_term.replace(":", "_")
+        output_dir = os.path.join(context.root_dir, go_subdir)
+        os.makedirs(output_dir, exist_ok=True)
+        filename = os.path.join(
+            output_dir, f"{context.root_label}_system_explanation.png"
+        )
+    else:
+        filename = os.path.join(
+            context.root_dir, f"{context.root_label}_system_explanation.png"
+        )
+
+    # Draw graph
+    edge_index_cpu = edge_index.detach().cpu()
+    edge_mask_cpu = edge_mask.detach().cpu().view(-1)
+
+    G = nx.Graph()
+    for local_idx, label in context.labels.items():
+        G.add_node(local_idx, label=label)
+
+    src, dst = edge_index_cpu
+    for idx in range(edge_index_cpu.size(1)):
+        G.add_edge(
+            int(src[idx]),
+            int(dst[idx]),
+            color=float(edge_mask_cpu[idx].item()),
+        )
+
+    pos = nx.spring_layout(G, seed=_PLOT_SEED)
+    nx.draw_networkx_nodes(G, pos, node_color="#d9d9d9")
+
+    edges = None
+    if G.number_of_edges():
+        edge_colors = [data for (_, _, data) in G.edges(data="color")]
+        edges = nx.draw_networkx_edges(
+            G,
+            pos,
+            edge_color=edge_colors,
+            edge_cmap=plt.cm.viridis,
+        )
+    nx.draw_networkx_labels(G, pos, labels=context.labels, font_size=9)
+    plt.title(title)
+    if edges is not None:
+        plt.colorbar(edges, label="Edge importance")
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
 
 
 @timeit
-def plot_protein_explanation(path, hetero_explanation, dataset):
+def plot_protein_explanation(
+    path: str,
+    hetero_explanation,
+    dataset,
+    title_suffix: Optional[str] = None,
+    go_term: Optional[str] = None,
+):
+    """Plot amino acid to protein explanation.
+
+    Args:
+        path: Output directory
+        hetero_explanation: Explanation object
+        dataset: Dataset object
+        title_suffix: Optional suffix to add to plot title (e.g., "GO: term_name")
+        go_term: Optional GO term ID for subdirectory organization
+    """
     context = build_plot_context(path, dataset, hetero_explanation.batch)
     edge_mask = (
         hetero_explanation[("aa", "belongs_to", "protein")]["edge_mask"].detach().cpu()
@@ -281,9 +389,6 @@ def plot_protein_explanation(path, hetero_explanation, dataset):
 
     protein_batch = hetero_explanation.batch["protein"].detach().cpu()
     protein_global_ids = protein_batch["n_id"].tolist()
-
-    explanations_dir = os.path.join(path, "explanations")
-    os.makedirs(explanations_dir, exist_ok=True)
 
     for dst_val in torch.unique(dst_local, sorted=True).tolist():
         mask = dst_local == dst_val
@@ -313,10 +418,22 @@ def plot_protein_explanation(path, hetero_explanation, dataset):
         plt.colorbar(scatter, label="Edge attribution")
         plt.xlabel("Residue")
         plt.ylabel("Edge Importance")
-        plt.title(f"AA-Protein Explanation: {target_label}")
+
+        title = f"AA-Protein Explanation: {target_label}"
+        if title_suffix:
+            title += f" ({title_suffix})"
+        plt.title(title)
+
         plt.tight_layout()
 
         out_dir, prefix = resolve_plot_target(context, target_idx)
+
+        # Determine output path based on GO term
+        if go_term:
+            go_subdir = go_term.replace(":", "_")
+            out_dir = os.path.join(out_dir, go_subdir)
+            os.makedirs(out_dir, exist_ok=True)
+
         filename = os.path.join(out_dir, f"{prefix}_aa_explanation.png")
         plt.savefig(filename)
         plt.close()
@@ -361,7 +478,7 @@ def analyze_attention_captum_correlation(
         edge_index, attn_weights = layer_attention[key]
         edge_index = edge_index.detach().cpu()
         attn_vals = _mean_attention(attn_weights.detach().cpu())
-        edge_index = edge_index[:, seed_mask]  # edges nattn to root protein only
+        edge_index = edge_index[:, seed_mask]  # edges to root protein only
         attn_vals = attn_vals[seed_mask]
 
         shared_attn, shared_captum = [], []
