@@ -101,6 +101,7 @@ ESMFOLD_MODEL_NAME = "facebook/esmfold_v1"
 ESMFOLD_DEFAULT_CHUNK_SIZE = 128
 ESMFOLD_MAX_SEQUENCE_LENGTH = 1024
 ESMFOLD_CONDA_ENV = "esmfold"
+ESMFOLD_TRUNC_LEN = 1024
 
 # ============================================================================
 # InterProScan API Parameters
@@ -118,7 +119,6 @@ INTERPROSCAN_MAX_RETRIES = 3
 
 DIAMOND_EXECUTABLE = "diamond"
 DIAMOND_DEFAULT_EVALUE = 1e-3
-DIAMOND_DEFAULT_TOPK = 10
 DIAMOND_OUTPUT_FORMAT = "6"  # Tabular format
 DIAMOND_DEFAULT_THREADS = 4
 
@@ -129,9 +129,6 @@ DIAMOND_DEFAULT_THREADS = 4
 # Contact edges
 CONTACT_CUTOFF = 10.0  # Angstroms
 CONTACT_CHUNK_SIZE = 512
-
-# Truncated protein handling
-TRUNCATED_PROTEIN_LENGTH = 1024
 
 # Node types
 NODE_TYPE_AA = "aa"

@@ -9,15 +9,12 @@ from typing import Optional, Sequence, Tuple
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
-import requests
 import torch
 
 from src.utils.constants import (
-    UNIPROT_JSON_URL,
-    PDB_DOWNLOAD_URL,
-    ALPHAFOLD_STRUCTURE_URL,
     RANDOM_SEED,
 )
+from src.utils.api import _download_alphafold, _download_pdb
 from src.utils.helpers import timeit
 
 try:
@@ -25,13 +22,16 @@ try:
 except ImportError:
     pymol2 = None
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class ProteinPlotContext:
     """Context for protein visualization."""
+
     root_label: str
     root_global: int
     root_dir: str
@@ -53,7 +53,7 @@ def build_plot_context(base_path: str, dataset, batch) -> ProteinPlotContext:
     neighbor_dir = os.path.join(root_dir, "neighbors")
     os.makedirs(root_dir, exist_ok=True)
     os.makedirs(neighbor_dir, exist_ok=True)
-    
+
     return ProteinPlotContext(
         root_label=root_label,
         root_global=root_global,
@@ -83,46 +83,9 @@ def resolve_plot_target(
     return base_dir, prefix
 
 
-# Structure download utilities
-def _download_pdb(uniprot_id: str, dest_path: str) -> bool:
-    """Try downloading PDB structure from RCSB."""
-    try:
-        response = requests.get(UNIPROT_JSON_URL.format(uniprot_id=uniprot_id), timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        
-        for ref in data.get("uniProtKBCrossReferences", []):
-            if ref.get("database") != "PDB":
-                continue
-            pdb_id = ref.get("id")
-            if not pdb_id:
-                continue
-                
-            pdb_resp = requests.get(PDB_DOWNLOAD_URL.format(pdb_id=pdb_id), timeout=15)
-            pdb_resp.raise_for_status()
-            with open(dest_path, "wb") as f:
-                f.write(pdb_resp.content)
-            return True
-    except requests.RequestException:
-        pass
-    return False
-
-
-def _download_alphafold(uniprot_id: str, dest_path: str) -> bool:
-    """Try downloading structure from AlphaFold."""
-    try:
-        response = requests.get(ALPHAFOLD_STRUCTURE_URL.format(uniprot_id=uniprot_id), timeout=15)
-        response.raise_for_status()
-        with open(dest_path, "wb") as f:
-            f.write(response.content)
-        return True
-    except requests.RequestException:
-        return False
-
-
 def ensure_structure(uniprot_id: str, out_dir: str) -> str:
     """Get structure for UniProt ID, checking caches before downloading.
-    
+
     Priority: output cache -> alphafold_pdb -> esmfold_pdb -> RCSB PDB -> AlphaFold download
     """
     os.makedirs(out_dir, exist_ok=True)
@@ -134,8 +97,10 @@ def ensure_structure(uniprot_id: str, out_dir: str) -> str:
 
     # Check local data directories
     current_file_dir = os.path.dirname(os.path.abspath(__file__))
-    base_data_dir = os.path.join(current_file_dir, "..", "..", "data", "swissprot", "2024_01")
-    
+    base_data_dir = os.path.join(
+        current_file_dir, "..", "..", "data", "swissprot", "2024_01"
+    )
+
     for cache_name in ["alphafold_pdb", "esmfold_pdb"]:
         cache_path = os.path.join(base_data_dir, cache_name, f"{uniprot_id}.pdb")
         if os.path.exists(cache_path):
@@ -176,7 +141,7 @@ def render_structure_colormap(
     res_idx, scores = zip(*residue_scores)
     res_idx = np.asarray(res_idx, dtype=np.int32)
     scores = np.asarray(scores, dtype=np.float32)
-    
+
     lo, hi = (float(scores.min()), float(scores.max())) if normalize else (None, None)
     if normalize and hi - lo < 1e-9:
         hi = lo + 1e-6
@@ -202,21 +167,27 @@ def render_structure_colormap(
         cmd.bg_color("white")
         cmd.orient("prot")
         cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
-    
+
     logger.info(f"Saved structure rendering to {image_path}")
 
 
 # Plotting utilities
-def _save_plot(context: ProteinPlotContext, filename_suffix: str, go_term: Optional[str] = None):
+def _save_plot(
+    context: ProteinPlotContext, filename_suffix: str, go_term: Optional[str] = None
+):
     """Save current plot to appropriate directory."""
     if go_term:
         go_subdir = go_term.replace(":", "_")
         output_dir = os.path.join(context.root_dir, "per-term", go_subdir)
         os.makedirs(output_dir, exist_ok=True)
-        filename = os.path.join(output_dir, f"{context.root_label}_{filename_suffix}.png")
+        filename = os.path.join(
+            output_dir, f"{context.root_label}_{filename_suffix}.png"
+        )
     else:
-        filename = os.path.join(context.root_dir, f"{context.root_label}_{filename_suffix}.png")
-    
+        filename = os.path.join(
+            context.root_dir, f"{context.root_label}_{filename_suffix}.png"
+        )
+
     plt.savefig(filename)
     plt.close()
 
@@ -261,12 +232,18 @@ def _plot_protein_network(
 
 def _mean_attention(attention_weights: torch.Tensor) -> torch.Tensor:
     """Average attention weights over all heads."""
-    return attention_weights.mean(dim=-1) if attention_weights.dim() > 1 else attention_weights.view(-1)
+    return (
+        attention_weights.mean(dim=-1)
+        if attention_weights.dim() > 1
+        else attention_weights.view(-1)
+    )
 
 
 # Public plotting functions
 @timeit
-def plot_systemic_explanation(path, hetero_explanation, dataset, title_suffix=None, go_term=None):
+def plot_systemic_explanation(
+    path, hetero_explanation, dataset, title_suffix=None, go_term=None
+):
     """Plot protein-protein explanation graph."""
     context = build_plot_context(path, dataset, hetero_explanation.batch)
     key = ("protein", "aligned_with", "protein")
@@ -279,8 +256,13 @@ def plot_systemic_explanation(path, hetero_explanation, dataset, title_suffix=No
         title += f" ({title_suffix})"
 
     _plot_protein_network(
-        context, edge_index, edge_mask, title,
-        "Edge importance", "system_explanation", go_term
+        context,
+        edge_index,
+        edge_mask,
+        title,
+        "Edge importance",
+        "system_explanation",
+        go_term,
     )
 
 
@@ -298,24 +280,34 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
 
     title = f"Protein-Protein Attention (Layer {layer_idx}): {context.root_label}"
     _plot_protein_network(
-        context, edge_index, attn_values, title,
-        "Attention weight", f"system_attention_layer{layer_idx}"
+        context,
+        edge_index,
+        attn_values,
+        title,
+        "Attention weight",
+        f"system_attention_layer{layer_idx}",
     )
 
 
 @timeit
 def plot_protein_explanation(
-    path: str, hetero_explanation, dataset, title_suffix: Optional[str] = None, go_term: Optional[str] = None
+    path: str,
+    hetero_explanation,
+    dataset,
+    title_suffix: Optional[str] = None,
+    go_term: Optional[str] = None,
 ):
     """Plot amino acid to protein explanation."""
     context = build_plot_context(path, dataset, hetero_explanation.batch)
     key = ("aa", "belongs_to", "protein")
-    
+
     edge_mask = hetero_explanation[key]["edge_mask"].detach().cpu()
     edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
 
     src_local, dst_local = edge_index[0], edge_index[1]
-    protein_global_ids = hetero_explanation.batch["protein"]["n_id"].detach().cpu().tolist()
+    protein_global_ids = (
+        hetero_explanation.batch["protein"]["n_id"].detach().cpu().tolist()
+    )
 
     for dst_val in torch.unique(dst_local, sorted=True).tolist():
         mask = dst_local == dst_val
@@ -336,8 +328,10 @@ def plot_protein_explanation(
         plt.figure(figsize=(8, 4))
         x_positions = torch.arange(len(edge_z_sorted), dtype=torch.float32)
         scatter = plt.scatter(
-            x_positions.numpy(), edge_z_sorted.numpy(),
-            c=edge_z_sorted.numpy(), cmap=plt.cm.viridis
+            x_positions.numpy(),
+            edge_z_sorted.numpy(),
+            c=edge_z_sorted.numpy(),
+            cmap=plt.cm.viridis,
         )
         plt.colorbar(scatter, label="Edge attribution")
         plt.xlabel("Residue")
@@ -355,14 +349,16 @@ def plot_protein_explanation(
         plt.close()
 
 
-def plot_protein_attention(path, layer_attention, dataset, batch, layer_idx, go_term=None):
+def plot_protein_attention(
+    path, layer_attention, dataset, batch, layer_idx, go_term=None
+):
     """Plot amino acid to protein attention weights."""
     context = build_plot_context(path, dataset, batch)
     key = ("aa", "belongs_to", "protein")
-    
+
     if layer_attention is None or key not in layer_attention:
         return
-    
+
     edge_index, attn_weights = layer_attention[key]
     edge_index = edge_index.detach().cpu()
     attn_values = _mean_attention(attn_weights.detach().cpu())
@@ -385,8 +381,10 @@ def plot_protein_attention(path, layer_attention, dataset, batch, layer_idx, go_
         plt.figure(figsize=(8, 4))
         x_positions = torch.arange(len(aa_indices), dtype=torch.float32)
         scatter = plt.scatter(
-            x_positions.numpy(), attention_sorted.numpy(),
-            c=attention_sorted.numpy(), cmap=plt.cm.viridis
+            x_positions.numpy(),
+            attention_sorted.numpy(),
+            c=attention_sorted.numpy(),
+            cmap=plt.cm.viridis,
         )
         plt.colorbar(scatter, label="Attention weight")
         plt.xlabel("Residue")
@@ -401,7 +399,13 @@ def plot_protein_attention(path, layer_attention, dataset, batch, layer_idx, go_
 
 
 def analyze_attention_captum_correlation(
-    output_dir: str, dataset, batch, attentions, hetero_explanation, *, layer_to_plot: int = 2
+    output_dir: str,
+    dataset,
+    batch,
+    attentions,
+    hetero_explanation,
+    *,
+    layer_to_plot: int = 2,
 ) -> None:
     """Analyze correlation between attention and Captum scores."""
     context = build_plot_context(output_dir, dataset, batch)
@@ -409,14 +413,16 @@ def analyze_attention_captum_correlation(
 
     captum_edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
     captum_scores = hetero_explanation[key]["edge_mask"].detach().cpu()
-    
+
     # Analyze only root protein edges
     seed_mask = captum_edge_index[1] == 0
     captum_edge_index = captum_edge_index[:, seed_mask]
     captum_scores = captum_scores[seed_mask]
 
     edge_to_captum = {
-        (int(captum_edge_index[0, i]), int(captum_edge_index[1, i])): float(captum_scores[i].item())
+        (int(captum_edge_index[0, i]), int(captum_edge_index[1, i])): float(
+            captum_scores[i].item()
+        )
         for i in range(captum_edge_index.size(1))
     }
 
@@ -424,7 +430,7 @@ def analyze_attention_captum_correlation(
     for layer_idx, layer_attention in enumerate(attentions, start=1):
         if layer_attention is None or key not in layer_attention:
             continue
-            
+
         edge_index, attn_weights = layer_attention[key]
         edge_index = edge_index.detach().cpu()[:, seed_mask]
         attn_vals = _mean_attention(attn_weights.detach().cpu())[seed_mask]
@@ -443,16 +449,27 @@ def analyze_attention_captum_correlation(
         # Normalize
         attn_arr = np.asarray(shared_attn, dtype=np.float32)
         captum_arr = np.asarray(shared_captum, dtype=np.float32)
-        attn_arr = (attn_arr - attn_arr.min()) / (attn_arr.max() - attn_arr.min() + 1e-9)
-        captum_arr = (captum_arr - captum_arr.min()) / (captum_arr.max() - captum_arr.min() + 1e-9)
+        attn_arr = (attn_arr - attn_arr.min()) / (
+            attn_arr.max() - attn_arr.min() + 1e-9
+        )
+        captum_arr = (captum_arr - captum_arr.min()) / (
+            captum_arr.max() - captum_arr.min() + 1e-9
+        )
 
         # Compute correlation
-        if np.std(attn_arr) < 1e-12 or np.std(captum_arr) < 1e-12 or np.isnan(attn_arr).any() or np.isnan(captum_arr).any():
+        if (
+            np.std(attn_arr) < 1e-12
+            or np.std(captum_arr) < 1e-12
+            or np.isnan(attn_arr).any()
+            or np.isnan(captum_arr).any()
+        ):
             corr_val = float("nan")
         else:
             corr_val = float(np.corrcoef(attn_arr, captum_arr)[0, 1])
 
-        logger.info(f"Pearson correlation (layer {layer_idx} vs Captum): {corr_val:.4f}")
+        logger.info(
+            f"Pearson correlation (layer {layer_idx} vs Captum): {corr_val:.4f}"
+        )
 
         if layer_idx == layer_to_plot:
             scatter_data = (attn_arr, captum_arr)
@@ -463,9 +480,10 @@ def analyze_attention_captum_correlation(
     # Plot scatter
     attn_arr, captum_arr = scatter_data
     plot_path = os.path.join(
-        context.root_dir, f"{context.root_label}_attn_layer{layer_to_plot}_captum_scatter.png"
+        context.root_dir,
+        f"{context.root_label}_attn_layer{layer_to_plot}_captum_scatter.png",
     )
-    
+
     plt.figure(figsize=(6, 5))
     plt.scatter(attn_arr, captum_arr, alpha=0.6)
     m, b = np.polyfit(attn_arr, captum_arr, 1)

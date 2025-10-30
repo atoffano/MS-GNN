@@ -32,6 +32,33 @@ from src.data.create_graphs import (
     count_ca_atoms,
 )
 from src.data.inference_pipeline.query_interproscan import submit_interproscan
+from src.utils.api import download_pdb, download_alphafold
+from src.utils.constants import (
+    # Paths
+    DIAMOND_SWISSPROT_DB,
+    INTERPRO_VOCAB,
+    TMP_DIR,
+    # ESM parameters
+    ESM_MAX_AA_PER_BATCH,
+    ESM_DEFAULT_BATCH_SIZE,
+    ESM1B_CHECKPOINT,
+    # ESMFold parameters
+    ESMFOLD_DEFAULT_CHUNK_SIZE,
+    ESMFOLD_CONDA_ENV,
+    ESMFOLD_MODEL_NAME,
+    TRUNCATED_PROTEIN_LENGTH,
+    # InterProScan parameters
+    INTERPROSCAN_DEFAULT_EMAIL,
+    INTERPROSCAN_DEFAULT_TIMEOUT,
+    INTERPROSCAN_DEFAULT_POLL_INTERVAL,
+    # DIAMOND parameters
+    DIAMOND_EXECUTABLE,
+    DIAMOND_DEFAULT_EVALUE,
+    DIAMOND_DEFAULT_TOPK,
+    # Graph construction parameters
+    CONTACT_CUTOFF,
+    CONTACT_CHUNK_SIZE,
+)
 
 logger = logging.getLogger("inference_preprocess")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -50,19 +77,22 @@ def parse_args() -> argparse.Namespace:
 
     # Embedding options
     parser.add_argument(
-        "--esm-local-checkpoint",
-        type=Path,
-        default=None,
-        help="Path to local ESM checkpoint",
-    )
-    parser.add_argument(
         "--max-aa-per-batch",
         type=int,
-        default=4000,
-        help="Maximum amino acids per batch for ESM",
+        default=ESM_MAX_AA_PER_BATCH,
+        help=f"Maximum amino acids per batch for ESM (default: {ESM_MAX_AA_PER_BATCH})",
     )
     parser.add_argument(
-        "--esm-batch-size", type=int, default=8, help="Batch size for ESM embedding"
+        "--esm-batch-size",
+        type=int,
+        default=ESM_DEFAULT_BATCH_SIZE,
+        help=f"Batch size for ESM embedding (default: {ESM_DEFAULT_BATCH_SIZE})",
+    )
+    parser.add_argument(
+        "--esm-local-checkpoint",
+        type=Path,
+        default=ESM1B_CHECKPOINT,
+        help=f"Path to local ESM checkpoint (default: {ESM1B_CHECKPOINT})",
     )
 
     # Fold options
@@ -72,89 +102,102 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to input PDB file (if structure is already available)",
     )
-
     parser.add_argument(
         "--fold-local-only",
         action="store_true",
         help="Use only local ESMFold model files",
     )
     parser.add_argument(
-        "--fold-chunk-size", type=int, default=128, help="Chunk size for ESMFold trunk"
+        "--fold-chunk-size",
+        type=int,
+        default=ESMFOLD_DEFAULT_CHUNK_SIZE,
+        help=f"Chunk size for ESMFold trunk (default: {ESMFOLD_DEFAULT_CHUNK_SIZE})",
     )
 
     # InterProScan options
     parser.add_argument(
         "--interpro-email",
         type=str,
-        default="antoine.toffano@lirmm.fr",
-        help="Email for InterProScan API",
+        default=INTERPROSCAN_DEFAULT_EMAIL,
+        help=f"Email for InterProScan API (default: {INTERPROSCAN_DEFAULT_EMAIL})",
     )
     parser.add_argument(
         "--interpro-timeout",
         type=int,
-        default=300,
-        help="Timeout for InterProScan queries (seconds)",
+        default=INTERPROSCAN_DEFAULT_TIMEOUT,
+        help=f"Timeout for InterProScan queries in seconds (default: {INTERPROSCAN_DEFAULT_TIMEOUT})",
     )
     parser.add_argument(
         "--interpro-poll-interval",
         type=int,
-        default=20,
-        help="Polling interval for InterProScan (seconds)",
+        default=INTERPROSCAN_DEFAULT_POLL_INTERVAL,
+        help=f"Polling interval for InterProScan in seconds (default: {INTERPROSCAN_DEFAULT_POLL_INTERVAL})",
     )
     parser.add_argument(
         "--interpro-vocab",
         type=Path,
-        default=Path("./data/swissprot/2024_01/protein_graphs/interpro_vocab.pkl"),
-        help="Path to InterPro vocabulary pickle file",
+        default=INTERPRO_VOCAB,
+        help=f"Path to InterPro vocabulary pickle file (default: {INTERPRO_VOCAB})",
     )
 
     # DIAMOND options
     parser.add_argument(
-        "--diamond-bin", type=str, default="diamond", help="Path to DIAMOND executable"
+        "--diamond-bin",
+        type=str,
+        default=DIAMOND_EXECUTABLE,
+        help=f"Path to DIAMOND executable (default: {DIAMOND_EXECUTABLE})",
     )
     parser.add_argument(
         "--diamond-db",
         type=Path,
-        required=True,
-        help="Path to DIAMOND database (.dmnd)",
+        default=DIAMOND_SWISSPROT_DB,
+        help=f"Path to DIAMOND database (.dmnd) (default: {DIAMOND_SWISSPROT_DB})",
     )
     parser.add_argument(
-        "--diamond-topk", type=int, default=10, help="Number of top hits to retrieve"
+        "--diamond-topk",
+        type=int,
+        default=DIAMOND_DEFAULT_TOPK,
+        help=f"Number of top hits to retrieve (default: {DIAMOND_DEFAULT_TOPK})",
     )
     parser.add_argument(
         "--diamond-evalue",
         type=float,
-        default=1e-3,
-        help="E-value threshold for DIAMOND",
+        default=DIAMOND_DEFAULT_EVALUE,
+        help=f"E-value threshold for DIAMOND (default: {DIAMOND_DEFAULT_EVALUE})",
     )
 
     # Graph options
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("./data/tmp"),
-        help="Output directory for all results",
+        default=TMP_DIR,
+        help=f"Output directory for all results (default: {TMP_DIR})",
     )
     parser.add_argument(
         "--contact-cutoff",
         type=float,
-        default=10.0,
-        help="Distance cutoff for contact edges (Angstroms)",
+        default=CONTACT_CUTOFF,
+        help=f"Distance cutoff for contact edges in Angstroms (default: {CONTACT_CUTOFF})",
     )
     parser.add_argument(
         "--contact-chunk",
         type=int,
-        default=512,
-        help="Chunk size for contact edge computation",
+        default=CONTACT_CHUNK_SIZE,
+        help=f"Chunk size for contact edge computation (default: {CONTACT_CHUNK_SIZE})",
     )
 
-    # Child process flag (internal use)
-    parser.add_argument("--fold-child", action="store_true", help=argparse.SUPPRESS)
+    # Child process flags (internal use)
     parser.add_argument("--protein-id", type=str, default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--output_dir",
+        type=Path,
+        default=TMP_DIR,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--pdb-output",
         type=Path,
-        default=Path("./data/swissprot/2024_01/esmfold_pdb"),
+        default=TMP_DIR,
         help=argparse.SUPPRESS,
     )
 
@@ -216,67 +259,67 @@ def run_esmfold(
     """Run ESMFold to predict protein structure."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if child:
-        # This runs in the esmfold conda environment
-        from transformers import AutoTokenizer, EsmForProteinFolding
-        from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
-        from transformers.models.esm.openfold_utils.protein import (
-            Protein as OFProtein,
-            to_pdb,
-        )
+    # if child:
+    #     # This runs in the esmfold conda environment
+    #     from transformers import AutoTokenizer, EsmForProteinFolding
+    #     from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
+    #     from transformers.models.esm.openfold_utils.protein import (
+    #         Protein as OFProtein,
+    #         to_pdb,
+    #     )
 
-        # Read sequence from FASTA
-        records = list(SeqIO.parse(str(fasta_path), "fasta"))
-        if not records:
-            raise ValueError(f"No records in {fasta_path}")
-        sequence = str(records[0].seq).strip().upper()
+    #     # Read sequence from FASTA
+    #     records = list(SeqIO.parse(str(fasta_path), "fasta"))
+    #     if not records:
+    #         raise ValueError(f"No records in {fasta_path}")
+    #     sequence = str(records[0].seq).strip().upper()
 
-        logger.info(f"Loading ESMFold model (local_only={local_only})...")
-        tokenizer = AutoTokenizer.from_pretrained(
-            "facebook/esmfold_v1", local_files_only=local_only
-        )
-        model = EsmForProteinFolding.from_pretrained(
-            "facebook/esmfold_v1",
-            low_cpu_mem_usage=True,
-            local_files_only=local_only,
-        )
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = model.to(device)
-        model.eval()
-        model.esm = model.esm.half()
-        model.trunk.set_chunk_size(chunk_size)
+    #     logger.info(f"Loading ESMFold model (local_only={local_only})...")
+    #     tokenizer = AutoTokenizer.from_pretrained(
+    #         ESMFOLD_MODEL_NAME, local_files_only=local_only
+    #     )
+    #     model = EsmForProteinFolding.from_pretrained(
+    #         ESMFOLD_MODEL_NAME,
+    #         low_cpu_mem_usage=True,
+    #         local_files_only=local_only,
+    #     )
+    #     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #     model = model.to(device)
+    #     model.eval()
+    #     model.esm = model.esm.half()
+    #     model.trunk.set_chunk_size(chunk_size)
 
-        logger.info(f"Folding {protein_id} ({len(sequence)} aa)...")
-        toks = tokenizer(
-            [sequence], return_tensors="pt", add_special_tokens=False, padding=True
-        )
-        model_inputs = {k: v.to(device) for k, v in toks.items()}
+    #     logger.info(f"Folding {protein_id} ({len(sequence)} aa)...")
+    #     toks = tokenizer(
+    #         [sequence], return_tensors="pt", add_special_tokens=False, padding=True
+    #     )
+    #     model_inputs = {k: v.to(device) for k, v in toks.items()}
 
-        with torch.no_grad():
-            outputs = model(**model_inputs)
+    #     with torch.no_grad():
+    #         outputs = model(**model_inputs)
 
-        final_atom_positions = atom14_to_atom37(outputs["positions"][-1], outputs)
-        outputs_np = {k: v.to("cpu").numpy() for k, v in outputs.items()}
-        final_atom_positions = final_atom_positions.cpu().numpy()
-        final_atom_mask = outputs_np["atom37_atom_exists"]
+    #     final_atom_positions = atom14_to_atom37(outputs["positions"][-1], outputs)
+    #     outputs_np = {k: v.to("cpu").numpy() for k, v in outputs.items()}
+    #     final_atom_positions = final_atom_positions.cpu().numpy()
+    #     final_atom_mask = outputs_np["atom37_atom_exists"]
 
-        length = len(sequence)
-        protein = OFProtein(
-            aatype=outputs_np["aatype"][0][:length],
-            atom_positions=final_atom_positions[0][:length],
-            atom_mask=final_atom_mask[0][:length],
-            residue_index=outputs_np["residue_index"][0][:length] + 1,
-            b_factors=outputs_np["plddt"][0][:length],
-            chain_index=(
-                outputs_np["chain_index"][0][:length]
-                if "chain_index" in outputs_np
-                else None
-            ),
-        )
-        pdb_str = to_pdb(protein)
-        output_path.write_text(pdb_str, encoding="utf-8")
-        logger.info("Saved PDB to %s.", output_path)
-        return
+    #     length = len(sequence)
+    #     protein = OFProtein(
+    #         aatype=outputs_np["aatype"][0][:length],
+    #         atom_positions=final_atom_positions[0][:length],
+    #         atom_mask=final_atom_mask[0][:length],
+    #         residue_index=outputs_np["residue_index"][0][:length] + 1,
+    #         b_factors=outputs_np["plddt"][0][:length],
+    #         chain_index=(
+    #             outputs_np["chain_index"][0][:length]
+    #             if "chain_index" in outputs_np
+    #             else None
+    #         ),
+    #     )
+    #     pdb_str = to_pdb(protein)
+    #     output_path.write_text(pdb_str, encoding="utf-8")
+    #     logger.info("Saved PDB to %s.", output_path)
+    #     return
 
     # Parent process: launch child in esmfold environment
     script_path = Path(__file__).resolve()
@@ -284,21 +327,12 @@ def run_esmfold(
         "conda",
         "run",
         "-n",
-        "esmfold",
+        ESMFOLD_CONDA_ENV,
         "python",
         str(script_path),
         "--fasta",
         str(fasta_path),
-        "--pdb-output",
-        str(output_path),
-        "--fold-chunk-size",
-        str(chunk_size),
-        "--fold-child",
-        "--protein-id",
-        protein_id,
     ]
-    if local_only:
-        cmd.append("--fold-local-only")
 
     env = os.environ.copy()
     cwd_entry = str(Path.cwd())
@@ -377,8 +411,6 @@ def run_diamond_alignment(
         str(output_path),
         "--outfmt",
         "6",
-        "--max-target-seqs",
-        str(topk),
         "--evalue",
         str(evalue),
     ]
@@ -419,15 +451,16 @@ def build_graph(
     actual_ca_count = count_ca_atoms(pdb_path)
 
     if expected_ca_count != actual_ca_count:
-        # Check if this is a truncated protein (1024 residues)
-        if actual_ca_count == 1024:
+        # Check if this is a truncated protein
+        if actual_ca_count == TRUNCATED_PROTEIN_LENGTH:
             logger.info(
-                "%s: Truncated protein detected (1024 CA atoms vs %d expected non-X residues). Proceeding with truncated structure.",
+                "%s: Truncated protein detected (%d CA atoms vs %d expected non-X residues). Proceeding with truncated structure.",
                 protein_id,
+                TRUNCATED_PROTEIN_LENGTH,
                 expected_ca_count,
             )
             # Adjust sequence length to match truncated structure
-            seq_len = 1024
+            seq_len = TRUNCATED_PROTEIN_LENGTH
             if embedding.shape[0] > seq_len:
                 embedding = embedding[:seq_len]
                 sequence = sequence[:seq_len]
@@ -535,22 +568,29 @@ def process_protein(
         args.max_aa_per_batch,
         args.esm_batch_size,
     )
-    embedding_path = protein_dir / f"{protein_id}_embedding.pt"
-    torch.save(embedding, embedding_path)
 
     # Step 2: Predict structure with ESMFold
     logger.info(f"[{protein_id}] Step 2/5: Predicting structure with ESMFold...")
-    pdb_dir = args.pdb_output_dir or (output_dir / "pdbs")
-    ensure_output_dir(pdb_dir)
-    pdb_path = pdb_dir / f"{protein_id}_esmfold.pdb"
-
-    run_esmfold(
-        protein_id=protein_id,
-        fasta_path=protein_fasta_path,
-        output_path=pdb_path,
-        local_only=args.fold_local_only,
-        chunk_size=args.fold_chunk_size,
-    )
+    pdb_path = output_dir / f"{protein_id}.pdb"
+    
+    if not args.pdb:
+        # Try to get from PDB
+        if download_pdb(protein_id, pdb_path):
+            logger.info(f"[{protein_id}] Downloaded PDB structure to {pdb_path}.")
+        # Try to get from Alphafold
+        elif download_alphafold(protein_id, pdb_path):
+            logger.info(f"[{protein_id}] Downloaded AlphaFold structure to {pdb_path}.")
+        else:
+            logger.info(
+                f"[{protein_id}] Failed to download AlphaFold structure, falling back to ESMFold."
+            )
+            run_esmfold(
+                protein_id=protein_id,
+                fasta_path=protein_fasta_path,
+                output_path=pdb_path,
+                local_only=args.fold_local_only,
+                chunk_size=args.fold_chunk_size,
+            )
 
     # Step 3: Query InterProScan
     logger.info(f"[{protein_id}] Step 3/5: Querying InterProScan...")
@@ -602,7 +642,6 @@ def process_protein(
     metadata = {
         "protein_id": protein_id,
         "sequence_length": len(sequence),
-        "embedding_path": str(embedding_path),
         "pdb_path": str(pdb_path),
         "diamond_output": str(diamond_out),
         "diamond_query_fasta": str(diamond_query_path),
@@ -618,20 +657,6 @@ def process_protein(
 
 def main() -> None:
     args = parse_args()
-
-    # Handle child process for ESMFold
-    if args.fold_child:
-        if not args.pdb_output or not args.fasta:
-            raise ValueError("fold-child execution requires --pdb-output and --fasta.")
-        run_esmfold(
-            protein_id=args.protein_id or "protein",
-            fasta_path=args.fasta,
-            output_path=args.pdb_output,
-            local_only=args.fold_local_only,
-            chunk_size=args.fold_chunk_size,
-            child=True,
-        )
-        return
 
     # Read proteins from FASTA
     proteins = read_proteins_from_fasta(args.fasta)

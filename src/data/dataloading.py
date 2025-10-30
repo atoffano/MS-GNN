@@ -30,10 +30,10 @@ class SwissProtDataset:
 
     def __init__(self, config):
         """Initialize SwissProtDataset.
-        
+
         Loads protein graphs, vocabularies, GO annotations, and creates the
         static protein-protein graph structure for the dataset.
-        
+
         Args:
             config: Configuration dictionary with dataset parameters including:
                 - data.dataset: Dataset name (e.g., 'D1')
@@ -347,7 +347,7 @@ class SwissProtDataset:
         if config["model"]["edge_attrs"]:
             logger.info("Adding edge attributes...")
             data["protein", "aligned_with", "protein"].edge_attr = alignment_edge_attrs
-            data["protein", "stringdb", "protein"].edge_attr = stringdb_edge_attrs
+            # data["protein", "stringdb", "protein"].edge_attr = stringdb_edge_attrs
 
         return data
 
@@ -466,14 +466,15 @@ class SwissProtDataset:
 
 def make_batch_transform(dataset, mode):
     """Create a batch transformation function for the data loader.
-    
+
     Args:
         dataset: SwissProtDataset instance
         mode: Dataset mode ('train', 'val', or 'test')
-        
+
     Returns:
         Function that transforms batches by adding mode and loading features
     """
+
     def batch_transform(batch):
         """Transform batch by adding mode and loading protein features."""
         batch["mode"] = mode

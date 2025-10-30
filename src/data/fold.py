@@ -12,19 +12,24 @@ The module supports:
 """
 
 import argparse
+import random
 from pathlib import Path
 from typing import Iterable, List, Tuple
-import tqdm
+
 import torch
-import random
+import tqdm
 from transformers import AutoTokenizer, EsmForProteinFolding
-from transformers.models.esm.openfold_utils.protein import Protein as OFProtein, to_pdb
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
+from transformers.models.esm.openfold_utils.protein import Protein as OFProtein
+from transformers.models.esm.openfold_utils.protein import to_pdb
 
 from src.utils.constants import (
-    SWISSPROT_ROOT,
     ALPHAFOLD_PDB_DIR,
+    ESMFOLD_DEFAULT_CHUNK_SIZE,
+    ESMFOLD_MAX_SEQUENCE_LENGTH,
+    ESMFOLD_MODEL_NAME,
     ESMFOLD_PDB_DIR,
+    ESMFOLD_TRUNC_LEN,
     STRUCTURE_MISSING_FASTA,
 )
 
@@ -43,6 +48,24 @@ def parse_args() -> argparse.Namespace:
         "--local",
         action="store_true",
         help="Use local checkpoint (local_files_only=True). Defaults to remote weights.",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=ESMFOLD_DEFAULT_CHUNK_SIZE,
+        help=f"Chunk size for ESMFold trunk (default: {ESMFOLD_DEFAULT_CHUNK_SIZE})",
+    )
+    parser.add_argument(
+        "--max-aa-per-batch",
+        type=int,
+        default=1000,
+        help="Maximum amino acids per batch (default: 1000)",
+    )
+    parser.add_argument(
+        "--sample-size",
+        type=int,
+        default=400,
+        help="Number of sequences to sample for processing (default: 400)",
     )
     return parser.parse_args()
 
@@ -90,20 +113,22 @@ def write_fasta(records: Iterable[Tuple[str, str]], path: Path) -> None:
 
 def load_model(
     local: bool,
+    chunk_size: int = ESMFOLD_DEFAULT_CHUNK_SIZE,
 ) -> Tuple[AutoTokenizer, EsmForProteinFolding, torch.device]:
     """Load ESMFold model and tokenizer.
 
     Args:
         local: If True, use local checkpoint; otherwise download from HuggingFace
+        chunk_size: Chunk size for ESMFold trunk processing
 
     Returns:
         Tuple of (tokenizer, model, device)
     """
     tokenizer = AutoTokenizer.from_pretrained(
-        "facebook/esmfold_v1", local_files_only=local
+        ESMFOLD_MODEL_NAME, local_files_only=local
     )
     model = EsmForProteinFolding.from_pretrained(
-        "facebook/esmfold_v1",
+        ESMFOLD_MODEL_NAME,
         low_cpu_mem_usage=True,
         local_files_only=local,
     )
@@ -111,9 +136,9 @@ def load_model(
     model = model.to(device)
     model.esm = model.esm.half()
     torch.backends.cuda.matmul.allow_tf32 = True
-    model.trunk.set_chunk_size(64)
+    model.trunk.set_chunk_size(chunk_size)
     model.eval()
-    print(f"Using device: {device}")
+    print(f"Using device: {device}, chunk size: {chunk_size}")
     return tokenizer, model, device
 
 
@@ -149,8 +174,18 @@ def convert_outputs_to_pdb(raw_outputs, seq_lengths: List[int]) -> List[str]:
     return pdbs
 
 
-def batched_by_length(records: List[Tuple[str, str]], max_aa: int = 1000):
-    """Yield batches where total amino acids < max_aa, or single large proteins."""
+def batched_by_length(
+    records: List[Tuple[str, str]], max_aa: int = 1000
+) -> Iterable[List[Tuple[str, str]]]:
+    """Yield batches where total amino acids < max_aa, or single large proteins.
+
+    Args:
+        records: List of (sequence_id, sequence) tuples
+        max_aa: Maximum amino acids per batch
+
+    Yields:
+        Batches of (sequence_id, sequence) tuples
+    """
     current_batch = []
     current_length = 0
 
@@ -184,7 +219,12 @@ def batched_by_length(records: List[Tuple[str, str]], max_aa: int = 1000):
 
 
 def generate_pdb_batch(
-    batch: List[Tuple[str, str]], tokenizer, model, device, truncation=False
+    batch: List[Tuple[str, str]],
+    tokenizer: AutoTokenizer,
+    model: EsmForProteinFolding,
+    device: torch.device,
+    truncation: bool = False,
+    max_length: int = ESMFOLD_MAX_SEQUENCE_LENGTH,
 ) -> Tuple[List[str], dict, List[int]]:
     """Generate ESMFold model outputs for a batch of sequences.
 
@@ -194,6 +234,7 @@ def generate_pdb_batch(
         model: ESMFold model
         device: Torch device
         truncation: Whether to truncate sequences longer than max_length
+        max_length: Maximum sequence length for tokenization
 
     Returns:
         Tuple of (sequence_ids, model_outputs, sequence_lengths)
@@ -206,7 +247,7 @@ def generate_pdb_batch(
         return_tensors="pt",
         add_special_tokens=False,
         padding="max_length",
-        max_length=1024,
+        max_length=max_length,
         truncation=truncation,
     )
     model_inputs = {k: v.to(device) for k, v in tokenized.items()}
@@ -215,7 +256,14 @@ def generate_pdb_batch(
     return seq_ids, outputs, seq_lengths
 
 
-def fold(batch, tokenizer, model, device, truncation):
+def fold(
+    batch: List[Tuple[str, str]],
+    tokenizer: AutoTokenizer,
+    model: EsmForProteinFolding,
+    device: torch.device,
+    truncation: bool,
+    output_dir: Path = ESMFOLD_PDB_DIR,
+) -> None:
     """Generate and save PDB files for a batch of sequences.
 
     Args:
@@ -224,13 +272,19 @@ def fold(batch, tokenizer, model, device, truncation):
         model: ESMFold model
         device: Torch device
         truncation: Whether to truncate sequences longer than max_length
+        output_dir: Directory to save PDB files
     """
     seq_ids, outputs, seq_lengths = generate_pdb_batch(
-        batch, tokenizer, model, device, truncation=truncation
+        batch,
+        tokenizer,
+        model,
+        device,
+        truncation=truncation,
+        max_length=ESMFOLD_TRUNC_LEN,
     )
     pdb_outputs = convert_outputs_to_pdb(outputs, seq_lengths)
     for seq_id, pdb_str in zip(seq_ids, pdb_outputs):
-        out_file = ESMFOLD_PDB_DIR / f"ESMFold-{seq_id}.pdb"
+        out_file = output_dir / f"ESMFold-{seq_id}.pdb"
         out_file.write_text(pdb_str, encoding="utf-8")
         print(f"Wrote ESMFold .pdb output to {out_file}")
     del outputs
@@ -253,8 +307,8 @@ def main() -> None:
     for seq_id, seq in tqdm.tqdm(sequences, desc="Checking existing structures"):
         alphafold_path = ALPHAFOLD_PDB_DIR / f"AF-{seq_id}-F1-model_v6.pdb"
         if not alphafold_path.exists():
-            esmfold_dir = ESMFOLD_PDB_DIR / f"ESMFold-{seq_id}.pdb"
-            if not esmfold_dir.exists():
+            esmfold_path = ESMFOLD_PDB_DIR / f"ESMFold-{seq_id}.pdb"
+            if not esmfold_path.exists():
                 missing_records.append((seq_id, seq))
 
     if not missing_records:
@@ -263,31 +317,35 @@ def main() -> None:
         print("All sequences already have structures.")
         return
 
-    # # Sort batches by descending length.
-    # missing_records.sort(key=lambda x: len(x[1]))
-    select_records = random.sample(missing_records, min(len(missing_records), 400))
+    # Sample a subset of missing records for processing
+    select_records = random.sample(
+        missing_records, min(len(missing_records), args.sample_size)
+    )
     # Remove selected records from missing_records to avoid duplication
     for record in select_records:
         missing_records.remove(record)
 
+    # Save remaining missing sequences to file
     STRUCTURE_MISSING_FASTA.parent.mkdir(parents=True, exist_ok=True)
     write_fasta(missing_records, STRUCTURE_MISSING_FASTA)
-    print(f"Wrote {len(missing_records)} missing sequences to {STRUCTURE_MISSING_FASTA}")
+    print(
+        f"Wrote {len(missing_records)} missing sequences to {STRUCTURE_MISSING_FASTA}"
+    )
     missing_records = select_records
 
-    tokenizer, model, device = load_model(args.local)
+    # Load model
+    tokenizer, model, device = load_model(args.local, args.chunk_size)
     print(f"Loaded ESMFold model on {device}.")
     ESMFOLD_PDB_DIR.mkdir(parents=True, exist_ok=True)
 
-    max_aa_per_batch = 100
-
     # Count total batches for progress bar
     total_batches = 0
-    for _ in batched_by_length(missing_records, max_aa_per_batch):
+    for _ in batched_by_length(missing_records, args.max_aa_per_batch):
         total_batches += 1
 
+    # Process batches
     for batch in tqdm.tqdm(
-        batched_by_length(missing_records, max_aa_per_batch),
+        batched_by_length(missing_records, args.max_aa_per_batch),
         total=total_batches,
         desc="Generating ESMFold structures",
     ):
@@ -295,7 +353,14 @@ def main() -> None:
         print(f"Processing batch of {len(batch)} proteins, {batch_aa} amino acids.")
 
         try:
-            fold(batch, tokenizer, model, device, truncation=False)
+            fold(
+                batch,
+                tokenizer,
+                model,
+                device,
+                truncation=False,
+                output_dir=ESMFOLD_PDB_DIR,
+            )
         except Exception as err:
             seq_ids_str = ", ".join(seq_id for seq_id, _ in batch)
             print(f"Failed batch [{seq_ids_str}, {batch_aa} aa]: {err}")
@@ -303,12 +368,20 @@ def main() -> None:
                 torch.cuda.empty_cache()
             try:
                 print("Retrying with truncation=True...")
-                fold(batch, tokenizer, model, device, truncation=True)
+                fold(
+                    batch,
+                    tokenizer,
+                    model,
+                    device,
+                    truncation=True,
+                    output_dir=ESMFOLD_PDB_DIR,
+                )
             except Exception as err2:
                 print(f"Failed again with truncation: {err2}. Skipping batch.")
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             continue
+
     print(f"ESMFold structures stored in {ESMFOLD_PDB_DIR}")
 
 
