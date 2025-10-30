@@ -2,6 +2,11 @@ model:
   hidden_channels: 128
   batch_size: 32
   edge_attrs: false
+  edge_types:
+    - ["aa", "close_to", "aa"]
+    - ["aa", "belongs_to", "protein"]
+    - ["protein", "aligned_with", "protein"]
+    - ["protein", "stringdb", "protein"]
 
 trainer:
   epochs: 2
@@ -25,6 +30,7 @@ data:
   exp_only: true  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/toy/toy_swissprot_2024_01_alignment.tsv  # Alignment TSV
   protein_graphs: ./data/toy/protein_graphs
+  stringdb_path: ./data/toy/toy_swissprot_stringdb.tsv
 
 run:
   qualifier: default  # Additional string to append to run_id for uniqueness
@@ -33,8 +39,8 @@ run:
     test: true
   test_only: false  # Whether to run evaluation only on the test set (no validation)
   save_model: true
-  project_path: "/home/atoffano/PFP_layer"  # From constants.py
-  #project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
+  #project_path: "/home/atoffano/PFP_layer"  # From constants.py
+  project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
 
 checkpoint:
   dir: ./checkpoints

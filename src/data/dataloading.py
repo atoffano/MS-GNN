@@ -209,6 +209,7 @@ class SwissProtDataset:
     def _create_protein_graph(self, config):
         """Creates the high-level protein network."""
 
+        @timeit
         def alignment_edge_data():
             alignment_path = (
                 f"{config['run']['project_path']}{config['data']['alignment_path'][1:]}"
@@ -260,6 +261,7 @@ class SwissProtDataset:
 
             return edge_index, edge_attrs
 
+        @timeit
         def stringdb_edge_data():
             stringdb_mapping = (
                 pd.read_csv(
@@ -272,9 +274,7 @@ class SwissProtDataset:
             )
             rev_stringdb_mapping = {v: k for k, v in stringdb_mapping.items()}
 
-            stringdb_path = (
-                f"{config['run']['project_path']}{config['data']['stringdb_path'][1:]}"
-            )
+            stringdb_path = config["data"]["stringdb_path"]
             stringdb_df = pd.read_csv(
                 stringdb_path,
                 sep="\t",
@@ -334,20 +334,20 @@ class SwissProtDataset:
         logger.info("Creating protein-protein graph edges...")
         alignment_edge_index, alignment_edge_attrs = alignment_edge_data()
         logger.info(f"Alignment edges: {alignment_edge_index.shape[1]}")
-        # stringdb_edge_index, stringdb_edge_attrs = stringdb_edge_data()
-        # logger.info(f"STRINGdb edges: {stringdb_edge_index.shape[1]}")
+        stringdb_edge_index, stringdb_edge_attrs = stringdb_edge_data()
+        logger.info(f"STRINGdb edges: {stringdb_edge_index.shape[1]}")
 
         # Protein nodes - aa features are added later when batching
         num_proteins = len(self.proteins)
         data["protein"].num_nodes = num_proteins
 
         data["protein", "aligned_with", "protein"].edge_index = alignment_edge_index
-        # data["protein", "stringdb", "protein"].edge_index = stringdb_edge_index
+        data["protein", "stringdb", "protein"].edge_index = stringdb_edge_index
 
         if config["model"]["edge_attrs"]:
             logger.info("Adding edge attributes...")
             data["protein", "aligned_with", "protein"].edge_attr = alignment_edge_attrs
-            # data["protein", "stringdb", "protein"].edge_attr = stringdb_edge_attrs
+            data["protein", "stringdb", "protein"].edge_attr = stringdb_edge_attrs
 
         return data
 
@@ -449,7 +449,7 @@ class SwissProtDataset:
         )
 
         # Add amino acid nodes and features
-        batch["aa"].x = torch.cat(all_aa_features, dim=0)
+        batch["aa"].x = torch.cat(all_aa_features, dim=0).float()
         batch["aa"].num_nodes = batch["aa"].x.shape[0]
 
         # Add AA to protein edges
@@ -487,9 +487,15 @@ def make_batch_transform(dataset, mode):
 def define_loaders(config, dataset):
     """Create NeighborLoader instances for train/val/test."""
 
+    edge_types = [tuple(et) for et in config["model"]["edge_types"]]
+    protein_edge_types = [
+        et for et in edge_types if et[0] == "protein" and et[2] == "protein"
+    ]
+    num_neighbors = {et: [-1] for et in protein_edge_types}  # 1-hop sampling
+
     train_loader = NeighborLoader(
         dataset.data,
-        num_neighbors={("protein", "aligned_with", "protein"): [-1]},  # 1-hop sampling
+        num_neighbors=num_neighbors,
         batch_size=config["model"]["batch_size"],
         input_nodes=("protein", dataset.train_mask),
         transform=make_batch_transform(dataset, mode="train"),
@@ -500,7 +506,7 @@ def define_loaders(config, dataset):
 
     test_loader = NeighborLoader(
         dataset.data,
-        num_neighbors={("protein", "aligned_with", "protein"): [-1]},
+        num_neighbors=num_neighbors
         batch_size=config["model"]["batch_size"],
         input_nodes=("protein", dataset.test_mask),
         transform=make_batch_transform(dataset, mode="predict"),
@@ -513,7 +519,7 @@ def define_loaders(config, dataset):
     if config["data"]["dataset"] != "H30":
         val_loader = NeighborLoader(
             dataset.data,
-            num_neighbors={("protein", "aligned_with", "protein"): [-1]},
+            num_neighbors=num_neighbors
             batch_size=config["model"]["batch_size"],
             input_nodes=("protein", dataset.val_mask),
             transform=make_batch_transform(dataset, mode="predict"),

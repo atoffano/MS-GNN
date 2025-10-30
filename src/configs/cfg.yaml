@@ -2,6 +2,11 @@ model:
   hidden_channels: 256
   batch_size: 32
   edge_attrs: false
+  edge_types:
+    - ["aa", "close_to", "aa"]
+    - ["aa", "belongs_to", "protein"]
+    - ["protein", "aligned_with", "protein"]
+    - ["protein", "stringdb", "protein"]
 
 trainer:
   epochs: 8
@@ -25,6 +30,7 @@ data:
   exp_only: true  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
+  stringdb_path: ./data/swissprot/2024_01/swissprot_stringdb.tsv
 
 run:
   qualifier: 2layerGNN  # Additional string to append to run_id for uniqueness

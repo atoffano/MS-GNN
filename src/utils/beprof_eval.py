@@ -18,7 +18,7 @@ import os
 import argparse
 import tqdm
 
-from src.utils.constants import (
+from constants import (
     GO_ROOT_TERMS,
     GO_BIOLOGICAL_PROCESS,
     GO_MOLECULAR_FUNCTION,

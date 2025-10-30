@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 def train(config, model, dataset, train_loader, val_loader, test_loader, device):
     """Train the protein function prediction model.
-    
+
     Args:
         config: Configuration dictionary with training parameters
         model: ProteinGNN model instance
@@ -117,16 +117,16 @@ def train(config, model, dataset, train_loader, val_loader, test_loader, device)
 
 def run_intermediate_validation(model, val_loader, criterion, device, num_batches=5):
     """Run validation on a subset of batches during training.
-    
+
     Args:
         model: ProteinGNN model instance
         val_loader: DataLoader for validation data
         criterion: Loss function
         device: torch.device for computation
         num_batches: Number of batches to validate on (default: 5)
-        
+
     Returns:
-        tuple: (avg_loss, aupr, fmax) or (avg_loss, aupr, fmax, pr_plot) 
+        tuple: (avg_loss, aupr, fmax) or (avg_loss, aupr, fmax, pr_plot)
                if num_batches equals full validation set
     """
     if num_batches >= len(val_loader):
@@ -164,7 +164,7 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
 
 def main():
     """Main entry point for training the protein function prediction model.
-    
+
     Parses command-line arguments, loads configuration, initializes datasets
     and models, runs training, and performs evaluation across GO subontologies.
     """
