@@ -12,6 +12,8 @@ on-demand protein annotation during inference.
 import requests
 import time
 
+from src.utils.constants import INTERPROSCAN_BASE_URL
+
 
 def submit_interproscan(sequence, email=None, timeout=600, poll_interval=20):
     """
@@ -29,7 +31,7 @@ def submit_interproscan(sequence, email=None, timeout=600, poll_interval=20):
     Raises:
         Exception: If job fails or timeout is reached.
     """
-    base_url = "https://www.ebi.ac.uk/Tools/services/rest/iprscan5"
+    base_url = INTERPROSCAN_BASE_URL
 
     # Submit job
     submit_url = f"{base_url}/run"

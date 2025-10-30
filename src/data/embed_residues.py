@@ -25,17 +25,20 @@ from Bio.SeqRecord import SeqRecord
 from tqdm.auto import tqdm
 import esm
 
+from src.utils.constants import (
+    SWISSPROT_ROOT,
+    SWISSPROT_FASTA,
+    ESM_DEFAULT_REPR_LAYER,
+    ESM_DEFAULT_BATCH_SIZE,
+    ESM_MAX_AA_PER_BATCH,
+)
+
 warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-DATA_ROOT = Path("./data/swissprot/2024_01")
-FASTA_PATH = DATA_ROOT / "swissprot_2024_01.fasta"
-EMBED_H5_PATH = DATA_ROOT / "swissprot_esm1b_per_aa_test.h5"
-
-ESM_LAYER = 33
-ESM_BATCH_SIZE = 8
-DEFAULT_MAX_AA_PER_BATCH = 4000
+# Local definition takes precedence - using test H5 path instead of production
+EMBED_H5_PATH = SWISSPROT_ROOT / "swissprot_esm1b_per_aa_test.h5"
 
 
 def load_esm_model(
@@ -109,8 +112,8 @@ class ResidueEmbedder:
         self,
         local_checkpoint: Optional[Path] = None,
         h5_path: Path = EMBED_H5_PATH,
-        max_aa_per_batch: int = DEFAULT_MAX_AA_PER_BATCH,
-        esm_batch_size: int = ESM_BATCH_SIZE,
+        max_aa_per_batch: int = ESM_MAX_AA_PER_BATCH,
+        esm_batch_size: int = ESM_DEFAULT_BATCH_SIZE,
     ):
         """Initialize ResidueEmbedder.
         
@@ -164,8 +167,8 @@ class ResidueEmbedder:
             tokens = tokens.to(self.device)
             with torch.no_grad():
                 reps = self.model(
-                    tokens, repr_layers=[ESM_LAYER], return_contacts=False
-                )["representations"][ESM_LAYER]
+                    tokens, repr_layers=[ESM_DEFAULT_REPR_LAYER], return_contacts=False
+                )["representations"][ESM_DEFAULT_REPR_LAYER]
             return reps[0, 1 : 1 + length].cpu().to(torch.float16).clone()
 
         starts = list(range(0, length, self.window_stride))
@@ -195,9 +198,9 @@ class ResidueEmbedder:
             tokens = tokens.to(self.device)
             with torch.no_grad():
                 reps = (
-                    self.model(tokens, repr_layers=[ESM_LAYER], return_contacts=False)[
+                    self.model(tokens, repr_layers=[ESM_DEFAULT_REPR_LAYER], return_contacts=False)[
                         "representations"
-                    ][ESM_LAYER]
+                    ][ESM_DEFAULT_REPR_LAYER]
                     .cpu()
                     .numpy()
                 )
@@ -249,9 +252,9 @@ class ResidueEmbedder:
             tokens = tokens.to(self.device)
             with torch.no_grad():
                 reps = (
-                    self.model(tokens, repr_layers=[ESM_LAYER], return_contacts=False)[
+                    self.model(tokens, repr_layers=[ESM_DEFAULT_REPR_LAYER], return_contacts=False)[
                         "representations"
-                    ][ESM_LAYER]
+                    ][ESM_DEFAULT_REPR_LAYER]
                     .detach()
                     .cpu()
                 )
@@ -335,7 +338,7 @@ class ResidueEmbedder:
                     group.create_dataset("embeddings", data=emb_np, compression="gzip")
                     group.attrs["sequence_length"] = len(sequence)
                     group.attrs["sequence"] = sequence
-                    group.attrs["layer"] = ESM_LAYER
+                    group.attrs["layer"] = ESM_DEFAULT_REPR_LAYER
 
                     written += 1
                     progress.update(1)
@@ -361,7 +364,7 @@ def main() -> None:
     parser.add_argument(
         "--fasta",
         type=Path,
-        default=FASTA_PATH,
+        default=SWISSPROT_FASTA,
         help="Input FASTA file (default: SwissProt 2024_01).",
     )
     parser.add_argument(
@@ -373,7 +376,7 @@ def main() -> None:
     parser.add_argument(
         "--max-aa-per-batch",
         type=int,
-        default=DEFAULT_MAX_AA_PER_BATCH,
+        default=ESM_MAX_AA_PER_BATCH,
         help="Maximum total amino acids per embedding batch.",
     )
     parser.add_argument(

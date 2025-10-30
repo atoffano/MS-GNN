@@ -21,10 +21,12 @@ from transformers import AutoTokenizer, EsmForProteinFolding
 from transformers.models.esm.openfold_utils.protein import Protein as OFProtein, to_pdb
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
 
-DATA_DIR = Path("./data/swissprot/2024_01")
-ALPHAFOLD_DIR = DATA_DIR / "alphafold_pdb"
-ESMFOLD_DIR = DATA_DIR / "esmfold_pdb"
-MISSING_FASTA = DATA_DIR / "structure_missing.fasta"
+from src.utils.constants import (
+    SWISSPROT_ROOT,
+    ALPHAFOLD_PDB_DIR,
+    ESMFOLD_PDB_DIR,
+    STRUCTURE_MISSING_FASTA,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -228,7 +230,7 @@ def fold(batch, tokenizer, model, device, truncation):
     )
     pdb_outputs = convert_outputs_to_pdb(outputs, seq_lengths)
     for seq_id, pdb_str in zip(seq_ids, pdb_outputs):
-        out_file = ESMFOLD_DIR / f"ESMFold-{seq_id}.pdb"
+        out_file = ESMFOLD_PDB_DIR / f"ESMFold-{seq_id}.pdb"
         out_file.write_text(pdb_str, encoding="utf-8")
         print(f"Wrote ESMFold .pdb output to {out_file}")
     del outputs
@@ -249,15 +251,15 @@ def main() -> None:
 
     missing_records: List[Tuple[str, str]] = []
     for seq_id, seq in tqdm.tqdm(sequences, desc="Checking existing structures"):
-        alphafold_path = ALPHAFOLD_DIR / f"AF-{seq_id}-F1-model_v6.pdb"
+        alphafold_path = ALPHAFOLD_PDB_DIR / f"AF-{seq_id}-F1-model_v6.pdb"
         if not alphafold_path.exists():
-            esmfold_dir = ESMFOLD_DIR / f"ESMFold-{seq_id}.pdb"
+            esmfold_dir = ESMFOLD_PDB_DIR / f"ESMFold-{seq_id}.pdb"
             if not esmfold_dir.exists():
                 missing_records.append((seq_id, seq))
 
     if not missing_records:
-        if MISSING_FASTA.exists():
-            MISSING_FASTA.unlink()
+        if STRUCTURE_MISSING_FASTA.exists():
+            STRUCTURE_MISSING_FASTA.unlink()
         print("All sequences already have structures.")
         return
 
@@ -268,14 +270,14 @@ def main() -> None:
     for record in select_records:
         missing_records.remove(record)
 
-    MISSING_FASTA.parent.mkdir(parents=True, exist_ok=True)
-    write_fasta(missing_records, MISSING_FASTA)
-    print(f"Wrote {len(missing_records)} missing sequences to {MISSING_FASTA}")
+    STRUCTURE_MISSING_FASTA.parent.mkdir(parents=True, exist_ok=True)
+    write_fasta(missing_records, STRUCTURE_MISSING_FASTA)
+    print(f"Wrote {len(missing_records)} missing sequences to {STRUCTURE_MISSING_FASTA}")
     missing_records = select_records
 
     tokenizer, model, device = load_model(args.local)
     print(f"Loaded ESMFold model on {device}.")
-    ESMFOLD_DIR.mkdir(parents=True, exist_ok=True)
+    ESMFOLD_PDB_DIR.mkdir(parents=True, exist_ok=True)
 
     max_aa_per_batch = 100
 
@@ -307,7 +309,7 @@ def main() -> None:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             continue
-    print(f"ESMFold structures stored in {ESMFOLD_DIR}")
+    print(f"ESMFold structures stored in {ESMFOLD_PDB_DIR}")
 
 
 if __name__ == "__main__":

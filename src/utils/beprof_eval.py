@@ -18,6 +18,18 @@ import os
 import argparse
 import tqdm
 
+from src.utils.constants import (
+    GO_ROOT_TERMS,
+    GO_BIOLOGICAL_PROCESS,
+    GO_MOLECULAR_FUNCTION,
+    GO_CELLULAR_COMPONENT,
+    GO_FUNC_DICT,
+    GO_NAMESPACES,
+    GO_NAMESPACES_REVERT,
+    EXP_CODES,
+    CAFA_TARGETS,
+)
+
 
 def parse_args():
     """Parse command-line arguments for BEPROF evaluation.
@@ -46,7 +58,9 @@ __all__ = [
     "read_pkl",
     "save_pkl",
 ]
-ROOT_GO_TERMS = {"GO:0003674", "GO:0008150", "GO:0005575"}
+
+# Re-export constants for backwards compatibility
+ROOT_GO_TERMS = GO_ROOT_TERMS
 
 
 def fmax(go, targets, scores, idx_goid):
@@ -211,66 +225,13 @@ def save_pkl(pklfile, data):
         pkl.dump(data, fw)
 
 
-BIOLOGICAL_PROCESS = "GO:0008150"
-MOLECULAR_FUNCTION = "GO:0003674"
-CELLULAR_COMPONENT = "GO:0005575"
-FUNC_DICT = {
-    "cc": CELLULAR_COMPONENT,
-    "mf": MOLECULAR_FUNCTION,
-    "bp": BIOLOGICAL_PROCESS,
-}
-
-NAMESPACES = {
-    "cc": "cellular_component",
-    "mf": "molecular_function",
-    "bp": "biological_process",
-}
-
-NAMESPACES_REVERT = {
-    "cellular_component": "cc",
-    "molecular_function": "mf",
-    "biological_process": "bp",
-}
-
-EXP_CODES = set(
-    [
-        "EXP",
-        "IDA",
-        "IPI",
-        "IMP",
-        "IGI",
-        "IEP",
-        "TAS",
-        "IC",
-    ]
-)
-CAFA_TARGETS = set(
-    [
-        "10090",
-        "223283",
-        "273057",
-        "559292",
-        "85962",
-        "10116",
-        "224308",
-        "284812",
-        "7227",
-        "9606",
-        "160488",
-        "237561",
-        "321314",
-        "7955",
-        "99287",
-        "170187",
-        "243232",
-        "3702",
-        "83333",
-        "208963",
-        "243273",
-        "44689",
-        "8355",
-    ]
-)
+# Re-export constants for backwards compatibility
+BIOLOGICAL_PROCESS = GO_BIOLOGICAL_PROCESS
+MOLECULAR_FUNCTION = GO_MOLECULAR_FUNCTION
+CELLULAR_COMPONENT = GO_CELLULAR_COMPONENT
+FUNC_DICT = GO_FUNC_DICT
+NAMESPACES = GO_NAMESPACES
+NAMESPACES_REVERT = GO_NAMESPACES_REVERT
 
 
 def is_cafa_target(org):

@@ -12,6 +12,12 @@ import numpy as np
 import requests
 import torch
 
+from src.utils.constants import (
+    UNIPROT_JSON_URL,
+    PDB_DOWNLOAD_URL,
+    ALPHAFOLD_STRUCTURE_URL,
+    RANDOM_SEED,
+)
 from src.utils.helpers import timeit
 
 try:
@@ -21,12 +27,6 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-# Constants
-UNIPROT_JSON_URL = "https://rest.uniprot.org/uniprotkb/{uniprot_id}.json"
-PDB_DOWNLOAD_URL = "https://files.rcsb.org/download/{pdb_id}.pdb"
-ALPHAFOLD_URL = "https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v6.pdb"
-_PLOT_SEED = 42
 
 
 @dataclass
@@ -111,7 +111,7 @@ def _download_pdb(uniprot_id: str, dest_path: str) -> bool:
 def _download_alphafold(uniprot_id: str, dest_path: str) -> bool:
     """Try downloading structure from AlphaFold."""
     try:
-        response = requests.get(ALPHAFOLD_URL.format(uniprot_id=uniprot_id), timeout=15)
+        response = requests.get(ALPHAFOLD_STRUCTURE_URL.format(uniprot_id=uniprot_id), timeout=15)
         response.raise_for_status()
         with open(dest_path, "wb") as f:
             f.write(response.content)
@@ -239,7 +239,7 @@ def _plot_protein_network(
     for i in range(edge_index.size(1)):
         G.add_edge(int(src[i]), int(dst[i]), color=float(weights[i].item()))
 
-    pos = nx.spring_layout(G, seed=_PLOT_SEED)
+    pos = nx.spring_layout(G, seed=RANDOM_SEED)
     nx.draw_networkx_nodes(G, pos, node_color="#d9d9d9")
 
     edges = None

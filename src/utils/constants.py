@@ -42,6 +42,8 @@ ESMFOLD_PDB_DIR = SWISSPROT_ROOT / "esmfold_pdb"
 
 # Graphs
 PROTEIN_GRAPHS_DIR = SWISSPROT_ROOT / "protein_graphs"
+STRUCTURE_MISSING_PATH = PROTEIN_GRAPHS_DIR / "structure_missing_rev.fasta"
+STRUCTURE_MISSING_FASTA = SWISSPROT_ROOT / "structure_missing.fasta"
 
 # StringDB
 STRINGDB_TSV = DATA_ROOT / "swissprot_stringdb.tsv"
@@ -148,10 +150,34 @@ EDGE_TYPE_STRINGDB = ("protein", "stringdb", "protein")
 GO_ONTOLOGIES = ["BPO", "CCO", "MFO"]
 GO_ANNOTATION_TYPES = ["experimental", "curated"]
 
+# Root GO terms for each ontology
+GO_ROOT_TERMS = {"GO:0003674", "GO:0008150", "GO:0005575"}
+GO_BIOLOGICAL_PROCESS = "GO:0008150"
+GO_MOLECULAR_FUNCTION = "GO:0003674"
+GO_CELLULAR_COMPONENT = "GO:0005575"
+
+GO_FUNC_DICT = {
+    "cc": GO_CELLULAR_COMPONENT,
+    "mf": GO_MOLECULAR_FUNCTION,
+    "bp": GO_BIOLOGICAL_PROCESS,
+}
+
 GO_NAMESPACE_MAP = {
     "biological_process": "BPO",
     "cellular_component": "CCO",
     "molecular_function": "MFO",
+}
+
+GO_NAMESPACES = {
+    "cc": "cellular_component",
+    "mf": "molecular_function",
+    "bp": "biological_process",
+}
+
+GO_NAMESPACES_REVERT = {
+    "cellular_component": "cc",
+    "molecular_function": "mf",
+    "biological_process": "bp",
 }
 
 # ============================================================================
@@ -161,6 +187,65 @@ GO_NAMESPACE_MAP = {
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3
 RANDOM_SEED = 42
+
+# BEPROF Evaluation Constants
+EXP_CODES = {
+    "EXP",
+    "IDA",
+    "IPI",
+    "IMP",
+    "IGI",
+    "IEP",
+    "TAS",
+    "IC",
+}
+
+CAFA_TARGETS = {
+    "10090",
+    "223283",
+    "273057",
+    "559292",
+    "85962",
+    "10116",
+    "224308",
+    "284812",
+    "7227",
+    "9606",
+    "160488",
+    "237561",
+    "321314",
+    "7955",
+    "99287",
+    "170187",
+    "243232",
+    "3702",
+    "83333",
+    "208963",
+    "243273",
+    "44689",
+    "8355",
+}
+
+# ============================================================================
+# Model Interpretability Parameters
+# ============================================================================
+
+SUPPORTED_CAPTUM_METHODS = [
+    "IntegratedGradients",
+    "Saliency",
+    "InputXGradient",
+    "Deconvolution",
+    "ShapleyValueSampling",
+    "GuidedBackprop",
+]
+
+# ============================================================================
+# External API URLs
+# ============================================================================
+
+UNIPROT_JSON_URL = "https://rest.uniprot.org/uniprotkb/{uniprot_id}.json"
+PDB_DOWNLOAD_URL = "https://files.rcsb.org/download/{pdb_id}.pdb"
+ALPHAFOLD_STRUCTURE_URL = "https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v6.pdb"
 
 # ============================================================================
 # Logging Configuration
