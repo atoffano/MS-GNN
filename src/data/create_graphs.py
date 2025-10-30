@@ -39,7 +39,7 @@ from src.utils.constants import (
     EMBED_H5_PATH,
     STRUCTURE_MISSING_PATH,
     CONTACT_CUTOFF,
-    CONTACT_CHUNK_SIZE_SIZE,
+    CONTACT_CHUNK_SIZE,
 )
 
 warnings.filterwarnings("ignore")
