@@ -188,44 +188,6 @@ BATCH_SIZE = 32
 LEARNING_RATE = 1e-3
 RANDOM_SEED = 42
 
-# BEPROF Evaluation Constants
-EXP_CODES = {
-    "EXP",
-    "IDA",
-    "IPI",
-    "IMP",
-    "IGI",
-    "IEP",
-    "TAS",
-    "IC",
-}
-
-CAFA_TARGETS = {
-    "10090",
-    "223283",
-    "273057",
-    "559292",
-    "85962",
-    "10116",
-    "224308",
-    "284812",
-    "7227",
-    "9606",
-    "160488",
-    "237561",
-    "321314",
-    "7955",
-    "99287",
-    "170187",
-    "243232",
-    "3702",
-    "83333",
-    "208963",
-    "243273",
-    "44689",
-    "8355",
-}
-
 # ============================================================================
 # Model Interpretability Parameters
 # ============================================================================
@@ -245,7 +207,9 @@ SUPPORTED_CAPTUM_METHODS = [
 
 UNIPROT_JSON_URL = "https://rest.uniprot.org/uniprotkb/{uniprot_id}.json"
 PDB_DOWNLOAD_URL = "https://files.rcsb.org/download/{pdb_id}.pdb"
-ALPHAFOLD_STRUCTURE_URL = "https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v6.pdb"
+ALPHAFOLD_STRUCTURE_URL = (
+    "https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v6.pdb"
+)
 
 # ============================================================================
 # Logging Configuration

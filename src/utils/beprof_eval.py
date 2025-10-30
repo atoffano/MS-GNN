@@ -26,14 +26,49 @@ from src.utils.constants import (
     GO_FUNC_DICT,
     GO_NAMESPACES,
     GO_NAMESPACES_REVERT,
-    EXP_CODES,
-    CAFA_TARGETS,
 )
+
+EXP_CODES = {
+    "EXP",
+    "IDA",
+    "IPI",
+    "IMP",
+    "IGI",
+    "IEP",
+    "TAS",
+    "IC",
+}
+
+CAFA_TARGETS = {
+    "10090",
+    "223283",
+    "273057",
+    "559292",
+    "85962",
+    "10116",
+    "224308",
+    "284812",
+    "7227",
+    "9606",
+    "160488",
+    "237561",
+    "321314",
+    "7955",
+    "99287",
+    "170187",
+    "243232",
+    "3702",
+    "83333",
+    "208963",
+    "243273",
+    "44689",
+    "8355",
+}
 
 
 def parse_args():
     """Parse command-line arguments for BEPROF evaluation.
-    
+
     Returns:
         Parsed arguments namespace
     """
@@ -65,13 +100,13 @@ ROOT_GO_TERMS = GO_ROOT_TERMS
 
 def fmax(go, targets, scores, idx_goid):
     """Calculate F-max score with information content weighting.
-    
+
     Args:
         go: GO ontology object with IC calculation methods
         targets: Target annotations matrix
         scores: Prediction scores matrix
         idx_goid: List mapping indices to GO term IDs
-        
+
     Returns:
         Tuple of F-max metrics including IC-weighted and depth-weighted versions
     """
@@ -202,10 +237,10 @@ def fmax(go, targets, scores, idx_goid):
 
 def read_pkl(pklfile):
     """Load data from a pickle file.
-    
+
     Args:
         pklfile: Path to pickle file
-        
+
     Returns:
         Unpickled data object
     """
@@ -216,7 +251,7 @@ def read_pkl(pklfile):
 
 def save_pkl(pklfile, data):
     """Save data to a pickle file.
-    
+
     Args:
         pklfile: Path to output pickle file
         data: Data object to pickle
