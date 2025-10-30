@@ -12,10 +12,8 @@ The module supports:
 """
 
 import argparse
-import math
 from pathlib import Path
 from typing import Iterable, List, Tuple
-import time
 import tqdm
 import torch
 import random
@@ -31,7 +29,7 @@ MISSING_FASTA = DATA_DIR / "structure_missing.fasta"
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for ESMFold structure generation.
-    
+
     Returns:
         Parsed arguments namespace with fasta and local flags
     """
@@ -49,10 +47,10 @@ def parse_args() -> argparse.Namespace:
 
 def read_fasta(path: Path) -> List[Tuple[str, str]]:
     """Read sequences from a FASTA file.
-    
+
     Args:
         path: Path to FASTA file
-        
+
     Returns:
         List of (sequence_id, sequence) tuples
     """
@@ -78,7 +76,7 @@ def read_fasta(path: Path) -> List[Tuple[str, str]]:
 
 def write_fasta(records: Iterable[Tuple[str, str]], path: Path) -> None:
     """Write sequences to a FASTA file.
-    
+
     Args:
         records: Iterable of (sequence_id, sequence) tuples
         path: Output path for FASTA file
@@ -92,10 +90,10 @@ def load_model(
     local: bool,
 ) -> Tuple[AutoTokenizer, EsmForProteinFolding, torch.device]:
     """Load ESMFold model and tokenizer.
-    
+
     Args:
         local: If True, use local checkpoint; otherwise download from HuggingFace
-        
+
     Returns:
         Tuple of (tokenizer, model, device)
     """
@@ -119,11 +117,11 @@ def load_model(
 
 def convert_outputs_to_pdb(raw_outputs, seq_lengths: List[int]) -> List[str]:
     """Convert ESMFold model outputs to PDB format strings.
-    
+
     Args:
         raw_outputs: Dictionary of model outputs from ESMFold
         seq_lengths: List of sequence lengths for each protein in batch
-        
+
     Returns:
         List of PDB format strings
     """
@@ -187,14 +185,14 @@ def generate_pdb_batch(
     batch: List[Tuple[str, str]], tokenizer, model, device, truncation=False
 ) -> Tuple[List[str], dict, List[int]]:
     """Generate ESMFold model outputs for a batch of sequences.
-    
+
     Args:
         batch: List of (sequence_id, sequence) tuples
         tokenizer: ESMFold tokenizer
         model: ESMFold model
         device: Torch device
         truncation: Whether to truncate sequences longer than max_length
-        
+
     Returns:
         Tuple of (sequence_ids, model_outputs, sequence_lengths)
     """
@@ -217,7 +215,7 @@ def generate_pdb_batch(
 
 def fold(batch, tokenizer, model, device, truncation):
     """Generate and save PDB files for a batch of sequences.
-    
+
     Args:
         batch: List of (sequence_id, sequence) tuples
         tokenizer: ESMFold tokenizer
@@ -238,7 +236,7 @@ def fold(batch, tokenizer, model, device, truncation):
 
 def main() -> None:
     """Main function to generate ESMFold structures for missing proteins.
-    
+
     Reads input FASTA, checks for existing structures, and generates
     new PDB files using ESMFold for proteins lacking AlphaFold predictions.
     """

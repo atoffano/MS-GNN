@@ -174,7 +174,7 @@ def get_stringdb(
     base_dir,
 ):
     """Download and filter STRING database protein interactions.
-    
+
     Args:
         base_dir: Base directory path for data storage
     """

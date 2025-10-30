@@ -1,8 +1,4 @@
-"""Model inference and interpretability utilities.
-
-This module provides tools for running inference with trained models and generating
-explanations for predictions using attention mechanisms and Captum attribution methods.
-"""
+"""Model inference and interpretability utilities."""
 
 import torch
 import yaml
@@ -10,7 +6,7 @@ import logging
 import argparse
 import go3
 import tqdm
-from typing import Dict, Optional
+from typing import Optional
 from torch_geometric.explain import Explainer, CaptumExplainer
 from torch_geometric.loader import NeighborLoader
 
@@ -44,15 +40,7 @@ SUPPORTED_CAPTUM_METHODS = [
 
 
 def load_model_and_config(model_path: str, device: torch.device):
-    """Load pretrained model, config, and dataset.
-
-    Args:
-        model_path: Path to model directory containing cfg.yaml and model.pth
-        device: Device to load model onto
-
-    Returns:
-        Tuple of (config, model, dataset)
-    """
+    """Load pretrained model, config, and dataset."""
     with open(f"{model_path}/cfg.yaml", "r") as f:
         config = yaml.safe_load(f)
 
@@ -64,13 +52,9 @@ def load_model_and_config(model_path: str, device: torch.device):
     state_dict = torch.load(
         f"{model_path}/model.pth", map_location=device, weights_only=True
     )
-
-    # Handle compiled model state dict
     state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
-
     model.load_state_dict(state_dict)
-    model = model.to(device)
-    model.eval()
+    model = model.to(device).eval()
 
     logger.info(f"Model loaded and moved to {device}")
     return config, model, dataset
@@ -81,7 +65,7 @@ class StructureCache:
 
     def __init__(self, dataset, batch, base_output_dir: str):
         self.dataset = dataset
-        self.cache: Dict[str, str] = {}
+        self.cache = {}
         self._preload(batch, base_output_dir)
 
     def _preload(self, batch, base_output_dir: str):
@@ -101,7 +85,6 @@ class StructureCache:
             try:
                 pdb_path = ensure_structure(pdb_id, context.root_dir)
                 self.cache[uniprot_id] = pdb_path
-                logger.debug(f"Cached structure for {uniprot_id}")
             except FileNotFoundError as e:
                 logger.warning(f"Could not preload structure for {uniprot_id}: {e}")
 
@@ -113,26 +96,25 @@ class StructureCache:
 
 
 class GOTermMapper:
-    """Manages GO term to index mapping."""
+    """Manages GO term to index mapping and ontology operations."""
 
     def __init__(self, dataset, obo_path: Optional[str] = None):
         self.dataset = dataset
         self.mapping = self._build_mapping(dataset)
         self.idx_to_go = {idx: term for term, idx in self.mapping.items()}
+        self.ontology_loaded = False
+
         if obo_path:
             logger.info(f"Loading GO ontology from {obo_path}")
             go3.load_go_terms(obo_path)
             self.ontology_loaded = True
-        else:
-            self.ontology_loaded = False
 
     @staticmethod
-    def _build_mapping(dataset) -> Dict[str, int]:
+    def _build_mapping(dataset):
         """Build complete mapping from GO term IDs to indices."""
         go_term_mapping = {}
-        for _, vocab_info in dataset.go_vocab_info.items():
+        for vocab_info in dataset.go_vocab_info.values():
             go_term_mapping.update(vocab_info["go_to_idx"])
-
         logger.info(f"Built GO term mapping with {len(go_term_mapping)} terms")
         return go_term_mapping
 
@@ -142,7 +124,7 @@ class GOTermMapper:
 
     def get_name(self, go_term: str) -> str:
         """Get human-readable name for a GO term."""
-        for _, vocab_info in self.dataset.go_vocab_info.items():
+        for vocab_info in self.dataset.go_vocab_info.values():
             if go_term in vocab_info.get("idx_to_name", {}):
                 return vocab_info["idx_to_name"][go_term]
         return go_term
@@ -155,46 +137,34 @@ class GOTermMapper:
             if idx is not None:
                 valid_terms.append((go_term, idx))
             else:
-                logger.warning(f"GO term {go_term} not found in vocabulary, skipping")
+                logger.warning(f"GO term {go_term} not found in vocabulary")
         return valid_terms
 
     def get_leaf_terms_from_predictions(
         self, predictions: torch.Tensor, threshold: float = 0.5
     ) -> list[tuple[str, int]]:
-        """Get leaf GO terms from model predictions above threshold.
-
-        Args:
-            predictions: Model prediction tensor
-            threshold: Prediction threshold for considering a term
-
-        Returns:
-            List of (leaf_term_id, leaf_term_idx) tuples
-        """
+        """Get leaf GO terms from model predictions above threshold."""
         if not self.ontology_loaded:
             raise RuntimeError(
                 "GO ontology not loaded. Provide obo_path to GOTermMapper."
             )
 
-        # Get predicted terms above threshold
         predicted_indices = (predictions > threshold).nonzero(as_tuple=True)[0]
         logger.info(f"Found {len(predicted_indices)} predicted terms above {threshold}")
 
-        # Map indices back to GO term IDs
         predicted_terms = [
             self.idx_to_go[idx.item()]
             for idx in predicted_indices
             if idx.item() in self.idx_to_go
         ]
 
-        # Filter for leaf terms (no children)
         leaf_terms = []
         for go_term in predicted_terms:
             try:
                 term = go3.get_term_by_id(go_term)
                 if not term.children:
-                    term_idx = self.mapping[go_term]
-                    leaf_terms.append((go_term, term_idx))
-            except ValueError:  # Procs off obsolete terms
+                    leaf_terms.append((go_term, self.mapping[go_term]))
+            except ValueError:
                 pass
 
         logger.info(f"Identified {len(leaf_terms)} leaf terms from predictions")
@@ -203,39 +173,24 @@ class GOTermMapper:
     def get_term_with_ancestors_target(
         self, leaf_term_id: str, output_size: int
     ) -> torch.Tensor:
-        """Create target tensor with leaf term and all its ancestors set to 1.
-
-        Args:
-            leaf_term_id: GO term ID of the leaf node
-            output_size: Size of the output tensor (number of GO terms)
-
-        Returns:
-            Binary tensor with 1s for the leaf term and all its ancestors
-        """
+        """Create target tensor with leaf term and all its ancestors set to 1."""
         target = torch.zeros(output_size, dtype=torch.long)
 
-        # Get the term and its ancestors
         try:
             term = go3.get_term_by_id(leaf_term_id)
             ancestors = go3.ancestors(leaf_term_id)
 
-            # Set leaf term to 1
-            leaf_idx = self.mapping.get(leaf_term_id)
-            if leaf_idx is not None:
-                target[leaf_idx] = 1
-
-            # Set all ancestors to 1
-            for ancestor_id in ancestors:
-                ancestor_idx = self.mapping.get(ancestor_id)
-                if ancestor_idx is not None:
-                    target[ancestor_idx] = 1
+            # Set leaf and ancestors
+            for term_id in [leaf_term_id] + list(ancestors):
+                idx = self.mapping.get(term_id)
+                if idx is not None:
+                    target[idx] = 1
 
             num_active = target.sum().item()
             logger.info(
                 f"Created target for {leaf_term_id} ({term.name}): "
-                f"{num_active} active terms (1 leaf + {num_active - 1} ancestors)"
+                f"{num_active} active terms"
             )
-
         except ValueError as e:
             logger.error(f"Error creating target for {leaf_term_id}: {e}")
 
@@ -257,13 +212,7 @@ class ExplanationGenerator:
         explanation_type: str = "model",
         target: Optional[torch.Tensor] = None,
     ):
-        """Generate explanations for the batch.
-
-        Args:
-            batch: Input batch
-            explanation_type: "model" or "phenomenon"
-            target: Pre-computed target tensor (for phenomenon explanations)
-        """
+        """Generate explanations for the batch."""
         batch = batch.to(self.device)
 
         explainer = Explainer(
@@ -283,28 +232,17 @@ class ExplanationGenerator:
             f"Generating {explanation_type} explanations with {self.captum_method}..."
         )
 
-        if explanation_type == "model":
-            hetero_explanation = explainer(
-                batch.x_dict,
-                batch.edge_index_dict,
-                batch=batch,
-            )
-        else:
+        kwargs = {"batch": batch}
+        if explanation_type == "phenomenon":
             if target is None:
                 raise ValueError("target required for phenomenon explanations")
-
+            kwargs.update({"target": target, "index": None})
             logger.info(
                 f"Computing attributions with {target.sum().item()} active terms"
             )
-            hetero_explanation = explainer(
-                batch.x_dict,
-                batch.edge_index_dict,
-                batch=batch,
-                target=target,
-                index=None,
-            )
 
-        # Normalize edge masks
+        hetero_explanation = explainer(batch.x_dict, batch.edge_index_dict, **kwargs)
+
         self._normalize_explanations(hetero_explanation)
         return hetero_explanation
 
@@ -317,7 +255,6 @@ class ExplanationGenerator:
         ]:
             if key not in hetero_explanation:
                 continue
-
             em = hetero_explanation[key]["edge_mask"].abs()
             em = (em - em.min()) / (em.max() - em.min() + 1e-8)
             hetero_explanation[key]["edge_mask"] = em
@@ -338,7 +275,7 @@ class ExplanationExporter:
         self.structure_cache = structure_cache
         self.go_mapper = go_mapper
 
-    def export_global_explanations(self, batch, hetero_explanation):
+    def export_global(self, batch, hetero_explanation, attentions=None):
         """Export global model explanations."""
         logger.info("Plotting global explanations...")
         plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
@@ -351,30 +288,32 @@ class ExplanationExporter:
             structure_cache=self.structure_cache.cache,
         )
 
-    def export_go_term_explanation(self, batch, hetero_explanation, go_term: str):
-        """Export GO term-specific explanation to protein folder."""
+        if attentions:
+            self._export_attention(batch, attentions)
+            analyze_attention_captum_correlation(
+                self.output_dir, self.dataset, batch, attentions, hetero_explanation
+            )
+
+    def export_go_term(self, batch, hetero_explanation, go_term: str, attentions=None):
+        """Export GO term-specific explanation."""
         logger.info(f"Plotting explanations for {go_term}...")
-
-        # Get GO term name for better titles
         go_name = self.go_mapper.get_name(go_term)
+        title_suffix = f"GO: {go_name}"
 
-        # Plot with GO term context - these will be saved to protein-specific GO subdirectories
         plot_systemic_explanation(
             self.output_dir,
             hetero_explanation,
             self.dataset,
-            title_suffix=f"GO: {go_name}",
+            title_suffix=title_suffix,
             go_term=go_term,
         )
         plot_protein_explanation(
             self.output_dir,
             hetero_explanation,
             self.dataset,
-            title_suffix=f"GO: {go_name}",
+            title_suffix=title_suffix,
             go_term=go_term,
         )
-
-        # Export 3D structures to protein-specific GO term subdirectories
         export_captum_3d(
             self.output_dir,
             self.dataset,
@@ -384,17 +323,22 @@ class ExplanationExporter:
             structure_cache=self.structure_cache.cache,
         )
 
-    def export_attention(self, batch, attentions):
-        """Export attention visualizations."""
-        if attentions is None:
-            return
+        if attentions:
+            self._export_attention(batch, attentions, go_term)
 
+    def _export_attention(self, batch, attentions, go_term=None):
+        """Export attention visualizations."""
         for idx, layer_attention in enumerate(attentions, start=1):
-            plot_systemic_attention(
-                self.output_dir, layer_attention, self.dataset, batch, idx
-            )
+            if layer_attention is None:
+                continue
+
+            if go_term is None:
+                plot_systemic_attention(
+                    self.output_dir, layer_attention, self.dataset, batch, idx
+                )
+
             plot_protein_attention(
-                self.output_dir, layer_attention, self.dataset, batch, idx
+                self.output_dir, layer_attention, self.dataset, batch, idx, go_term
             )
             export_layer_attention_3d(
                 self.output_dir,
@@ -403,6 +347,7 @@ class ExplanationExporter:
                 idx,
                 layer_attention,
                 structure_cache=self.structure_cache.cache,
+                go_term=go_term,
             )
 
 
@@ -423,104 +368,48 @@ def create_data_loader(dataset, protein_names: list[str]) -> NeighborLoader:
     )
 
 
-def process_batch(
-    batch,
-    model,
-    device: torch.device,
-    exporter: ExplanationExporter,
-    generator: ExplanationGenerator,
-    go_mapper: GOTermMapper,
-    go_terms: Optional[list[str]],
-):
+def process_batch(batch, model, device, exporter, generator, go_mapper, go_terms):
     """Process a single batch: run inference and generate explanations."""
     batch = batch.to(device)
-
-    # Run model inference
     preds, attn = model(
-        batch.x_dict,
-        batch.edge_index_dict,
-        batch=batch,
-        return_attention_weights=True,
+        batch.x_dict, batch.edge_index_dict, batch=batch, return_attention_weights=True
     )
 
-    # Generate and export global explanations
+    # Global explanations
     logger.info("=" * 60)
     logger.info("Generating global model explanations...")
     logger.info("=" * 60)
+    global_explanation = generator.generate(batch, "model")
+    exporter.export_global(batch, global_explanation, attn)
 
-    global_explanation = generator.generate(batch, explanation_type="model")
-    exporter.export_global_explanations(batch, global_explanation)
+    # GO term-specific explanations
+    if not go_terms:
+        return
 
-    # Generate GO term-specific explanations if requested
-    if go_terms:
-        logger.info("=" * 60)
-        logger.info("Generating GO term-specific explanations...")
-        logger.info("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Generating GO term-specific explanations...")
+    logger.info("=" * 60)
 
-        # Check if we should use predicted terms
-        if go_terms == ["predicted"]:
-            logger.info("Using predicted leaf terms from model output")
-            # Get predictions for the first protein in batch (assuming batch_size=1)
-            protein_preds = preds[0]  # Shape: [num_go_terms]
-            leaf_terms = go_mapper.get_leaf_terms_from_predictions(protein_preds)
+    # Determine leaf terms
+    if go_terms == ["predicted"]:
+        leaf_terms = go_mapper.get_leaf_terms_from_predictions(preds[0])
+        if not leaf_terms:
+            logger.warning("No leaf terms found in predictions")
+            return
+    else:
+        leaf_terms = go_mapper.validate_terms(go_terms)
 
-            if not leaf_terms:
-                logger.warning("No leaf terms found in predictions above threshold")
-                return
+    # Generate per-term explanations
+    for leaf_term_id, _ in tqdm.tqdm(leaf_terms, desc="Attribution per GO leaf term"):
+        go_name = go_mapper.get_name(leaf_term_id)
+        logger.info(f"\n--- Explaining: {leaf_term_id} ({go_name}) and ancestors ---")
 
-            # Generate explanations for each leaf term with its ancestors
-            for leaf_term_id, _ in tqdm.tqdm(
-                leaf_terms, desc="Attribution per GO leaf term"
-            ):
-                go_name = go_mapper.get_name(leaf_term_id)
-                logger.info(
-                    f"\n--- Explaining leaf term: {leaf_term_id} ({go_name}) and its ancestors ---"
-                )
+        target = go_mapper.get_term_with_ancestors_target(
+            leaf_term_id, preds.size(1)
+        ).to(device)
 
-                # Create target with leaf term and all ancestors
-                target = go_mapper.get_term_with_ancestors_target(
-                    leaf_term_id, output_size=preds.size(1)
-                ).to(device)
-
-                # Generate explanation
-                go_explanation = generator.generate(
-                    batch,
-                    explanation_type="phenomenon",
-                    target=target,
-                )
-
-                # Export with leaf term ID
-                exporter.export_go_term_explanation(batch, go_explanation, leaf_term_id)
-        else:
-            # Use provided GO terms
-            valid_terms = go_mapper.validate_terms(go_terms)
-
-            for go_term, go_idx in valid_terms:
-                go_name = go_mapper.get_name(go_term)
-                logger.info(
-                    f"\n--- Explaining GO term: {go_term} ({go_name}) [index: {go_idx}] ---"
-                )
-
-                # Create single-term target
-                target = torch.zeros(preds.size(1), dtype=torch.long, device=device)
-                target[go_idx] = 1
-
-                go_explanation = generator.generate(
-                    batch,
-                    explanation_type="phenomenon",
-                    target=target,
-                )
-                exporter.export_go_term_explanation(batch, go_explanation, go_term)
-
-    # Export attention artifacts
-    exporter.export_attention(batch, attn)
-    analyze_attention_captum_correlation(
-        exporter.output_dir,
-        exporter.dataset,
-        batch,
-        attn,
-        global_explanation,
-    )
+        go_explanation = generator.generate(batch, "phenomenon", target)
+        exporter.export_go_term(batch, go_explanation, leaf_term_id, attn)
 
 
 def main():
@@ -528,30 +417,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate explanations for protein function prediction model"
     )
-    parser.add_argument(
-        "--model_path",
-        type=str,
-        required=True,
-        help="Path to pretrained model directory",
-    )
-    parser.add_argument(
-        "--proteins",
-        nargs="*",
-        default=None,
-        help="Specific protein IDs to explain",
-    )
-    parser.add_argument(
-        "--go_terms",
-        nargs="*",
-        default=None,
-        help='Specific GO terms to explain (e.g., GO:0000001) or "predicted" for leaf terms',
-    )
+    parser.add_argument("--model_path", type=str, required=True)
+    parser.add_argument("--proteins", nargs="*", default=None)
+    parser.add_argument("--go_terms", nargs="*", default=None)
     parser.add_argument(
         "--captum_method",
         type=str,
         default="IntegratedGradients",
         choices=SUPPORTED_CAPTUM_METHODS,
-        help="Captum attribution method",
     )
 
     args = parser.parse_args()
@@ -575,21 +448,12 @@ def main():
 
     # Process each batch
     for batch in loader:
-        # Initialize batch-specific components
         structure_cache = StructureCache(dataset, batch, args.model_path)
         exporter = ExplanationExporter(
             args.model_path, dataset, structure_cache, go_mapper
         )
-
-        # Process batch
         process_batch(
-            batch,
-            model,
-            device,
-            exporter,
-            generator,
-            go_mapper,
-            args.go_terms,
+            batch, model, device, exporter, generator, go_mapper, args.go_terms
         )
 
     logger.info(
