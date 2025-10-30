@@ -28,24 +28,26 @@ from Bio.PDB import PDBParser
 from torch_geometric.data import HeteroData
 from tqdm.auto import tqdm
 
+from src.utils.constants import (
+    SWISSPROT_ROOT,
+    PROTEIN_GRAPHS_DIR,
+    SWISSPROT_FASTA,
+    INTERPRO_TSV,
+    GO_OBO_PATH,
+    GO_ANNOTATION_TEMPLATE,
+    GO_EXP_ANNOTATION_TEMPLATE,
+    EMBED_H5_PATH,
+    STRUCTURE_MISSING_PATH,
+    CONTACT_CUTOFF,
+    CONTACT_CHUNK_SIZE_SIZE,
+)
+
 warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-DATA_ROOT = Path("./data/swissprot/2024_01")
-OUTPUT_DIR = DATA_ROOT / "protein_graphs"
-FASTA_PATH = DATA_ROOT / "swissprot_2024_01.fasta"
-INTERPRO_TSV = DATA_ROOT / "swissprot_interpro_106_0.tsv"
-GO_OBO_PATH = Path("./data/go.obo")
-GO_ANNOTATION_TEMPLATE = DATA_ROOT / "swissprot_2024_01_{onto}_annotations.tsv"
-GO_EXP_ANNOTATION_TEMPLATE = DATA_ROOT / "swissprot_2024_01_{onto}_exp_annotations.tsv"
-EMBED_H5_PATH = DATA_ROOT / "swissprot_esm1b_per_aa.h5"
-
-STRUCTURE_MISSING_PATH = OUTPUT_DIR / "structure_missing_rev.fasta"
-CONTACT_CUTOFF = 10.0
-CONTACT_CHUNK = 512
-
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+# Create output directory if it doesn't exist
+PROTEIN_GRAPHS_DIR.mkdir(parents=True, exist_ok=True)
 STRUCTURE_MISSING_PATH.touch(exist_ok=True)
 
 
@@ -71,7 +73,7 @@ def build_and_save_protein_graph(
         Tuple of (success, error_message, embeddings_missing)
     """
     # # Check if graph already exists with valid contact edges
-    # existing_path = OUTPUT_DIR / f"{protein_id}.pt"
+    # existing_path = PROTEIN_GRAPHS_DIR / f"{protein_id}.pt"
     # if existing_path.is_file():
     #     try:
     #         existing_data = torch.load(existing_path)
@@ -104,7 +106,7 @@ def build_and_save_protein_graph(
         if not add_close_contact_edges(data, protein_id):
             return False, "Sequence/structure mismatch (not truncated)", False
 
-        torch.save(data, OUTPUT_DIR / f"{protein_id}.pt")
+        torch.save(data, PROTEIN_GRAPHS_DIR / f"{protein_id}.pt")
         return True, None, False
     except Exception as exc:
         return False, str(exc), False
@@ -187,7 +189,7 @@ def load_ca_coordinates(pdb_path: Path, sequence_length: int) -> torch.Tensor:
 def build_close_contact_edges(
     coords: torch.Tensor,
     cutoff: float = CONTACT_CUTOFF,
-    chunk_size: int = CONTACT_CHUNK,
+    chunk_size: int = CONTACT_CHUNK_SIZE,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Build edges between spatially close amino acid residues.
 
@@ -298,7 +300,7 @@ def load_interpro_annotations() -> Tuple[Dict[str, torch.Tensor], int]:
             vec[ipr_to_idx[ipr]] = 1.0
         interpro[pid] = vec
 
-    with open(OUTPUT_DIR / "interpro_vocab.pkl", "wb") as handle:
+    with open(PROTEIN_GRAPHS_DIR / "interpro_vocab.pkl", "wb") as handle:
         pickle.dump({"ipr_to_idx": ipr_to_idx, "vocab_size": len(ipr_ids)}, handle)
 
     return interpro, len(ipr_ids)
@@ -342,7 +344,7 @@ def load_go_vocab() -> Dict[str, int]:
             "vocab_size": len(sorted_terms),
         }
 
-    with open(OUTPUT_DIR / "go_vocab.pkl", "wb") as handle:
+    with open(PROTEIN_GRAPHS_DIR / "go_vocab.pkl", "wb") as handle:
         pickle.dump(vocab_info, handle)
 
     return {onto: info["vocab_size"] for onto, info in vocab_info.items()}
@@ -541,7 +543,7 @@ def add_close_contact_edges(data: HeteroData, protein_id: str) -> bool:
 
     # Build contact edges based on 3D distances
     edge_index, edge_attr = build_close_contact_edges(
-        coords, CONTACT_CUTOFF, CONTACT_CHUNK
+        coords, CONTACT_CUTOFF, CONTACT_CHUNK_SIZE
     )
 
     data["aa", "close_to", "aa"].edge_index = edge_index

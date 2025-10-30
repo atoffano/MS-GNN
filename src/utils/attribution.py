@@ -12,6 +12,7 @@ from torch_geometric.loader import NeighborLoader
 
 from src.data.dataloading import SwissProtDataset, make_batch_transform
 from src.models.gnn_model import ProteinGNN
+from src.utils.constants import SUPPORTED_CAPTUM_METHODS
 from src.utils.visualize import (
     plot_systemic_explanation,
     plot_protein_explanation,
@@ -28,15 +29,6 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-SUPPORTED_CAPTUM_METHODS = [
-    "IntegratedGradients",
-    "Saliency",
-    "InputXGradient",
-    "Deconvolution",
-    "ShapleyValueSampling",
-    "GuidedBackprop",
-]
 
 
 def load_model_and_config(model_path: str, device: torch.device):
