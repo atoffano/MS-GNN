@@ -10,7 +10,7 @@ from pathlib import Path
 # Root Directories
 # ============================================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = PROJECT_ROOT / "data"
 SRC_ROOT = PROJECT_ROOT / "src"
 

@@ -125,14 +125,14 @@ class ProteinGNN(torch.nn.Module):
             {node_type: BatchNorm(hidden_channels) for node_type in node_types}
         )
         self.conv1 = HeteroGATConv(
-            edge_types=edge_types
+            edge_types=edge_types,
             channels=hidden_channels,
         )
         self.prelu_gnn1 = PReLU()
         self.bn_gnn1 = BatchNorm(hidden_channels)
 
         self.conv2 = HeteroGATConv(
-            edge_types=edge_types
+            edge_types=edge_types,
             channels=hidden_channels,
         )
         self.prelu_gnn2 = PReLU()

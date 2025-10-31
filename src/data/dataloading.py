@@ -20,6 +20,7 @@ import pandas as pd
 import pickle
 from pathlib import Path
 import logging
+
 from src.utils.helpers import timeit
 
 logger = logging.getLogger(__name__)
@@ -191,19 +192,27 @@ class SwissProtDataset:
         self.pos_weights = self._compute_pos_weights()
         logger.info(f"Computed pos weights for {len(self.pos_weights)} GO terms")
 
+    @timeit
     def _compute_pos_weights(self):
         """Compute positive weights for each GO term to handle class imbalance."""
         go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
         term_counts = torch.zeros(len(go_to_idx), dtype=torch.float32)
 
+        all_term_indices = []
         for pid in self.train_proteins:
             if pid in self.train_annots:
                 terms = self.train_annots[pid].get("term", [])
-                for term in terms:
-                    if term in go_to_idx:
-                        term_counts[go_to_idx[term]] += 1
+                term_indices = [go_to_idx[term] for term in terms if term in go_to_idx]
+                all_term_indices.extend(term_indices)
+        if all_term_indices:
+            term_indices_tensor = torch.tensor(all_term_indices, dtype=torch.long)
+            term_counts = torch.bincount(
+                term_indices_tensor, minlength=len(go_to_idx)
+            ).float()
 
-        pos_weights = len(self.train_proteins) / (term_counts + 1)
+        pos_weights = len(self.train_proteins) / (term_counts + 1e-8)
+        pos_weights = torch.clamp(pos_weights, min=1.0, max=100)
+
         return pos_weights
 
     def _create_protein_graph(self, config):
@@ -241,9 +250,21 @@ class SwissProtDataset:
                     self.rev_pid_mapping
                 )
 
-            # Convert to indices
+            # Filter out proteins that don't have indices (not in protein_to_idx)
+            initial_edges = len(alignment_df)
+            alignment_df = alignment_df[
+                alignment_df["protein1"].isin(self.protein_to_idx)
+                & alignment_df["protein2"].isin(self.protein_to_idx)
+            ]
+            filtered_edges = initial_edges - len(alignment_df)
+            if filtered_edges > 0:
+                logger.info(
+                    f"Filtered {filtered_edges} alignment edges with proteins not in dataset"
+                )
+
             source_indices = alignment_df["protein1"].map(self.protein_to_idx).tolist()
             target_indices = alignment_df["protein2"].map(self.protein_to_idx).tolist()
+
             # Protein-protein edges
             edge_index = torch.tensor(
                 [source_indices, target_indices], dtype=torch.long
@@ -310,9 +331,21 @@ class SwissProtDataset:
                     self.rev_pid_mapping
                 )
 
-            # Convert to indices
+            # Filter out proteins that don't have indices (not in protein_to_idx)
+            initial_edges = len(stringdb_df)
+            stringdb_df = stringdb_df[
+                stringdb_df["protein1"].isin(self.protein_to_idx)
+                & stringdb_df["protein2"].isin(self.protein_to_idx)
+            ]
+            filtered_edges = initial_edges - len(stringdb_df)
+            if filtered_edges > 0:
+                logger.info(
+                    f"Filtered {filtered_edges} STRING-DB edges with proteins not in dataset"
+                )
+
             source_indices = stringdb_df["protein1"].map(self.protein_to_idx).tolist()
             target_indices = stringdb_df["protein2"].map(self.protein_to_idx).tolist()
+
             # Protein-protein edges
             edge_index = torch.tensor(
                 [source_indices, target_indices], dtype=torch.long
@@ -501,17 +534,19 @@ def define_loaders(config, dataset):
         transform=make_batch_transform(dataset, mode="train"),
         shuffle=True,
         num_workers=config["trainer"]["num_workers"],
+        persistent_workers=True if config["trainer"]["num_workers"] > 0 else False,
         drop_last=True,
     )
 
     test_loader = NeighborLoader(
         dataset.data,
-        num_neighbors=num_neighbors
+        num_neighbors=num_neighbors,
         batch_size=config["model"]["batch_size"],
         input_nodes=("protein", dataset.test_mask),
         transform=make_batch_transform(dataset, mode="predict"),
         shuffle=False,
         num_workers=config["trainer"]["num_workers"],
+        persistent_workers=True if config["trainer"]["num_workers"] > 0 else False,
     )
 
     # Some datasets, like H30, do not have a validation set
@@ -519,12 +554,13 @@ def define_loaders(config, dataset):
     if config["data"]["dataset"] != "H30":
         val_loader = NeighborLoader(
             dataset.data,
-            num_neighbors=num_neighbors
+            num_neighbors=num_neighbors,
             batch_size=config["model"]["batch_size"],
             input_nodes=("protein", dataset.val_mask),
             transform=make_batch_transform(dataset, mode="predict"),
             shuffle=False,
             num_workers=config["trainer"]["num_workers"],
+            persistent_workers=True if config["trainer"]["num_workers"] > 0 else False,
         )
         return train_loader, val_loader, test_loader
     else:

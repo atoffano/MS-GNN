@@ -39,7 +39,7 @@ for fname in tqdm.tqdm(os.listdir(protein_graphs_dir)):
     # If empty dictionary, skip
     if not edge_index or edge_index.edge_index.size(1) == 0:
         no_structure.append((protein_name, data["protein"].sequence))
-        print(f"No structure in grpah for {protein_name}")
+        print(f"No structure in graph for {protein_name}")
 
 write_fasta(no_structure, no_structure_fasta)
 write_fasta(could_not_load, could_not_load_fasta)

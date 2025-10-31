@@ -29,9 +29,9 @@ from torch_geometric.data import HeteroData
 from tqdm.auto import tqdm
 
 from src.utils.constants import (
-    SWISSPROT_ROOT,
+    ALPHAFOLD_PDB_DIR,
+    ESMFOLD_PDB_DIR,
     PROTEIN_GRAPHS_DIR,
-    SWISSPROT_FASTA,
     INTERPRO_TSV,
     GO_OBO_PATH,
     GO_ANNOTATION_TEMPLATE,
@@ -478,8 +478,8 @@ def add_close_contact_edges(data: HeteroData, protein_id: str) -> bool:
         True if edges were successfully added, False if protein should be skipped
     """
     # Try to locate structure file (prefer AlphaFold over ESMFold)
-    af_path = DATA_ROOT / f"alphafold_pdb/AF-{protein_id}-F1-model_v6.pdb"
-    esmfold_path = DATA_ROOT / f"esmfold_pdb/ESMFold-{protein_id}.pdb"
+    af_path = ALPHAFOLD_PDB_DIR / f"AF-{protein_id}-F1-model_v6.pdb"
+    esmfold_path = ESMFOLD_PDB_DIR / f"ESMFold-{protein_id}.pdb"
 
     if not af_path.is_file():
         if not esmfold_path.is_file():
@@ -515,14 +515,20 @@ def add_close_contact_edges(data: HeteroData, protein_id: str) -> bool:
                 expected_ca_count,
             )
         else:
-            # Length mismatch and not a truncated protein - skip this protein
+            # Length mismatch and not a truncated protein
             logger.warning(
-                "%s: Sequence/structure mismatch (%d non-X residues vs %d CA atoms) and not truncated. Skipping graph creation.",
+                "%s: Sequence/structure mismatch (%d non-X residues vs %d CA atoms). Creating graph with empty contact edges.",
                 protein_id,
                 expected_ca_count,
                 actual_ca_count,
             )
-            return False
+            data["aa", "close_to", "aa"].edge_index = torch.empty(
+                (2, 0), dtype=torch.long
+            )
+            data["aa", "close_to", "aa"].edge_attr = torch.empty(
+                (0,), dtype=torch.float32
+            )
+            return True
 
     # Load coordinates aligned to sequence (with NaN for missing residues)
     coords = load_ca_coordinates(af_path, num_nodes)
@@ -664,7 +670,6 @@ def main() -> None:
     parser.add_argument(
         "--fasta",
         type=Path,
-        default=FASTA_PATH,
         help="Input FASTA file (default: SwissProt 2024_01).",
     )
     parser.add_argument(
