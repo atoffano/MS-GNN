@@ -1,16 +1,4 @@
-"""PyTorch Geometric data loading for heterogeneous protein graphs.
-
-This module provides the SwissProtDataset class and data loaders for training
-the protein function prediction model. It handles:
-- Loading preprocessed protein graphs from disk
-- Managing train/validation/test splits based on GO annotations
-- Creating neighborhood sampling loaders for efficient batch processing
-- On-demand feature loading for proteins
-- Handling multiple GO subontologies (MFO, BPO, CCO)
-
-The dataset maintains a static protein-protein graph structure while loading
-individual protein features dynamically to manage memory efficiently.
-"""
+"""PyTorch Geometric data loading for heterogeneous protein graphs."""
 
 import torch
 from torch_geometric.data import HeteroData
@@ -22,6 +10,13 @@ from pathlib import Path
 import logging
 
 from src.utils.helpers import timeit
+from src.utils.helpers import (
+    timeit,
+    MemoryTracker,
+    track_memory,
+    log_worker_checkpoint,
+    worker_init_fn,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,27 +25,21 @@ class SwissProtDataset:
     """Dataset that maintains a static protein-protein graph and loads individual protein features on-demand."""
 
     def __init__(self, config):
-        """Initialize SwissProtDataset.
+        """Initialize SwissProtDataset."""
+        tracker = MemoryTracker(log_prefix="[SwissProtDataset.__init__] ")
+        tracker.set_baseline()
 
-        Loads protein graphs, vocabularies, GO annotations, and creates the
-        static protein-protein graph structure for the dataset.
-
-        Args:
-            config: Configuration dictionary with dataset parameters including:
-                - data.dataset: Dataset name (e.g., 'D1')
-                - data.protein_graphs: Path to preprocessed protein graphs
-                - data.subontology: GO subontology to use (MFO, BPO, or CCO)
-                - data.train_on_swissprot: Whether to train on full SwissProt
-                - data.exp_only: Whether to use only experimental annotations
-        """
         self.config = config
         if config["data"]["dataset"] in ["D1"]:
-            self.uses_entryid = True  # D1 uses EntryIDs
+            self.uses_entryid = True
         else:
             self.uses_entryid = False
 
         self.graphs_dir = Path(config["data"]["protein_graphs"])
 
+        tracker.log_memory("After basic setup")
+
+        # Load vocabularies
         with open(f"{self.graphs_dir}/interpro_vocab.pkl", "rb") as f:
             interpro_info = pickle.load(f)
         self.ipr_vocab_size = interpro_info["vocab_size"]
@@ -66,11 +55,12 @@ class SwissProtDataset:
         )
         self.go_vocab_size = self.go_vocab_sizes[self.subontology]
 
-        # Protein IDs are in the Accession Number format (e.g. P12345) or in the EntryID format (e.g. INS_HUMAN), depending on the dataset
-        # Dict like ('INS_HUMAN', 'P01308')
+        tracker.log_memory("After loading vocabularies")
+
+        # Protein IDs mapping
         self.pid_mapping = (
             pd.read_csv(
-                f"./data/swissprot/2024_01/swissprot_2024_01_annotations.tsv",  # Most up to date mapping
+                f"./data/swissprot/2024_01/swissprot_2024_01_annotations.tsv",
                 sep="\t",
                 usecols=["EntryID", "Entry Name"],
             )
@@ -79,25 +69,37 @@ class SwissProtDataset:
         )
         self.rev_pid_mapping = {v: k for k, v in self.pid_mapping.items()}
 
+        tracker.log_memory(
+            f"After loading PID mappings ({len(self.pid_mapping)} entries)"
+        )
+
         # Get preprocessed SwissProt protein graphs
-        self.proteins = [
+        import numpy as np
+
+        protein_files = [
             f.stem
             for f in self.graphs_dir.glob("*.pt")
             if f.stem not in ["metadata", "interpro_vocab", "go_vocab"]
         ]
+        self.proteins = np.array(protein_files, dtype=object)
+
+        tracker.log_memory(
+            f"After loading protein list ({len(self.proteins)} proteins)"
+        )
+
         if self.uses_entryid:
-            # Convert potential Accession Numbers to EntryIDs
-            self.proteins = [
-                self.rev_pid_mapping.get(pid, pid) for pid in self.proteins
-            ]
+            self.proteins = np.array(
+                [self.rev_pid_mapping.get(pid, pid) for pid in self.proteins],
+                dtype=object,
+            )
 
         # Load GO annotations to determine train/val/test splits
         self._load_split_masks(config)
+        tracker.log_memory("After loading split masks")
 
         # Create the protein-protein heterograph
         self.data = self._create_protein_graph(config)
-        # transform = T.Compose([T.ToUndirected(), T.AddRemainingSelfLoops()])
-        # self.data = transform(self.data)
+        tracker.log_memory("After creating protein graph")
 
         logger.info(
             f"Created protein graph with {self.data['protein'].num_nodes} proteins"
@@ -108,6 +110,9 @@ class SwissProtDataset:
 
     def _load_split_masks(self, config):
         """Load train/val/test splits based on GO annotations."""
+        tracker = MemoryTracker(log_prefix="[_load_split_masks] ")
+        tracker.set_baseline()
+
         splits = {"train": set(), "val": set(), "test": set()}
         subontology = self.subontology
 
@@ -115,7 +120,6 @@ class SwissProtDataset:
             exp_suffix = "exp_" if config["data"].get("exp_only", True) else ""
             train_path = f"./data/swissprot/2024_01/swissprot_2024_01_{subontology}_{exp_suffix}annotations.tsv"
         else:
-            # Stick to original dataset's train set
             train_path = f"./data/{config['data']['dataset']}/{config['data']['dataset']}_{subontology}_train_annotations.tsv"
 
         if Path(train_path).exists():
@@ -125,12 +129,16 @@ class SwissProtDataset:
                 splits["train"] = set(
                     [self.rev_pid_mapping.get(pid, pid) for pid in splits["train"]]
                 )
-            # Store train annotations for on-the-fly GO term loading
             self.train_annots = train_df.set_index("EntryID").to_dict(orient="index")
             for pid in self.train_annots:
                 self.train_annots[pid]["term"] = self.train_annots[pid]["term"].split(
                     "; "
                 )
+
+        tracker.log_memory(
+            f"After loading train annotations ({len(splits['train'])} proteins)"
+        )
+
         logger.info(f"Using {len(splits['train'])} train proteins from {train_path}")
 
         # Load val and test
@@ -141,7 +149,7 @@ class SwissProtDataset:
                 split_df = pd.read_csv(split_path, sep="\t")
                 splits[split_name] = set(split_df["EntryID"].tolist())
 
-        swissprot_proteins = set(self.proteins)
+        swissprot_proteins = set(self.proteins.tolist())
         for split in splits:
             missing = list(splits[split] - swissprot_proteins)
             if missing:
@@ -149,12 +157,8 @@ class SwissProtDataset:
                     f"{len(missing)} proteins not found in available protein feature set for split '{split}'."
                 )
         if missing:
-            logger.warning(
-                f"Missing proteins will be ignored during training and eval."
-            )
+            logger.warning("Missing proteins will be ignored during training and eval.")
 
-        # Remove proteins from val/test if they are also in train
-        # This should only happen if training on the full SwissProt release.
         if config["data"]["train_on_swissprot"]:
             for val_test_split in ["val", "test"]:
                 splits["train"] = splits["train"] - splits[val_test_split]
@@ -162,10 +166,11 @@ class SwissProtDataset:
         self.protein_to_idx = {pid: i for i, pid in enumerate(self.proteins)}
         self.idx_to_protein = {v: k for k, v in self.protein_to_idx.items()}
 
-        # Create split sets with indices and masks
-        self.train_proteins = list(splits["train"])
-        self.val_proteins = list(splits["val"])
-        self.test_proteins = list(splits["test"])
+        import numpy as np
+
+        self.train_proteins = np.array(list(splits["train"]), dtype=object)
+        self.val_proteins = np.array(list(splits["val"]), dtype=object)
+        self.test_proteins = np.array(list(splits["test"]), dtype=object)
 
         num_proteins = len(self.proteins)
         self.train_mask = torch.zeros(num_proteins, dtype=torch.bool)
@@ -188,9 +193,10 @@ class SwissProtDataset:
             f"Loaded splits - Train: {len(self.train_proteins)}, Val: {len(self.val_proteins)}, Test: {len(self.test_proteins)}"
         )
 
-        # Get pos weights for loss function
         self.pos_weights = self._compute_pos_weights()
         logger.info(f"Computed pos weights for {len(self.pos_weights)} GO terms")
+
+        tracker.log_memory("After creating masks and pos_weights")
 
     @timeit
     def _compute_pos_weights(self):
@@ -215,8 +221,11 @@ class SwissProtDataset:
 
         return pos_weights
 
+    @track_memory("create_protein_graph")
     def _create_protein_graph(self, config):
         """Creates the high-level protein network."""
+        tracker = MemoryTracker(log_prefix="[_create_protein_graph] ")
+        tracker.set_baseline()
 
         @timeit
         def alignment_edge_data():
@@ -250,7 +259,6 @@ class SwissProtDataset:
                     self.rev_pid_mapping
                 )
 
-            # Filter out proteins that don't have indices (not in protein_to_idx)
             initial_edges = len(alignment_df)
             alignment_df = alignment_df[
                 alignment_df["protein1"].isin(self.protein_to_idx)
@@ -265,20 +273,10 @@ class SwissProtDataset:
             source_indices = alignment_df["protein1"].map(self.protein_to_idx).tolist()
             target_indices = alignment_df["protein2"].map(self.protein_to_idx).tolist()
 
-            # Protein-protein edges
             edge_index = torch.tensor(
                 [source_indices, target_indices], dtype=torch.long
             )
-            if config["model"]["edge_attrs"]:
-                features = alignment_df.drop(columns=["protein1", "protein2"])
-                means = features.mean()
-                stds = features.std()
-                normalized_features = (features - means) / stds
-                edge_attrs = torch.tensor(
-                    normalized_features.values, dtype=torch.float32
-                )
-            else:
-                edge_attrs = None
+            edge_attrs = None
 
             return edge_index, edge_attrs
 
@@ -286,7 +284,7 @@ class SwissProtDataset:
         def stringdb_edge_data():
             stringdb_mapping = (
                 pd.read_csv(
-                    f"./data/swissprot/2024_01/idmapping_swissprot_stringdb.tsv",  # Most up to date mapping
+                    f"./data/swissprot/2024_01/idmapping_swissprot_stringdb.tsv",
                     sep="\t",
                     usecols=["From", "To"],
                 )
@@ -317,7 +315,6 @@ class SwissProtDataset:
             stringdb_df["protein1"] = stringdb_df["protein1"].map(rev_stringdb_mapping)
             stringdb_df["protein2"] = stringdb_df["protein2"].map(rev_stringdb_mapping)
 
-            # Keep proteins in SwissProt
             stringdb_df = stringdb_df[
                 stringdb_df["protein1"].isin(stringdb_mapping)
                 & stringdb_df["protein2"].isin(stringdb_mapping)
@@ -331,7 +328,6 @@ class SwissProtDataset:
                     self.rev_pid_mapping
                 )
 
-            # Filter out proteins that don't have indices (not in protein_to_idx)
             initial_edges = len(stringdb_df)
             stringdb_df = stringdb_df[
                 stringdb_df["protein1"].isin(self.protein_to_idx)
@@ -346,52 +342,49 @@ class SwissProtDataset:
             source_indices = stringdb_df["protein1"].map(self.protein_to_idx).tolist()
             target_indices = stringdb_df["protein2"].map(self.protein_to_idx).tolist()
 
-            # Protein-protein edges
             edge_index = torch.tensor(
                 [source_indices, target_indices], dtype=torch.long
             )
-            if config["model"]["edge_attrs"]:
-                features = stringdb_df.drop(columns=["protein1", "protein2"])
-                means = features.mean()
-                stds = features.std()
-                normalized_features = (features - means) / stds
-                edge_attrs = torch.tensor(
-                    normalized_features.values, dtype=torch.float32
-                )
-            else:
-                edge_attrs = None
+            edge_attrs = None
 
             return edge_index, edge_attrs
 
         data = HeteroData()
         logger.info("Creating protein-protein graph edges...")
+
         alignment_edge_index, alignment_edge_attrs = alignment_edge_data()
+        tracker.log_memory(
+            f"After loading alignment edges ({alignment_edge_index.shape[1]} edges)"
+        )
         logger.info(f"Alignment edges: {alignment_edge_index.shape[1]}")
+
         stringdb_edge_index, stringdb_edge_attrs = stringdb_edge_data()
+        tracker.log_memory(
+            f"After loading STRING-DB edges ({stringdb_edge_index.shape[1]} edges)"
+        )
         logger.info(f"STRINGdb edges: {stringdb_edge_index.shape[1]}")
 
-        # Protein nodes - aa features are added later when batching
         num_proteins = len(self.proteins)
         data["protein"].num_nodes = num_proteins
 
         data["protein", "aligned_with", "protein"].edge_index = alignment_edge_index
         data["protein", "stringdb", "protein"].edge_index = stringdb_edge_index
 
-        if config["model"]["edge_attrs"]:
-            logger.info("Adding edge attributes...")
-            data["protein", "aligned_with", "protein"].edge_attr = alignment_edge_attrs
-            data["protein", "stringdb", "protein"].edge_attr = stringdb_edge_attrs
+        tracker.log_memory("After creating HeteroData structure")
 
         return data
 
     def load_protein_graph(self, protein_id):
         """Load a single protein graph from disk."""
+        log_worker_checkpoint(f"Before loading protein {protein_id}")
         try:
-            return torch.load(
+            graph = torch.load(
                 f"{self.graphs_dir}/{protein_id}.pt",
                 map_location="cpu",
                 weights_only=False,
             )
+            log_worker_checkpoint(f"After loading protein {protein_id}")
+            return graph
         except FileNotFoundError:
             logger.warning(f"Graph not found for protein {protein_id}")
             return None
@@ -415,6 +408,8 @@ class SwissProtDataset:
 
     def get_batch_features(self, batch):
         """Load individual protein features and amino acid data for the sampled batch."""
+        log_worker_checkpoint("Start get_batch_features")
+
         sampled_protein_ids = [
             self.idx_to_protein[idx.item()] for idx in batch["protein"].n_id
         ]
@@ -422,6 +417,10 @@ class SwissProtDataset:
             sampled_protein_ids = [
                 self.pid_mapping.get(pid, pid) for pid in sampled_protein_ids
             ]
+
+        log_worker_checkpoint(
+            f"After extracting {len(sampled_protein_ids)} protein IDs"
+        )
 
         # Load individual protein graphs and extract features
         all_interpro_features = []
@@ -432,15 +431,19 @@ class SwissProtDataset:
         current_aa_offset = 0
 
         for local_idx, protein_id in enumerate(sampled_protein_ids):
+            if local_idx % 10 == 0:
+                log_worker_checkpoint(
+                    f"Loading protein {local_idx}/{len(sampled_protein_ids)}"
+                )
+
             protein_graph = self.load_protein_graph(protein_id)
 
             if protein_graph is None:
                 logger.warning(f"Using empty features for missing protein {protein_id}")
                 interpro_feat = torch.zeros(self.ipr_vocab_size, dtype=torch.float32)
                 go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
-                aa_feat = torch.zeros(200, 1280, dtype=torch.float32)  # Default 200 AAs
+                aa_feat = torch.zeros(200, 1280, dtype=torch.float32)
             else:
-                # Load features
                 interpro_feat = protein_graph["protein"].interpro.squeeze(0)
                 aa_feat = protein_graph["aa"].x
                 go_feat = self.convert_go_terms_to_onehot(
@@ -452,7 +455,6 @@ class SwissProtDataset:
             all_aa_features.append(aa_feat)
             protein_sizes.append(aa_feat.shape[0])
 
-            # Create AA to protein edges
             num_aas = aa_feat.shape[0]
             aa_indices = torch.arange(current_aa_offset, current_aa_offset + num_aas)
             protein_indices = torch.full((num_aas,), local_idx, dtype=torch.long)
@@ -460,13 +462,14 @@ class SwissProtDataset:
 
             current_aa_offset += num_aas
 
+        log_worker_checkpoint("After loading all protein features")
+
         # Update batch with function-related features
         batch["protein"].interpro = torch.stack(all_interpro_features)
         batch["protein"].go = torch.stack(all_go_features)
         batch["protein"].y = batch["protein"].go[: batch["protein"].batch_size].clone()
         batch["protein"].go[: batch["protein"].batch_size] = 0.0
 
-        # Mask GO features for val/test proteins
         if batch["mode"] == "train":
             n_id = batch["protein"].n_id
             mask_val = self.val_mask[n_id]
@@ -474,44 +477,36 @@ class SwissProtDataset:
             mask = mask_val | mask_test
             batch["protein"].go[mask] = 0.0
 
-        # batch["protein"].x = torch.stack(all_interpro_features)
-
-        # Set protein node features as concatenation of InterPro and GO one hots.
         batch["protein"].x = torch.cat(
             [torch.stack(all_interpro_features), torch.stack(all_go_features)], dim=1
         )
 
-        # Add amino acid nodes and features
         batch["aa"].x = torch.cat(all_aa_features, dim=0).float()
         batch["aa"].num_nodes = batch["aa"].x.shape[0]
 
-        # Add AA to protein edges
         batch["aa", "belongs_to", "protein"].edge_index = torch.cat(
             aa_to_protein_edges, dim=1
         )
 
-        # Store metadata
         batch["protein"].protein_ids = sampled_protein_ids
         batch["protein"].protein_sizes = protein_sizes
+
+        log_worker_checkpoint(
+            f"End get_batch_features (total AA nodes: {batch['aa'].num_nodes})"
+        )
 
         return batch
 
 
 def make_batch_transform(dataset, mode):
-    """Create a batch transformation function for the data loader.
-
-    Args:
-        dataset: SwissProtDataset instance
-        mode: Dataset mode ('train', 'val', or 'test')
-
-    Returns:
-        Function that transforms batches by adding mode and loading features
-    """
+    """Create a batch transformation function for the data loader."""
 
     def batch_transform(batch):
         """Transform batch by adding mode and loading protein features."""
+        log_worker_checkpoint(f"Start batch_transform (mode={mode})")
         batch["mode"] = mode
         batch = dataset.get_batch_features(batch)
+        log_worker_checkpoint(f"End batch_transform (mode={mode})")
         return batch
 
     return batch_transform
@@ -524,7 +519,7 @@ def define_loaders(config, dataset):
     protein_edge_types = [
         et for et in edge_types if et[0] == "protein" and et[2] == "protein"
     ]
-    num_neighbors = {et: [-1] for et in protein_edge_types}  # 1-hop sampling
+    num_neighbors = {et: [-1] for et in protein_edge_types}
 
     train_loader = NeighborLoader(
         dataset.data,
@@ -536,6 +531,7 @@ def define_loaders(config, dataset):
         num_workers=config["trainer"]["num_workers"],
         persistent_workers=True if config["trainer"]["num_workers"] > 0 else False,
         drop_last=True,
+        worker_init_fn=worker_init_fn if config["trainer"]["num_workers"] > 0 else None,
     )
 
     test_loader = NeighborLoader(
@@ -547,10 +543,9 @@ def define_loaders(config, dataset):
         shuffle=False,
         num_workers=config["trainer"]["num_workers"],
         persistent_workers=True if config["trainer"]["num_workers"] > 0 else False,
+        worker_init_fn=worker_init_fn if config["trainer"]["num_workers"] > 0 else None,
     )
 
-    # Some datasets, like H30, do not have a validation set
-    # This is (dirtily) handled by using the test set as val too.
     if config["data"]["dataset"] != "H30":
         val_loader = NeighborLoader(
             dataset.data,
@@ -561,6 +556,9 @@ def define_loaders(config, dataset):
             shuffle=False,
             num_workers=config["trainer"]["num_workers"],
             persistent_workers=True if config["trainer"]["num_workers"] > 0 else False,
+            worker_init_fn=(
+                worker_init_fn if config["trainer"]["num_workers"] > 0 else None
+            ),
         )
         return train_loader, val_loader, test_loader
     else:

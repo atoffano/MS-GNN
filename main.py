@@ -25,7 +25,7 @@ from src.models.gnn_model import ProteinGNN
 from src.utils.evaluation import save_predictions, evaluate, compute_metrics, plot_aupr
 from src.utils.train_utils import save_checkpoint, load_checkpoint
 
-from src.utils.helpers import timeit
+from src.utils.helpers import timeit, MemoryTracker, log_process_tree_memory
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -84,9 +84,24 @@ def train(
     for epoch in range(start_epoch, config["trainer"]["epochs"] + 1):
         model.train()
         train_loss_sum = 0
+
+        # Log memory before starting epoch
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Starting Epoch {epoch}")
+        log_process_tree_memory()
+
         for i, batch in tqdm.tqdm(
             enumerate(train_loader, start=1), desc=f"Training Epoch {epoch}"
         ):
+
+            # Log memory periodically during training
+            if i == 1:
+                logger.info(f"\nAfter first batch:")
+                log_process_tree_memory()
+            elif i % 50 == 0:
+                logger.info(f"\nAfter batch {i}:")
+                log_process_tree_memory()
+
             batch = batch.to(device)
             optimizer.zero_grad()
             out = model(
@@ -217,6 +232,8 @@ def main():
     Parses command-line arguments, loads configuration, initializes datasets
     and models, runs training, and performs evaluation across GO subontologies.
     """
+    tracker = MemoryTracker(log_prefix="[Main] ")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="src/configs/toy_cfg.yaml")
     parser.add_argument(
@@ -227,6 +244,9 @@ def main():
     )
     args = parser.parse_args()
     config_path = args.config
+
+    tracker.set_baseline()
+    tracker.log_memory("After imports and argument parsing")
 
     if args.resume:
         # Load config from checkpoint directory
