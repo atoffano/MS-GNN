@@ -21,6 +21,7 @@ from torch_geometric.nn import (
     Linear,
     HeteroDictLinear,
     BatchNorm,
+    LayerNorm,
 )
 from src.utils.helpers import timeit
 
@@ -122,28 +123,28 @@ class ProteinGNN(torch.nn.Module):
             {node_type: PReLU(hidden_channels) for node_type in node_types}
         )
         self.bn1 = torch.nn.ModuleDict(
-            {node_type: BatchNorm(hidden_channels) for node_type in node_types}
+            {node_type: LayerNorm(hidden_channels) for node_type in node_types}
         )
         self.conv1 = HeteroGATConv(
             edge_types=edge_types,
             channels=hidden_channels,
         )
         self.prelu_gnn1 = PReLU()
-        self.bn_gnn1 = BatchNorm(hidden_channels)
+        self.bn_gnn1 = LayerNorm(hidden_channels)
 
         self.conv2 = HeteroGATConv(
             edge_types=edge_types,
             channels=hidden_channels,
         )
         self.prelu_gnn2 = PReLU()
-        self.bn_gnn2 = BatchNorm(hidden_channels)
+        self.bn_gnn2 = LayerNorm(hidden_channels)
 
         self.prelu_prot = PReLU()
-        self.bn_prot = BatchNorm(hidden_channels * 2)  # Due to SkipCat
+        self.bn_prot = LayerNorm(hidden_channels * 2)  # Due to SkipCat
 
         self.lin_post = Linear(hidden_channels * 2, hidden_channels)
         self.prelu_post = PReLU()
-        self.bn_post = BatchNorm(hidden_channels)
+        self.bn_post = LayerNorm(hidden_channels)
 
         self.lin_out = Linear(hidden_channels, out_channels)
 

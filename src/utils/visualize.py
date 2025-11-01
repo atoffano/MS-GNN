@@ -14,7 +14,7 @@ import torch
 from src.utils.constants import (
     RANDOM_SEED,
 )
-from src.utils.api import _download_alphafold, _download_pdb
+from src.utils.api import download_alphafold, download_pdb
 from src.utils.helpers import timeit
 
 try:
@@ -109,11 +109,11 @@ def ensure_structure(uniprot_id: str, out_dir: str) -> str:
             return pdb_path
 
     # Download from remote sources
-    if _download_pdb(uniprot_id, pdb_path):
+    if download_pdb(uniprot_id, pdb_path):
         logger.info(f"Downloaded PDB structure for {uniprot_id} from RCSB")
         return pdb_path
 
-    if _download_alphafold(uniprot_id, pdb_path):
+    if download_alphafold(uniprot_id, pdb_path):
         logger.info(f"Downloaded PDB structure for {uniprot_id} from AlphaFold")
         return pdb_path
 

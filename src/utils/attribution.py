@@ -24,6 +24,7 @@ from src.utils.visualize import (
 )
 from src.utils.structure_renderer import export_captum_3d, export_layer_attention_3d
 from src.utils.helpers import timeit
+from src.utils.constants import SUPPORTED_CAPTUM_METHODS
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -42,7 +43,7 @@ def load_model_and_config(model_path: str, device: torch.device):
     logger.info("Loading model...")
     model = ProteinGNN(config, dataset)
     state_dict = torch.load(
-        f"{model_path}/model.pth", map_location=device, weights_only=True
+        f"{model_path}/best_model.pth", map_location=device, weights_only=False
     )
     state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
     model.load_state_dict(state_dict)

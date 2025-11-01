@@ -68,7 +68,7 @@ def plot_aupr(precision, recall, aupr=None):
 @timeit
 def save_predictions(config, model, loader, device, dataset, split=None):
     """Save model predictions to a TSV file.
-    
+
     Args:
         config: Configuration dictionary
         model: Trained ProteinGNN model
@@ -285,7 +285,6 @@ def gt_convert(gt_tsv):
         term_id = row["term"]
         protein_go_terms[protein_id][ontology_key].add(term_id)
 
-    # Convert defaultdict to regular dict for pickling
     protein_go_terms_dict = dict(protein_go_terms)
 
     # Save to pickle file
@@ -325,7 +324,7 @@ def convert_predictions(pred_file, subontology):
 
 def setup_logging(output_dir, subontology):
     """Set up logging configuration for evaluation.
-    
+
     Args:
         output_dir: Directory to store log files
         subontology: GO subontology name (MFO, BPO, or CCO)

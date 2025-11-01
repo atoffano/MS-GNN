@@ -13,6 +13,7 @@ The script supports:
 """
 
 import argparse
+import gc
 import tqdm
 import torch
 import yaml
@@ -24,13 +25,13 @@ from src.data.dataloading import SwissProtDataset, define_loaders
 from src.models.gnn_model import ProteinGNN
 from src.utils.evaluation import save_predictions, evaluate, compute_metrics, plot_aupr
 from src.utils.train_utils import save_checkpoint, load_checkpoint
-
 from src.utils.helpers import timeit, MemoryTracker, log_process_tree_memory
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+import time
 
 
 def train(
@@ -88,36 +89,38 @@ def train(
         # Log memory before starting epoch
         logger.info(f"\n{'='*60}")
         logger.info(f"Starting Epoch {epoch}")
-        log_process_tree_memory()
-
+        # log_process_tree_memory()
         for i, batch in tqdm.tqdm(
             enumerate(train_loader, start=1), desc=f"Training Epoch {epoch}"
         ):
+            try:
+                nb_prots = len(batch["protein"].n_id)
+                logger.info(f"Number of proteins in batch: {nb_prots}")
+                batch = batch.to(device)
+                optimizer.zero_grad()
 
-            # Log memory periodically during training
-            if i == 1:
-                logger.info(f"\nAfter first batch:")
-                log_process_tree_memory()
-            elif i % 50 == 0:
-                logger.info(f"\nAfter batch {i}:")
-                log_process_tree_memory()
+                out = model(
+                    batch.x_dict,
+                    batch.edge_index_dict,
+                    batch,
+                )
 
-            batch = batch.to(device)
-            optimizer.zero_grad()
-            out = model(
-                batch.x_dict,
-                batch.edge_index_dict,
-                batch,
-            )
+                loss = criterion(
+                    out,
+                    batch["protein"].y,
+                )
+                loss.backward()
+                optimizer.step()
+                wandb.log({"train_loss": loss.item() / batch["protein"].batch_size})
+                train_loss_sum += loss.item() / batch["protein"].batch_size
 
-            loss = criterion(
-                out,
-                batch["protein"].y,
-            )
-            loss.backward()
-            optimizer.step()
-            wandb.log({"train_loss": loss.item() / batch["protein"].batch_size})
-            train_loss_sum += loss.item() / batch["protein"].batch_size
+            # Handle OOM errors gracefully
+            except RuntimeError as e:
+                logger.error(
+                    f"Error occurred {e}, Batch {i}. Total proteins in batch: {nb_prots}. Skipping batch."
+                )
+                torch.cuda.empty_cache()
+                continue
 
             if i % 50 == 0:
                 avg_val_loss, val_aupr, val_fmax = run_intermediate_validation(
@@ -163,20 +166,30 @@ def train(
 
         # Save checkpoint at end of each epoch
         save_checkpoint(
-            config, model, optimizer, scheduler, epoch, subontology, val_aupr
+            config,
+            model,
+            optimizer,
+            scheduler,
+            epoch,
+            subontology,
+            val_aupr,
         )
 
         # Save best model
         if val_aupr > best_val_aupr:
             best_val_aupr = val_aupr
             best_model_path = os.path.join(
-                config["run"]["results_dir"], f"best_model_{subontology}.pth"
+                config["run"]["results_dir"], f"best_model.pth"
             )
             torch.save(model.state_dict(), best_model_path)
             logger.info(
                 f"Saved best model with AUPR {best_val_aupr:.4f} to {best_model_path}"
             )
             wandb.log({"best_val_aupr": best_val_aupr})
+
+        # free memory, both CPU and GPU
+        torch.cuda.empty_cache()
+        gc.collect()
 
 
 def run_intermediate_validation(model, val_loader, criterion, device, num_batches=5):
