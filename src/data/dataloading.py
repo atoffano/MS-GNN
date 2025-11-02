@@ -185,11 +185,13 @@ class SwissProtDataset:
     @timeit
     def _compute_pos_weights(self):
         """Compute positive weights for each GO term to handle class imbalance."""
+
         go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
         term_counts = torch.zeros(len(go_to_idx), dtype=torch.float32)
 
         all_term_indices = []
-        for pid in self.train_proteins:
+        for protein in self.train_proteins:
+            pid = self.idx_to_protein[protein.item()]
             if pid in self.train_annots_df.index:
                 terms = self.train_annots_df.loc[pid, "term"]
                 term_indices = [go_to_idx[term] for term in terms if term in go_to_idx]
@@ -199,9 +201,38 @@ class SwissProtDataset:
             term_counts = torch.bincount(
                 term_indices_tensor, minlength=len(go_to_idx)
             ).float()
+        # # Set counts = 0 to mean of other counts to avoid division by zero
+        # zero_count_mask = term_counts == 0
+        # if zero_count_mask.any():
+        #     mean_count = term_counts[~zero_count_mask].mean()
+        #     term_counts[zero_count_mask] = mean_count
+        #     logger.info(
+        #         f"Some GO terms had zero counts; set to mean count {mean_count.item():.2f}"
+        #     )
 
-        pos_weights = len(self.train_proteins) / (term_counts + 1e-8)
-        pos_weights = torch.clamp(pos_weights, min=1.0, max=100)
+        # inf_mask = term_counts == 0
+        pos_weights = len(self.train_proteins) / (term_counts + 1)
+        # pos_weights = len(self.train_proteins) / (
+        #     len(term_counts) * (term_counts + 1e-8)
+        # )
+
+        # # Replace pos weights equal to len(self.train_proteins) with 1
+        # if inf_mask.any():
+        #     pos_weights[inf_mask] = pos_weights.min().item()
+        #     logger.info(
+        #         f"{inf_mask.sum().item()} GO terms had zero positive samples; set pos weight to min"
+        #     )
+        # # apply log2
+        # pos_weights = torch.log2(pos_weights) + 1.0
+        logger.info(f"Pos weight sample: {pos_weights[:10]}")
+        logger.info(
+            f"Pos weight stats - Min: {pos_weights.min()}, Max: {pos_weights.max()}, Mean: {pos_weights.mean()}"
+        )
+        # Sort to display samples at start and end distribution
+        sorted_weights, _ = torch.sort(pos_weights)
+        logger.info(
+            f"Sorted pos weights sample: {sorted_weights[:10]} ... {sorted_weights[-10:]}"
+        )
 
         return pos_weights
 
@@ -522,7 +553,7 @@ def define_loaders(config, dataset):
         et for et in edge_types if et[0] == "protein" and et[2] == "protein"
     ]
     num_neighbors = {et: [-1] for et in protein_edge_types}  # 1-hop sampling
-    # num_neighbors[("protein", "stringdb", "protein")] = [60]  # Limit STRINGdb neighbors
+    num_neighbors[("protein", "stringdb", "protein")] = [60]  # Limit STRINGdb neighbors
     train_loader = NeighborLoader(
         dataset.data,
         num_neighbors=num_neighbors,
