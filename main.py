@@ -66,6 +66,9 @@ def train(
         step_size=config["scheduler"]["step_size"],
         gamma=config["scheduler"]["gamma"],
     )
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #     optimizer, T_max=config["trainer"]["epochs"]
+    # )
 
     # Load checkpoint if resuming
     if start_epoch > 1:
@@ -139,6 +142,7 @@ def train(
                 train_loss_sum = 0
 
         scheduler.step()
+
         val_loss, val_aupr, val_fmax, val_pr_plot = run_intermediate_validation(
             model, val_loader, criterion, device, num_batches=len(val_loader)
         )
@@ -311,7 +315,6 @@ def main():
             checkpoint = torch.load(checkpoint_path, map_location="cpu")
             start_epoch = checkpoint["epoch"] + 1
             best_val_aupr = checkpoint.get("best_val_aupr", 0.0)
-            # wandb_id = checkpoint.get("wandb_id")  # If you want to save wandb ID
 
         run_name = f"{os.path.basename(config['run']['results_dir'])}_{subontology}"
         wandb.init(
