@@ -146,22 +146,45 @@ class SwissProtDataset:
         )
 
         # BCE pos weights for handling class imbalance
-        # self.pos_weights = self._compute_pos_weights()
-        # logger.info(f"Computed pos weights for {len(self.pos_weights)} GO terms")
+        self.pos_weights = self._compute_pos_weights()
+        logger.info(f"Computed pos weights for {len(self.pos_weights)} GO terms")
 
+    @timeit
     def _compute_pos_weights(self):
         """Compute positive weights for each GO term to handle class imbalance."""
         go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
         term_counts = torch.zeros(len(go_to_idx), dtype=torch.float32)
 
-        for pid in self.train_proteins:
+        all_term_indices = []
+        for protein in self.train_idx:
+            pid = self.idx_to_protein[protein]
             if pid in self.train_annots:
-                terms = self.train_annots[pid].get("term", [])
-                for term in terms:
-                    if term in go_to_idx:
-                        term_counts[go_to_idx[term]] += 1
+                terms = self.train_annots[pid]["term"]
+                term_indices = [go_to_idx[term] for term in terms if term in go_to_idx]
+                all_term_indices.extend(term_indices)
+        if all_term_indices:
+            term_indices_tensor = torch.tensor(all_term_indices, dtype=torch.long)
+            term_counts = torch.bincount(
+                term_indices_tensor, minlength=len(go_to_idx)
+            ).float()
+        inf_mask = term_counts == 0
+        # pos_weights = len(self.train_idx) / (term_counts + 1)
+        pos_weights = len(self.train_idx) / (len(term_counts) * (term_counts + 1e-8))
 
-        pos_weights = len(self.train_proteins) / (term_counts + 1)
+        # Replace pos weights equal to len(self.train_idx) with 1
+        if inf_mask.any():
+            pos_weights[inf_mask] = pos_weights.min().item()
+            logger.info(
+                f"{inf_mask.sum().item()} GO terms had zero positive samples; set pos weight to min"
+            )
+        logger.info(f"Pos weight sample: {pos_weights[:10]}")
+        logger.info(
+            f"Pos weight stats - Min: {pos_weights.min()}, Max: {pos_weights.max()}, Mean: {pos_weights.mean()}"
+        )
+        sorted_weights, _ = torch.sort(pos_weights)
+        logger.info(
+            f"Sorted pos weights sample: {sorted_weights[:10]} ... {sorted_weights[-10:]}"
+        )
         return pos_weights
 
     def _create_protein_graph(self, config):
@@ -410,7 +433,9 @@ class SwissProtDataset:
         batch["protein"].interpro = torch.stack(batch_interpro_features)
         batch["protein"].go = torch.stack(batch_go_features)
         batch["protein"].y = batch["protein"].go[: batch["protein"].batch_size].clone()
-        batch["protein"].go[: batch["protein"].batch_size] = 0.0
+        batch["protein"].go[
+            : batch["protein"].batch_size
+        ] = 0.0  # Mask seed protein labels
 
         # Mask GO features for val/test proteins
         if batch["mode"] == "train":
@@ -474,7 +499,7 @@ def define_loaders(config, dataset):
         shuffle=True,
         num_workers=config["trainer"]["num_workers"],
         # persistent_workers=True if config["trainer"]["num_workers"] > 0 else False,
-        pin_memory=True,
+        # pin_memory=True,
         drop_last=True,
         # worker_init_fn=(
         #     worker_init_fn if config["trainer"]["num_workers"] > 0 else None
@@ -490,7 +515,7 @@ def define_loaders(config, dataset):
         shuffle=False,
         num_workers=config["trainer"]["num_workers"],
         # persistent_workers=True if config["trainer"]["num_workers"] > 0 else False,
-        pin_memory=True,
+        # pin_memory=True,
         # worker_init_fn=(
         #     worker_init_fn if config["trainer"]["num_workers"] > 0 else None
         # ),
