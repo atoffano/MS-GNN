@@ -8,6 +8,11 @@ model:
     - ["protein", "aligned_with", "protein"]
     #- ["protein", "stringdb", "protein"]
 
+  # How many edges to sample to build mini-batch subgraphs. Follows PyG nomenclature
+  sampled_edges:
+    protein__aligned_with__protein: -1
+    # protein__stringdb__protein: 30
+
 trainer:
   epochs: 8
   device: cuda
@@ -33,7 +38,7 @@ data:
   stringdb_path: ./data/swissprot/2024_01/swissprot_stringdb.tsv
 
 run:
-  qualifier: 2layerGNN  # Additional string to append to run_id for uniqueness
+  qualifier: 2layerGNN_POS((tc+1)*tc)0tomin  # Additional string to append to run_id for uniqueness
   save_predictions:
     val: true
     test: true
