@@ -12,7 +12,7 @@ from torch_geometric.loader import NeighborLoader
 
 from src.data.dataloading import SwissProtDataset, make_batch_transform
 from src.models.gnn_model import ProteinGNN
-from src.utils.constants import SUPPORTED_CAPTUM_METHODS
+from src.utils.constants import SUPPORTED_CAPTUM_METHODS, GO_OBO_PATH
 from src.utils.visualize import (
     plot_systemic_explanation,
     plot_protein_explanation,
@@ -76,7 +76,7 @@ class StructureCache:
             )
 
             try:
-                pdb_path = ensure_structure(pdb_id, context.root_dir)
+                pdb_path = ensure_structure(pdb_id, base_output_dir)
                 self.cache[uniprot_id] = pdb_path
             except FileNotFoundError as e:
                 logger.warning(f"Could not preload structure for {uniprot_id}: {e}")
@@ -91,16 +91,11 @@ class StructureCache:
 class GOTermMapper:
     """Manages GO term to index mapping and ontology operations."""
 
-    def __init__(self, dataset, obo_path: Optional[str] = None):
+    def __init__(self, dataset, obo_path: Optional[str] = GO_OBO_PATH):
         self.dataset = dataset
         self.mapping = self._build_mapping(dataset)
         self.idx_to_go = {idx: term for term, idx in self.mapping.items()}
-        self.ontology_loaded = False
-
-        if obo_path:
-            logger.info(f"Loading GO ontology from {obo_path}")
-            go3.load_go_terms(obo_path)
-            self.ontology_loaded = True
+        go3.load_go_terms(str(obo_path))
 
     @staticmethod
     def _build_mapping(dataset):
@@ -137,10 +132,6 @@ class GOTermMapper:
         self, predictions: torch.Tensor, threshold: float = 0.5
     ) -> list[tuple[str, int]]:
         """Get leaf GO terms from model predictions above threshold."""
-        if not self.ontology_loaded:
-            raise RuntimeError(
-                "GO ontology not loaded. Provide obo_path to GOTermMapper."
-            )
 
         predicted_indices = (predictions > threshold).nonzero(as_tuple=True)[0]
         logger.info(f"Found {len(predicted_indices)} predicted terms above {threshold}")
@@ -236,7 +227,7 @@ class ExplanationGenerator:
 
         hetero_explanation = explainer(batch.x_dict, batch.edge_index_dict, **kwargs)
 
-        self._normalize_explanations(hetero_explanation)
+        # self._normalize_explanations(hetero_explanation)
         return hetero_explanation
 
     @staticmethod
@@ -248,8 +239,13 @@ class ExplanationGenerator:
         ]:
             if key not in hetero_explanation:
                 continue
-            em = hetero_explanation[key]["edge_mask"].abs()
-            em = (em - em.min()) / (em.max() - em.min() + 1e-8)
+            # em = hetero_explanation[key]["edge_mask"].abs()
+            # em = (em - em.min()) / (em.max() - em.min() + 1e-8)
+            # Zscore norm
+            em = hetero_explanation[key]["edge_mask"]
+            mean = em.mean()
+            std = em.std() + 1e-9
+            em = (em - mean) / std
             hetero_explanation[key]["edge_mask"] = em
 
 
@@ -346,9 +342,25 @@ class ExplanationExporter:
 
 def create_data_loader(dataset, protein_names: list[str]) -> NeighborLoader:
     """Create data loader for specified proteins."""
-    protein_indices = [dataset.protein_to_idx[pid] for pid in protein_names]
+    proteins = []
+    for protein in protein_names:
+        if "_" in protein:
+            if dataset.uses_entryid:
+                proteins.append(protein)
+        else:
+            if not dataset.uses_entryid:
+                proteins.append(protein)
+            else:
+                proteins.append(dataset.rev_pid_mapping[protein])
+    protein_ids = []
+    for protein in proteins:
+        if protein in dataset.protein_to_idx:
+            protein_ids.append(dataset.protein_to_idx[protein])
+        else:
+            logger.warning(f"Protein {protein} not found in dataset, skipping.")
+
     mask = torch.zeros(len(dataset.proteins), dtype=torch.bool)
-    mask[protein_indices] = True
+    mask[protein_ids] = True
 
     return NeighborLoader(
         dataset.data,
@@ -427,15 +439,8 @@ def main():
     # Load model and dataset
     config, model, dataset = load_model_and_config(args.model_path, device)
 
-    # Get OBO path from config
-    obo_path = config["data"].get("go_path", None)
-    if args.go_terms == ["predicted"] and not obo_path:
-        raise ValueError(
-            "go_path must be specified in cfg.yaml to use --go_terms predicted"
-        )
-
     # Initialize components
-    go_mapper = GOTermMapper(dataset, obo_path=obo_path)
+    go_mapper = GOTermMapper(dataset, obo_path=GO_OBO_PATH)
     generator = ExplanationGenerator(model, device, args.captum_method)
     loader = create_data_loader(dataset, args.proteins)
 

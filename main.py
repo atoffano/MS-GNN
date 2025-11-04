@@ -78,8 +78,8 @@ def train(
                 checkpoint_path, model, optimizer, scheduler, device
             )
 
-    criterion = torch.nn.BCEWithLogitsLoss(pos_weight=dataset.pos_weights.to(device))
-    # criterion = torch.nn.BCEWithLogitsLoss()
+    # criterion = torch.nn.BCEWithLogitsLoss(pos_weight=dataset.pos_weights.to(device))
+    criterion = torch.nn.BCEWithLogitsLoss()
 
     # Training loop
     for epoch in range(start_epoch, config["trainer"]["epochs"] + 1):

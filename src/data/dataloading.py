@@ -140,6 +140,11 @@ class SwissProtDataset:
         self.train_idx, self.train_mask = get_protein_mask(splits["train"])
         self.val_idx, self.val_mask = get_protein_mask(splits["val"])
         self.test_idx, self.test_mask = get_protein_mask(splits["test"])
+        assert not (
+            set(self.train_idx) & set(self.val_idx)
+            | set(self.train_idx) & set(self.test_idx)
+            | set(self.val_idx) & set(self.test_idx)
+        ), "Data leakage: masks overlap!"
 
         logger.info(
             f"Loaded splits - Train: {len(self.train_idx)}, Val: {len(self.val_idx)}, Test: {len(self.test_idx)}"
@@ -430,12 +435,34 @@ class SwissProtDataset:
             current_aa_offset += num_aas
 
         # Update batch with function-related features & set labels
+        seed_nodes = batch["protein"].n_id[: batch["protein"].batch_size]
         batch["protein"].interpro = torch.stack(batch_interpro_features)
         batch["protein"].go = torch.stack(batch_go_features)
         batch["protein"].y = batch["protein"].go[: batch["protein"].batch_size].clone()
         batch["protein"].go[
             : batch["protein"].batch_size
         ] = 0.0  # Mask seed protein labels
+
+        if torch.isin(
+            batch["protein"].n_id[batch["protein"].batch_size :], seed_nodes
+        ).any():
+            logger.warning("Seed nodes found in neighborhood nodes of the batch!")
+            # Print which seed nodes are found in neighborhood nodes
+            neighborhood_nodes = batch["protein"].n_id[batch["protein"].batch_size :]
+            overlapping_nodes = torch.isin(neighborhood_nodes, seed_nodes)
+            overlapping_indices = neighborhood_nodes[overlapping_nodes]
+            overlapping_proteins = [
+                self.idx_to_protein[idx.item()] for idx in overlapping_indices
+            ]
+            logger.warning(
+                f"Overlapping seed proteins in neighborhood nodes: {overlapping_proteins}"
+            )
+            logger.warning(
+                f"Nid of neighborhood nodes with overlap: {overlapping_indices}"
+            )
+            logger.warning(f"Seed node nids: {seed_nodes}")
+            logger.warning(f"Neighborhood node nids: {neighborhood_nodes}")
+            logger.warning(f"Batch protein nids: {batch['protein'].n_id}")
 
         # Mask GO features for val/test proteins
         if batch["mode"] == "train":
@@ -484,12 +511,13 @@ def define_loaders(config, dataset):
     """Create NeighborLoader instances for train/val/test."""
 
     # Which edges to sample and how many neighbors
-    num_neighbors = {}
-    for edge_type_str, num_samples in config["model"]["sampled_edges"].items():
-        edge_type_tuple = tuple(edge_type_str.split("__"))
-        num_neighbors[edge_type_tuple] = [num_samples]
-    logger.debug("Subgraph sampling configuration", num_neighbors)
+    # num_neighbors = {}
+    # for edge_type_str, num_samples in config["model"]["sampled_edges"].items():
+    #     edge_type_tuple = tuple(edge_type_str.split("__"))
+    #     num_neighbors[edge_type_tuple] = [num_samples]
+    # logger.info("Subgraph sampling configuration", num_neighbors)
 
+    num_neighbors = {("protein", "aligned_with", "protein"): [-1]}
     train_loader = NeighborLoader(
         dataset.data,
         num_neighbors=num_neighbors,

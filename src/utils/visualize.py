@@ -90,19 +90,24 @@ def ensure_structure(uniprot_id: str, out_dir: str) -> str:
     """
     os.makedirs(out_dir, exist_ok=True)
     pdb_path = os.path.join(out_dir, f"{uniprot_id}.pdb")
-
+    print(pdb_path)
     if os.path.exists(pdb_path):
         logger.info(f"Got PDB structure for {uniprot_id} from output directory cache")
         return pdb_path
 
     # Check local data directories
     current_file_dir = os.path.dirname(os.path.abspath(__file__))
-    base_data_dir = os.path.join(
-        current_file_dir, "..", "..", "data", "swissprot", "2024_01"
-    )
-
     for cache_name in ["alphafold_pdb", "esmfold_pdb"]:
-        cache_path = os.path.join(base_data_dir, cache_name, f"{uniprot_id}.pdb")
+        cache_path = os.path.join(
+            current_file_dir,
+            "..",
+            "..",
+            "data",
+            "swissprot",
+            "2024_01",
+            cache_name,
+            f"{uniprot_id}.pdb",
+        )
         if os.path.exists(cache_path):
             shutil.copy2(cache_path, pdb_path)
             logger.info(f"Got PDB structure for {uniprot_id} from {cache_name}")
@@ -142,33 +147,58 @@ def render_structure_colormap(
     res_idx = np.asarray(res_idx, dtype=np.int32)
     scores = np.asarray(scores, dtype=np.float32)
 
-    lo, hi = (float(scores.min()), float(scores.max())) if normalize else (None, None)
-    if normalize and hi - lo < 1e-9:
-        hi = lo + 1e-6
+    for norm in ["zscore", "minmax", "none"]:
+        if normalize and norm == "minmax":
+            lo, hi = float(scores.min()), float(scores.max())
+            if hi - lo < 1e-9:
+                hi = lo + 1e-6
+            normalized_scores = (scores - lo) / (hi - lo)
+            break
+        elif normalize and norm == "zscore":
+            mean = float(np.mean(scores))
+            std = float(np.std(scores)) + 1e-9
+            normalized_scores = (scores - mean) / std
+            break
+        # lo, hi = (float(scores.min()), float(scores.max())) if normalize else (None, None)
+        # if normalize and hi - lo < 1e-9:
+        #     hi = lo + 1e-6
 
-    os.makedirs(os.path.dirname(image_path), exist_ok=True)
+        # Change to zscore norm
+        # if normalize:
+        #     mean = float(np.mean(scores))
+        #     std = float(np.std(scores)) + 1e-9
+        #     scores = (scores - mean) / std
 
-    with pymol2.PyMOL() as pymol:
-        cmd = pymol.cmd
-        cmd.reinitialize()
-        cmd.set("fetch_path", os.path.dirname(pdb_path))
-        cmd.load(pdb_path, "prot")
-        cmd.alter("prot", "b=0.0")
-        for idx, value in zip(res_idx, scores):
-            cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
-        cmd.rebuild()
-        if normalize:
-            cmd.spectrum("b", colormap, "prot", minimum=lo, maximum=hi)
-        else:
-            cmd.spectrum("b", colormap, "prot")
-        if title:
-            cmd.set_title("title", state=0, text=title)
-        cmd.set("ray_opaque_background", 0)
-        cmd.bg_color("white")
-        cmd.orient("prot")
-        cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
+        os.makedirs(os.path.dirname(image_path), exist_ok=True)
+        logger.info(f"Rendering structure {pdb_path}")
 
-    logger.info(f"Saved structure rendering to {image_path}")
+        with pymol2.PyMOL() as pymol:
+            cmd = pymol.cmd
+            cmd.reinitialize()
+            cmd.set("fetch_path", os.path.dirname(pdb_path))
+            cmd.load(pdb_path, "prot")
+            cmd.alter("prot", "b=0.0")
+            for idx, value in zip(res_idx, normalized_scores):
+                cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
+            cmd.rebuild()
+            # if normalize:
+            #     cmd.spectrum("b", 'rainbow', "prot", minimum=-3, maximum=3)
+            # else:
+            cmd.spectrum("b", "rainbow", "prot")
+            if title:
+                cmd.set_title("title", state=0, text=title)
+            cmd.set("ray_opaque_background", 0)
+            cmd.bg_color("white")
+            cmd.orient("prot")
+            cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
+            # Save as pdb with colors
+            cmd.save(pdb_path.replace(".pdb", f"_attribution_{norm}.pdb"), "prot")
+
+            # Save the entire scene/session to a .pse file
+            cmd.scene(pdb_path.replace(".pdb", f"_scene_{norm}.pse"), "store")
+            print(f"Saved PyMOL session.")
+
+        logger.info(f"Saved structure rendering to {image_path}")
 
 
 # Plotting utilities
