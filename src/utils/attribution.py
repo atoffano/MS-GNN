@@ -6,7 +6,7 @@ import logging
 import argparse
 import go3
 import tqdm
-from typing import Optional
+from typing import Optional, Dict
 from torch_geometric.explain import Explainer, CaptumExplainer
 from torch_geometric.loader import NeighborLoader
 
@@ -24,7 +24,6 @@ from src.utils.visualize import (
 )
 from src.utils.structure_renderer import export_captum_3d, export_layer_attention_3d
 from src.utils.helpers import timeit
-from src.utils.constants import SUPPORTED_CAPTUM_METHODS
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -51,41 +50,6 @@ def load_model_and_config(model_path: str, device: torch.device):
 
     logger.info(f"Model loaded and moved to {device}")
     return config, model, dataset
-
-
-class StructureCache:
-    """Manages protein structure file caching."""
-
-    def __init__(self, dataset, batch, base_output_dir: str):
-        self.dataset = dataset
-        self.cache = {}
-        self._preload(batch, base_output_dir)
-
-    def _preload(self, batch, base_output_dir: str):
-        """Preload all required protein structures for the batch."""
-        logger.info("Preloading protein structures...")
-        protein_ids = batch["protein"].n_id.detach().cpu().tolist()
-        context = build_plot_context(base_output_dir, self.dataset, batch)
-
-        for protein_global_id in protein_ids:
-            uniprot_id = self.dataset.idx_to_protein[protein_global_id]
-            pdb_id = (
-                self.dataset.pid_mapping[uniprot_id]
-                if self.dataset.uses_entryid
-                else uniprot_id
-            )
-
-            try:
-                pdb_path = ensure_structure(pdb_id, base_output_dir)
-                self.cache[uniprot_id] = pdb_path
-            except FileNotFoundError as e:
-                logger.warning(f"Could not preload structure for {uniprot_id}: {e}")
-
-        logger.info(f"Preloaded {len(self.cache)} protein structures")
-
-    def get(self, uniprot_id: str) -> Optional[str]:
-        """Get cached structure path for a UniProt ID."""
-        return self.cache.get(uniprot_id)
 
 
 class GOTermMapper:
@@ -132,7 +96,6 @@ class GOTermMapper:
         self, predictions: torch.Tensor, threshold: float = 0.5
     ) -> list[tuple[str, int]]:
         """Get leaf GO terms from model predictions above threshold."""
-
         predicted_indices = (predictions > threshold).nonzero(as_tuple=True)[0]
         logger.info(f"Found {len(predicted_indices)} predicted terms above {threshold}")
 
@@ -164,7 +127,6 @@ class GOTermMapper:
             term = go3.get_term_by_id(leaf_term_id)
             ancestors = go3.ancestors(leaf_term_id)
 
-            # Set leaf and ancestors
             for term_id in [leaf_term_id] + list(ancestors):
                 idx = self.mapping.get(term_id)
                 if idx is not None:
@@ -225,48 +187,46 @@ class ExplanationGenerator:
                 f"Computing attributions with {target.sum().item()} active terms"
             )
 
-        hetero_explanation = explainer(batch.x_dict, batch.edge_index_dict, **kwargs)
-
-        # self._normalize_explanations(hetero_explanation)
-        return hetero_explanation
-
-    @staticmethod
-    def _normalize_explanations(hetero_explanation):
-        """Normalize edge masks in the explanation."""
-        for key in [
-            ("aa", "belongs_to", "protein"),
-            ("protein", "aligned_with", "protein"),
-        ]:
-            if key not in hetero_explanation:
-                continue
-            # em = hetero_explanation[key]["edge_mask"].abs()
-            # em = (em - em.min()) / (em.max() - em.min() + 1e-8)
-            # Zscore norm
-            em = hetero_explanation[key]["edge_mask"]
-            mean = em.mean()
-            std = em.std() + 1e-9
-            em = (em - mean) / std
-            hetero_explanation[key]["edge_mask"] = em
+        return explainer(batch.x_dict, batch.edge_index_dict, **kwargs)
 
 
 class ExplanationExporter:
     """Exports explanations to various formats."""
 
-    def __init__(
-        self,
-        output_dir: str,
-        dataset,
-        structure_cache: StructureCache,
-        go_mapper: GOTermMapper,
-    ):
+    def __init__(self, output_dir: str, dataset, go_mapper: GOTermMapper):
         self.output_dir = output_dir
         self.dataset = dataset
-        self.structure_cache = structure_cache
         self.go_mapper = go_mapper
+        self.structure_cache: Dict[str, str] = {}
+
+    def _ensure_cache(self, batch):
+        """Lazy-load structure cache when first needed."""
+        if self.structure_cache:
+            return
+
+        logger.info("Loading protein structures...")
+        protein_ids = batch["protein"].n_id.detach().cpu().tolist()
+        context = build_plot_context(self.output_dir, self.dataset, batch)
+
+        for protein_id in protein_ids:
+            uniprot_id = self.dataset.idx_to_protein[protein_id]
+            pdb_id = (
+                self.dataset.pid_mapping.get(uniprot_id, uniprot_id)
+                if self.dataset.uses_entryid
+                else uniprot_id
+            )
+            try:
+                self.structure_cache[uniprot_id] = ensure_structure(
+                    pdb_id, self.output_dir
+                )
+            except FileNotFoundError as e:
+                logger.warning(f"Could not load structure for {uniprot_id}: {e}")
 
     def export_global(self, batch, hetero_explanation, attentions=None):
         """Export global model explanations."""
+        self._ensure_cache(batch)
         logger.info("Plotting global explanations...")
+
         plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
         plot_protein_explanation(self.output_dir, hetero_explanation, self.dataset)
         export_captum_3d(
@@ -274,7 +234,7 @@ class ExplanationExporter:
             self.dataset,
             batch,
             hetero_explanation,
-            structure_cache=self.structure_cache.cache,
+            structure_cache=self.structure_cache,
         )
 
         if attentions:
@@ -285,6 +245,7 @@ class ExplanationExporter:
 
     def export_go_term(self, batch, hetero_explanation, go_term: str, attentions=None):
         """Export GO term-specific explanation."""
+        self._ensure_cache(batch)
         logger.info(f"Plotting explanations for {go_term}...")
         go_name = self.go_mapper.get_name(go_term)
         title_suffix = f"GO: {go_name}"
@@ -309,7 +270,7 @@ class ExplanationExporter:
             batch,
             hetero_explanation,
             go_term=go_term,
-            structure_cache=self.structure_cache.cache,
+            structure_cache=self.structure_cache,
         )
 
         if attentions:
@@ -335,7 +296,7 @@ class ExplanationExporter:
                 batch,
                 idx,
                 layer_attention,
-                structure_cache=self.structure_cache.cache,
+                structure_cache=self.structure_cache,
                 go_term=go_term,
             )
 
@@ -352,6 +313,7 @@ def create_data_loader(dataset, protein_names: list[str]) -> NeighborLoader:
                 proteins.append(protein)
             else:
                 proteins.append(dataset.rev_pid_mapping[protein])
+
     protein_ids = []
     for protein in proteins:
         if protein in dataset.protein_to_idx:
@@ -446,10 +408,7 @@ def main():
 
     # Process each batch
     for batch in loader:
-        structure_cache = StructureCache(dataset, batch, args.model_path)
-        exporter = ExplanationExporter(
-            args.model_path, dataset, structure_cache, go_mapper
-        )
+        exporter = ExplanationExporter(args.model_path, dataset, go_mapper)
         process_batch(
             batch, model, device, exporter, generator, go_mapper, args.go_terms
         )

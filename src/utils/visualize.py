@@ -11,9 +11,7 @@ import networkx as nx
 import numpy as np
 import torch
 
-from src.utils.constants import (
-    RANDOM_SEED,
-)
+from src.utils.constants import RANDOM_SEED
 from src.utils.api import download_alphafold, download_pdb
 from src.utils.helpers import timeit
 
@@ -64,25 +62,6 @@ def build_plot_context(base_path: str, dataset, batch) -> ProteinPlotContext:
     )
 
 
-def resolve_plot_target(
-    context: ProteinPlotContext, local_idx: int, go_term: Optional[str] = None
-) -> tuple[str, str]:
-    """Resolve output directory and filename prefix for a protein."""
-    is_root = context.protein_ids[local_idx] == context.root_global
-    target_label = context.labels[local_idx]
-
-    base_dir = context.root_dir if is_root else context.neighbor_dir
-    prefix = context.root_label if is_root else f"{context.root_label}_{target_label}"
-
-    if go_term:
-        go_subdir = go_term.replace(":", "_")
-        output_dir = os.path.join(base_dir, "per-term", go_subdir)
-        os.makedirs(output_dir, exist_ok=True)
-        return output_dir, prefix
-
-    return base_dir, prefix
-
-
 def ensure_structure(uniprot_id: str, out_dir: str) -> str:
     """Get structure for UniProt ID, checking caches before downloading.
 
@@ -90,9 +69,7 @@ def ensure_structure(uniprot_id: str, out_dir: str) -> str:
     """
     os.makedirs(out_dir, exist_ok=True)
     pdb_path = os.path.join(out_dir, f"{uniprot_id}.pdb")
-    print(pdb_path)
     if os.path.exists(pdb_path):
-        logger.info(f"Got PDB structure for {uniprot_id} from output directory cache")
         return pdb_path
 
     # Check local data directories
@@ -110,7 +87,6 @@ def ensure_structure(uniprot_id: str, out_dir: str) -> str:
         )
         if os.path.exists(cache_path):
             shutil.copy2(cache_path, pdb_path)
-            logger.info(f"Got PDB structure for {uniprot_id} from {cache_name}")
             return pdb_path
 
     # Download from remote sources
@@ -125,7 +101,6 @@ def ensure_structure(uniprot_id: str, out_dir: str) -> str:
     raise FileNotFoundError(f"No structure available for {uniprot_id}")
 
 
-# Structure rendering
 def render_structure_colormap(
     pdb_path: str,
     residue_scores: Sequence[Tuple[int, float]],
@@ -147,77 +122,57 @@ def render_structure_colormap(
     res_idx = np.asarray(res_idx, dtype=np.int32)
     scores = np.asarray(scores, dtype=np.float32)
 
-    for norm in ["zscore", "minmax", "none"]:
-        if normalize and norm == "minmax":
-            lo, hi = float(scores.min()), float(scores.max())
-            if hi - lo < 1e-9:
-                hi = lo + 1e-6
-            normalized_scores = (scores - lo) / (hi - lo)
-            break
-        elif normalize and norm == "zscore":
-            mean = float(np.mean(scores))
-            std = float(np.std(scores)) + 1e-9
-            normalized_scores = (scores - mean) / std
-            break
-        # lo, hi = (float(scores.min()), float(scores.max())) if normalize else (None, None)
-        # if normalize and hi - lo < 1e-9:
-        #     hi = lo + 1e-6
+    # Normalize scores using z-score
+    if normalize:
+        mean, std = float(np.mean(scores)), float(np.std(scores)) + 1e-9
+        scores = (scores - mean) / std
 
-        # Change to zscore norm
-        # if normalize:
-        #     mean = float(np.mean(scores))
-        #     std = float(np.std(scores)) + 1e-9
-        #     scores = (scores - mean) / std
+    os.makedirs(os.path.dirname(image_path), exist_ok=True)
+    logger.info(f"Rendering structure {pdb_path}")
 
-        os.makedirs(os.path.dirname(image_path), exist_ok=True)
-        logger.info(f"Rendering structure {pdb_path}")
+    with pymol2.PyMOL() as pymol:
+        cmd = pymol.cmd
+        cmd.reinitialize()
+        cmd.set("fetch_path", os.path.dirname(pdb_path))
+        cmd.load(pdb_path, "prot")
+        cmd.alter("prot", "b=0.0")
+        for idx, value in zip(res_idx, scores):
+            cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
+        cmd.rebuild()
+        cmd.spectrum("b", "rainbow", "prot")
+        if title:
+            cmd.set_title("title", state=0, text=title)
+        cmd.set("ray_opaque_background", 0)
+        cmd.bg_color("white")
+        cmd.orient("prot")
+        cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
 
-        with pymol2.PyMOL() as pymol:
-            cmd = pymol.cmd
-            cmd.reinitialize()
-            cmd.set("fetch_path", os.path.dirname(pdb_path))
-            cmd.load(pdb_path, "prot")
-            cmd.alter("prot", "b=0.0")
-            for idx, value in zip(res_idx, normalized_scores):
-                cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
-            cmd.rebuild()
-            # if normalize:
-            #     cmd.spectrum("b", 'rainbow', "prot", minimum=-3, maximum=3)
-            # else:
-            cmd.spectrum("b", "rainbow", "prot")
-            if title:
-                cmd.set_title("title", state=0, text=title)
-            cmd.set("ray_opaque_background", 0)
-            cmd.bg_color("white")
-            cmd.orient("prot")
-            cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
-            # Save as pdb with colors
-            cmd.save(pdb_path.replace(".pdb", f"_attribution_{norm}.pdb"), "prot")
-
-            # Save the entire scene/session to a .pse file
-            cmd.scene(pdb_path.replace(".pdb", f"_scene_{norm}.pse"), "store")
-            print(f"Saved PyMOL session.")
-
-        logger.info(f"Saved structure rendering to {image_path}")
+    logger.info(f"Saved structure rendering to {image_path}")
 
 
-# Plotting utilities
 def _save_plot(
-    context: ProteinPlotContext, filename_suffix: str, go_term: Optional[str] = None
+    context: ProteinPlotContext,
+    filename_suffix: str,
+    local_idx: int = 0,
+    go_term: Optional[str] = None,
 ):
     """Save current plot to appropriate directory."""
+    is_root = context.protein_ids[local_idx] == context.root_global
+    base_dir = context.root_dir if is_root else context.neighbor_dir
+    prefix = (
+        context.root_label
+        if is_root
+        else f"{context.root_label}_{context.labels[local_idx]}"
+    )
+
     if go_term:
         go_subdir = go_term.replace(":", "_")
-        output_dir = os.path.join(context.root_dir, "per-term", go_subdir)
+        output_dir = os.path.join(base_dir, "per-term", go_subdir)
         os.makedirs(output_dir, exist_ok=True)
-        filename = os.path.join(
-            output_dir, f"{context.root_label}_{filename_suffix}.png"
-        )
     else:
-        filename = os.path.join(
-            context.root_dir, f"{context.root_label}_{filename_suffix}.png"
-        )
+        output_dir = base_dir
 
+    filename = os.path.join(output_dir, f"{prefix}_{filename_suffix}.png")
     plt.savefig(filename)
     plt.close()
 
@@ -257,7 +212,7 @@ def _plot_protein_network(
         plt.colorbar(edges, label=colorbar_label)
 
     plt.tight_layout()
-    _save_plot(context, filename_suffix, go_term)
+    _save_plot(context, filename_suffix, go_term=go_term)
 
 
 def _mean_attention(attention_weights: torch.Tensor) -> torch.Tensor:
@@ -269,7 +224,47 @@ def _mean_attention(attention_weights: torch.Tensor) -> torch.Tensor:
     )
 
 
-# Public plotting functions
+def _plot_aa_to_protein_scatter(
+    context: ProteinPlotContext,
+    edge_index: torch.Tensor,
+    edge_values: torch.Tensor,
+    title_template: str,
+    ylabel: str,
+    filename_suffix: str,
+    go_term: Optional[str] = None,
+):
+    """Unified scatter plot for AA→protein edges (attention or attribution)."""
+    src_local, dst_local = edge_index[0], edge_index[1]
+
+    for dst_val in torch.unique(dst_local, sorted=True).tolist():
+        mask = dst_local == dst_val
+        if not torch.any(mask):
+            continue
+
+        aa_indices = src_local[mask]
+        values = edge_values[mask].view(-1)
+        sort_idx = torch.argsort(aa_indices)
+        values_sorted = values[sort_idx]
+
+        target_idx = int(dst_val)
+        target_label = context.labels[target_idx]
+
+        plt.figure(figsize=(8, 4))
+        x_positions = torch.arange(len(values_sorted), dtype=torch.float32)
+        scatter = plt.scatter(
+            x_positions.numpy(),
+            values_sorted.numpy(),
+            c=values_sorted.numpy(),
+            cmap=plt.cm.viridis,
+        )
+        plt.colorbar(scatter, label=ylabel)
+        plt.xlabel("Residue")
+        plt.ylabel(ylabel)
+        plt.title(title_template.format(protein=target_label))
+        plt.tight_layout()
+        _save_plot(context, filename_suffix, target_idx, go_term)
+
+
 @timeit
 def plot_systemic_explanation(
     path, hetero_explanation, dataset, title_suffix=None, go_term=None
@@ -331,52 +326,19 @@ def plot_protein_explanation(
     context = build_plot_context(path, dataset, hetero_explanation.batch)
     key = ("aa", "belongs_to", "protein")
 
-    edge_mask = hetero_explanation[key]["edge_mask"].detach().cpu()
-    edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
+    title = f"AA-Protein Explanation: {{protein}}"
+    if title_suffix:
+        title += f" ({title_suffix})"
 
-    src_local, dst_local = edge_index[0], edge_index[1]
-    protein_global_ids = (
-        hetero_explanation.batch["protein"]["n_id"].detach().cpu().tolist()
+    _plot_aa_to_protein_scatter(
+        context,
+        hetero_explanation[key]["edge_index"].detach().cpu(),
+        hetero_explanation[key]["edge_mask"].detach().cpu(),
+        title,
+        "Edge Importance",
+        "aa_explanation",
+        go_term,
     )
-
-    for dst_val in torch.unique(dst_local, sorted=True).tolist():
-        mask = dst_local == dst_val
-        if not torch.any(mask):
-            continue
-
-        aa_indices = src_local[mask]
-        edge_importance = edge_mask[mask].view(-1)
-
-        target_idx = int(dst_val)
-        target_global = int(protein_global_ids[target_idx])
-        target_label = dataset.idx_to_protein.get(target_global, str(target_global))
-
-        # Sort by AA index
-        sort_idx = torch.argsort(aa_indices)
-        edge_z_sorted = edge_importance[sort_idx]
-
-        plt.figure(figsize=(8, 4))
-        x_positions = torch.arange(len(edge_z_sorted), dtype=torch.float32)
-        scatter = plt.scatter(
-            x_positions.numpy(),
-            edge_z_sorted.numpy(),
-            c=edge_z_sorted.numpy(),
-            cmap=plt.cm.viridis,
-        )
-        plt.colorbar(scatter, label="Edge attribution")
-        plt.xlabel("Residue")
-        plt.ylabel("Edge Importance")
-
-        title = f"AA-Protein Explanation: {target_label}"
-        if title_suffix:
-            title += f" ({title_suffix})"
-        plt.title(title)
-        plt.tight_layout()
-
-        out_dir, prefix = resolve_plot_target(context, target_idx, go_term=go_term)
-        filename = os.path.join(out_dir, f"{prefix}_aa_explanation.png")
-        plt.savefig(filename)
-        plt.close()
 
 
 def plot_protein_attention(
@@ -390,42 +352,15 @@ def plot_protein_attention(
         return
 
     edge_index, attn_weights = layer_attention[key]
-    edge_index = edge_index.detach().cpu()
-    attn_values = _mean_attention(attn_weights.detach().cpu())
-
-    src_local, dst_local = edge_index[0], edge_index[1]
-    protein_ids = batch["protein"].n_id.detach().cpu().tolist()
-
-    for dst_val in torch.unique(dst_local, sorted=True).tolist():
-        mask = dst_local == dst_val
-        if not torch.any(mask):
-            continue
-
-        aa_indices = src_local[mask]
-        attention_sorted = attn_values[mask][torch.argsort(aa_indices)]
-
-        target_idx = int(dst_val)
-        target_global = int(protein_ids[target_idx])
-        target_label = dataset.idx_to_protein.get(target_global, str(target_global))
-
-        plt.figure(figsize=(8, 4))
-        x_positions = torch.arange(len(aa_indices), dtype=torch.float32)
-        scatter = plt.scatter(
-            x_positions.numpy(),
-            attention_sorted.numpy(),
-            c=attention_sorted.numpy(),
-            cmap=plt.cm.viridis,
-        )
-        plt.colorbar(scatter, label="Attention weight")
-        plt.xlabel("Residue")
-        plt.ylabel("Attention")
-        plt.title(f"AA-Protein Attention (Layer {layer_idx}): {target_label}")
-        plt.tight_layout()
-
-        out_dir, prefix = resolve_plot_target(context, target_idx, go_term=go_term)
-        filename = os.path.join(out_dir, f"{prefix}_aa_attention_layer{layer_idx}.png")
-        plt.savefig(filename)
-        plt.close()
+    _plot_aa_to_protein_scatter(
+        context,
+        edge_index.detach().cpu(),
+        _mean_attention(attn_weights.detach().cpu()),
+        f"AA-Protein Attention (Layer {layer_idx}): {{protein}}",
+        "Attention weight",
+        f"aa_attention_layer{layer_idx}",
+        go_term,
+    )
 
 
 def analyze_attention_captum_correlation(

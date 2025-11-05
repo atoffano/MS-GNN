@@ -1,13 +1,13 @@
 """Utilities for rendering protein structures with attribution scores."""
 
 import logging
+import os
 from typing import Dict, List, Optional, Tuple
 
 import torch
 
 from src.utils.visualize import (
     build_plot_context,
-    resolve_plot_target,
     render_structure_colormap,
     ensure_structure,
 )
@@ -38,28 +38,10 @@ def _edge_scores_to_residues(
         # Sort by residue index
         order = torch.argsort(aa_local)
         residue_dict[protein_local] = list(
-            zip(
-                (aa_local[order] + 1).tolist(), vals[order].tolist()
-            )  # 1-based indexing
+            zip((aa_local[order] + 1).tolist(), vals[order].tolist())
         )
 
     return residue_dict
-
-
-def _get_structure_path(
-    uniprot_id: str, dataset, out_dir: str, structure_cache: Optional[Dict[str, str]]
-) -> str:
-    """Get structure path from cache or download."""
-    if structure_cache and uniprot_id in structure_cache:
-        return structure_cache[uniprot_id]
-
-    pdb_id = dataset.pid_mapping[uniprot_id] if dataset.uses_entryid else uniprot_id
-    pdb_path = ensure_structure(pdb_id, out_dir)
-
-    if structure_cache is not None:
-        structure_cache[uniprot_id] = pdb_path
-
-    return pdb_path
 
 
 def _render_structures(
@@ -68,7 +50,6 @@ def _render_structures(
     protein_ids: List[int],
     residue_scores: Dict[int, List[Tuple[int, float]]],
     suffix: str,
-    colormap: str,
     title_prefix: str,
     structure_cache: Optional[Dict[str, str]] = None,
     go_term: Optional[str] = None,
@@ -79,19 +60,38 @@ def _render_structures(
             continue
 
         uniprot_id = dataset.idx_to_protein[protein_ids[local_idx]]
-        out_dir, prefix = resolve_plot_target(context, local_idx, go_term=go_term)
 
-        pdb_path = _get_structure_path(
-            uniprot_id, dataset, context.root_dir, structure_cache
+        # Get structure path with caching
+        if structure_cache and uniprot_id in structure_cache:
+            pdb_path = structure_cache[uniprot_id]
+        else:
+            pdb_id = (
+                dataset.pid_mapping.get(uniprot_id, uniprot_id)
+                if dataset.uses_entryid
+                else uniprot_id
+            )
+            pdb_path = ensure_structure(pdb_id, context.root_dir)
+            if structure_cache is not None:
+                structure_cache[uniprot_id] = pdb_path
+
+        # Resolve output path
+        is_root = local_idx == 0
+        base_dir = context.root_dir if is_root else context.neighbor_dir
+        prefix = (
+            context.root_label
+            if is_root
+            else f"{context.root_label}_{context.labels[local_idx]}"
         )
-        image_path = f"{out_dir}/{prefix}_{suffix}.png"
 
+        if go_term:
+            out_dir = os.path.join(base_dir, "per-term", go_term.replace(":", "_"))
+            os.makedirs(out_dir, exist_ok=True)
+        else:
+            out_dir = base_dir
+
+        image_path = f"{out_dir}/{prefix}_{suffix}.png"
         render_structure_colormap(
-            pdb_path,
-            residues,
-            image_path,
-            colormap=colormap,
-            title=f"{uniprot_id} – {title_prefix}",
+            pdb_path, residues, image_path, title=f"{uniprot_id} – {title_prefix}"
         )
 
 
@@ -123,7 +123,6 @@ def export_layer_attention_3d(
         context.protein_ids,
         residue_scores,
         suffix=f"attention_layer{layer_idx}",
-        colormap="rainbow",
         title_prefix=f"Attention L{layer_idx}",
         structure_cache=structure_cache,
         go_term=go_term,
@@ -159,7 +158,6 @@ def export_captum_3d(
         context.protein_ids,
         residue_scores,
         suffix=suffix,
-        colormap="rainbow",
         title_prefix=title_prefix,
         structure_cache=structure_cache,
         go_term=go_term,
