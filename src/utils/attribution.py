@@ -187,7 +187,11 @@ class ExplanationGenerator:
                 f"Computing attributions with {target.sum().item()} active terms"
             )
 
-        return explainer(batch.x_dict, batch.edge_index_dict, **kwargs)
+        attributions = explainer(batch.x_dict, batch.edge_index_dict, **kwargs)
+        # Apply absolute value to all returned masks
+        for et in attributions.edge_types:
+            attributions[et].edge_mask = attributions[et].edge_mask.abs()
+        return attributions
 
 
 class ExplanationExporter:
@@ -399,7 +403,7 @@ def main():
     logger.info(f"Using device: {device}")
 
     # Load model and dataset
-    config, model, dataset = load_model_and_config(args.model_path, device)
+    _, model, dataset = load_model_and_config(args.model_path, device)
 
     # Initialize components
     go_mapper = GOTermMapper(dataset, obo_path=GO_OBO_PATH)

@@ -472,7 +472,7 @@ class SwissProtDataset:
             mask = mask_val | mask_test
             batch["protein"].go[mask] = 0.0
 
-        # batch["protein"].x = torch.stack(all_interpro_features)
+        # batch["protein"].x = torch.stack(batch_interpro_features)
 
         # Set protein node features as concatenation of InterPro and GO one hots.
         batch["protein"].x = torch.cat(
@@ -511,13 +511,13 @@ def define_loaders(config, dataset):
     """Create NeighborLoader instances for train/val/test."""
 
     # Which edges to sample and how many neighbors
-    # num_neighbors = {}
-    # for edge_type_str, num_samples in config["model"]["sampled_edges"].items():
-    #     edge_type_tuple = tuple(edge_type_str.split("__"))
-    #     num_neighbors[edge_type_tuple] = [num_samples]
-    # logger.info("Subgraph sampling configuration", num_neighbors)
+    num_neighbors = {}
+    for edge_type_str, num_samples in config["model"]["sampled_edges"].items():
+        edge_type_tuple = tuple(edge_type_str.split("__"))
+        num_neighbors[edge_type_tuple] = [num_samples]
+    logger.info("Subgraph sampling configuration", num_neighbors)
 
-    num_neighbors = {("protein", "aligned_with", "protein"): [-1]}
+    # num_neighbors = {("protein", "aligned_with", "protein"): [-1]}
     train_loader = NeighborLoader(
         dataset.data,
         num_neighbors=num_neighbors,

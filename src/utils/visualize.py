@@ -110,7 +110,7 @@ def render_structure_colormap(
     title: str | None = None,
     normalize: bool = True,
 ) -> None:
-    """Color a structure by residue scores via PyMOL."""
+    """Color a structure by residue scores via PyMOL with multiple normalization methods."""
     if pymol2 is None:
         raise RuntimeError("pymol2 not installed")
 
@@ -120,34 +120,101 @@ def render_structure_colormap(
 
     res_idx, scores = zip(*residue_scores)
     res_idx = np.asarray(res_idx, dtype=np.int32)
-    scores = np.asarray(scores, dtype=np.float32)
+    scores_raw = np.asarray(scores, dtype=np.float32)
 
-    # Normalize scores using z-score
-    if normalize:
-        mean, std = float(np.mean(scores)), float(np.std(scores)) + 1e-9
-        scores = (scores - mean) / std
+    # Define normalization methods
+    norm_methods = {
+        "none": lambda x: x,
+        "minmax": lambda x: (
+            (x - x.min()) / (x.max() - x.min() + 1e-9) if x.max() > x.min() else x
+        ),
+        "zscore": lambda x: (x - x.mean()) / (x.std() + 1e-9) if x.std() > 1e-9 else x,
+    }
 
     os.makedirs(os.path.dirname(image_path), exist_ok=True)
-    logger.info(f"Rendering structure {pdb_path}")
 
-    with pymol2.PyMOL() as pymol:
-        cmd = pymol.cmd
-        cmd.reinitialize()
-        cmd.set("fetch_path", os.path.dirname(pdb_path))
-        cmd.load(pdb_path, "prot")
-        cmd.alter("prot", "b=0.0")
-        for idx, value in zip(res_idx, scores):
-            cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
-        cmd.rebuild()
-        cmd.spectrum("b", "rainbow", "prot")
-        if title:
-            cmd.set_title("title", state=0, text=title)
-        cmd.set("ray_opaque_background", 0)
-        cmd.bg_color("white")
-        cmd.orient("prot")
-        cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
+    # Iterate over normalization methods
+    for norm_name, norm_func in norm_methods.items():
+        if not normalize and norm_name != "none":
+            continue
 
-    logger.info(f"Saved structure rendering to {image_path}")
+        scores = norm_func(scores_raw.copy())
+
+        # Modify output path to include normalization type
+        base_path, ext = os.path.splitext(image_path)
+        norm_image_path = f"{base_path}_{norm_name}{ext}"
+
+        logger.info(f"Rendering structure {pdb_path} with {norm_name} normalization")
+
+        with pymol2.PyMOL() as pymol:
+            cmd = pymol.cmd
+            cmd.reinitialize()
+            cmd.set("fetch_path", os.path.dirname(pdb_path))
+            cmd.load(pdb_path, "prot")
+            cmd.alter("prot", "b=0.0")
+            for idx, value in zip(res_idx, scores):
+                cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
+            cmd.rebuild()
+            cmd.spectrum("b", "rainbow", "prot")
+            if title:
+                full_title = f"{title} ({norm_name})"
+                cmd.set_title("title", state=0, text=full_title)
+            cmd.set("ray_opaque_background", 0)
+            cmd.bg_color("white")
+            cmd.orient("prot")
+            cmd.png(norm_image_path, width=1600, height=1200, dpi=300, ray=1)
+
+        logger.info(f"Saved structure rendering to {norm_image_path}")
+
+
+# def render_structure_colormap(
+#     pdb_path: str,
+#     residue_scores: Sequence[Tuple[int, float]],
+#     image_path: str,
+#     *,
+#     colormap: str = "viridis",
+#     title: str | None = None,
+#     normalize: bool = True,
+# ) -> None:
+#     """Color a structure by residue scores via PyMOL."""
+#     if pymol2 is None:
+#         raise RuntimeError("pymol2 not installed")
+
+#     if not residue_scores:
+#         logger.warning(f"No residue scores for {pdb_path}, skipping")
+#         return
+
+#     res_idx, scores = zip(*residue_scores)
+#     res_idx = np.asarray(res_idx, dtype=np.int32)
+#     scores = np.asarray(scores, dtype=np.float32)
+
+
+#     # Normalize scores using z-score
+#     # if normalize:
+#     #     mean, std = float(np.mean(scores)), float(np.std(scores)) + 1e-9
+#     #     scores = (scores - mean) / std
+
+#     os.makedirs(os.path.dirname(image_path), exist_ok=True)
+#     logger.info(f"Rendering structure {pdb_path}")
+
+#     with pymol2.PyMOL() as pymol:
+#         cmd = pymol.cmd
+#         cmd.reinitialize()
+#         cmd.set("fetch_path", os.path.dirname(pdb_path))
+#         cmd.load(pdb_path, "prot")
+#         cmd.alter("prot", "b=0.0")
+#         for idx, value in zip(res_idx, scores):
+#             cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
+#         cmd.rebuild()
+#         cmd.spectrum("b", "rainbow", "prot")
+#         if title:
+#             cmd.set_title("title", state=0, text=title)
+#         cmd.set("ray_opaque_background", 0)
+#         cmd.bg_color("white")
+#         cmd.orient("prot")
+#         cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
+
+#     logger.info(f"Saved structure rendering to {image_path}")
 
 
 def _save_plot(
@@ -411,15 +478,15 @@ def analyze_attention_captum_correlation(
         if len(shared_attn) < 2:
             continue
 
-        # Normalize
         attn_arr = np.asarray(shared_attn, dtype=np.float32)
         captum_arr = np.asarray(shared_captum, dtype=np.float32)
-        attn_arr = (attn_arr - attn_arr.min()) / (
-            attn_arr.max() - attn_arr.min() + 1e-9
-        )
-        captum_arr = (captum_arr - captum_arr.min()) / (
-            captum_arr.max() - captum_arr.min() + 1e-9
-        )
+        # Normalize
+        # attn_arr = (attn_arr - attn_arr.min()) / (
+        #     attn_arr.max() - attn_arr.min() + 1e-9
+        # )
+        # captum_arr = (captum_arr - captum_arr.min()) / (
+        #     captum_arr.max() - captum_arr.min() + 1e-9
+        # )
 
         # Compute correlation
         if (
