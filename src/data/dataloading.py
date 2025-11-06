@@ -388,7 +388,7 @@ class SwissProtDataset:
 
         return onehot
 
-    def get_batch_features(self, batch):
+    def get_batch_features(self, batch, return_sequences=False):
         """Load individual protein features and amino acid data for the sampled batch."""
         sampled_protein_ids = [
             self.idx_to_protein[idx.item()] for idx in batch["protein"].n_id
@@ -398,6 +398,8 @@ class SwissProtDataset:
                 self.pid_mapping.get(pid, pid) for pid in sampled_protein_ids
             ]
 
+        if return_sequences:
+            sampled_sequences = []
         batch_interpro_features = []
         batch_go_features = []
         batch_aa_features = []
@@ -413,8 +415,12 @@ class SwissProtDataset:
                 interpro_feat = torch.zeros(self.ipr_vocab_size, dtype=torch.float32)
                 go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
                 aa_feat = torch.zeros(200, 1280, dtype=torch.float32)  # Default 200 AAs
+                if return_sequences:
+                    sampled_sequences.append("")
             else:
                 # Load features
+                if return_sequences:
+                    sampled_sequences.append(protein_graph["protein"].sequence)
                 interpro_feat = protein_graph["protein"].interpro.squeeze(0)
                 aa_feat = protein_graph["aa"].x
                 go_feat = self.convert_go_terms_to_onehot(
@@ -492,16 +498,18 @@ class SwissProtDataset:
         # Store metadata
         batch["protein"].protein_ids = sampled_protein_ids
         batch["protein"].protein_sizes = protein_sizes
+        if return_sequences:
+            batch["protein"].sequences = sampled_sequences
 
         return batch
 
 
-def make_batch_transform(dataset, mode):
+def make_batch_transform(dataset, mode, return_sequences=False):
     """Populate batch with features."""
 
     def batch_transform(batch):
         batch["mode"] = mode
-        batch = dataset.get_batch_features(batch)
+        batch = dataset.get_batch_features(batch, return_sequences=return_sequences)
         return batch
 
     return batch_transform

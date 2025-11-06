@@ -260,125 +260,148 @@ def _plot_aa_to_protein_scatter(
         _save_plot(context, filename_suffix, target_idx, go_term)
 
 
-def _plot_aa_sliding_window(
+def _plot_aa_to_protein_msa(
     context: ProteinPlotContext,
     edge_index: torch.Tensor,
     edge_values: torch.Tensor,
+    aligned_seqs: list[str],
     title: str,
     ylabel: str,
     filename_suffix: str,
-    window_size: int = 3,
     go_term: Optional[str] = None,
 ):
-    """Plot AA attributions with sliding window smoothing for all proteins."""
+    """Plot AA→protein scores aligned by MSA."""
     src_local, dst_local = edge_index[0], edge_index[1]
 
-    # Prepare data for all proteins
+    # Map protein index -> (aa_index -> score)
     protein_data = {}
     for dst_val in torch.unique(dst_local, sorted=True).tolist():
         mask = dst_local == dst_val
         if not torch.any(mask):
             continue
+        aa_indices = src_local[mask].numpy()
+        values = edge_values[mask].view(-1).numpy()
+        protein_data[dst_val] = dict(zip(map(int, aa_indices), map(float, values)))
 
-        aa_indices = src_local[mask]
-        values = edge_values[mask].view(-1)
-
-        # Sort by residue index
-        sort_idx = torch.argsort(aa_indices)
-        sorted_aa = aa_indices[sort_idx].numpy()
-        sorted_vals = values[sort_idx].numpy()
-
-        # Apply sliding window smoothing
-        if len(sorted_vals) >= window_size:
-            smoothed = np.convolve(
-                sorted_vals, np.ones(window_size) / window_size, mode="valid"
-            )
-            # Create x positions starting from 1 (not using original AA indices)
-            x_pos = np.arange(1, len(smoothed) + 1)
-        else:
-            smoothed = sorted_vals
-            x_pos = np.arange(1, len(sorted_vals) + 1)
-
-        protein_data[dst_val] = (x_pos, smoothed)
-
-    if not protein_data:
+    if not protein_data or not aligned_seqs:
         return
 
-    # Create plot
-    plt.figure(figsize=(12, 6))
+    # Calculate AA offsets per protein
+    offsets = {}
+    cumulative = 0
+    for i, seq in enumerate(aligned_seqs):
+        offsets[i] = cumulative
+        cumulative += sum(1 for c in seq if c != "-")
 
-    # Generate colors
+    # Plot
+    plt.figure(figsize=(14, 6))
     cmap = plt.cm.get_cmap("tab10")
-    colors = [cmap(i % 10) for i in range(len(protein_data))]
 
-    # Plot each protein
-    for idx, (dst_val, (x_pos, smoothed)) in enumerate(protein_data.items()):
+    for idx, (dst_val, aa_to_score) in enumerate(protein_data.items()):
         target_label = context.labels[int(dst_val)]
         is_seed = context.protein_ids[int(dst_val)] == context.root_global
+        aligned_seq = aligned_seqs[int(dst_val)]
+        offset = offsets[int(dst_val)]
 
-        linewidth = 3.0 if is_seed else 1.5
-        alpha = 1.0 if is_seed else 0.7
-        zorder = 10 if is_seed else 5
+        x_pos, y_vals = [], []
+        residue_idx = 0
+        for aligned_pos, char in enumerate(aligned_seq):
+            if char != "-":
+                global_aa_idx = offset + residue_idx
+                if global_aa_idx in aa_to_score:
+                    x_pos.append(aligned_pos)
+                    y_vals.append(aa_to_score[global_aa_idx])
+                residue_idx += 1
+
+        if not x_pos:
+            continue
 
         plt.plot(
             x_pos,
-            smoothed,
-            label=f"{target_label} (n={len(smoothed)})",
-            color=colors[idx],
-            linewidth=linewidth,
-            alpha=alpha,
-            zorder=zorder,
+            y_vals,
+            label=target_label,
+            color=cmap(idx % 10),
+            linewidth=3.0 if is_seed else 1.5,
+            alpha=0.7,
+            zorder=10 if is_seed else 5,
+            marker="o" if is_seed else ".",
+            markersize=6 if is_seed else 4,
         )
 
-    plt.xlabel("Residue Position")
+    plt.xlabel("Aligned Position")
     plt.ylabel(ylabel)
-    plt.title(f"{title} (window={window_size})")
+    plt.title(title)
     plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-
     _save_plot(context, filename_suffix, go_term=go_term)
 
 
+def _perform_msa_from_batch(batch) -> Optional[list[str]]:
+    """Perform MSA on batch sequences, returning None on failure."""
+    from src.utils.structure_renderer import _perform_msa
+
+    sequences = batch["protein"].sequences
+    labels = batch["protein"].protein_ids
+
+    if len(sequences) < 2:
+        logger.warning("Not enough sequences for MSA alignment")
+        return None
+
+    aligned_seqs = _perform_msa(sequences, labels)
+    if len(aligned_seqs) != len(sequences):
+        logger.error("MSA failed")
+        return None
+
+    return aligned_seqs
+
+
 @timeit
-def plot_protein_explanation_windowed(
+def plot_protein_explanation_msa(
     path: str,
     hetero_explanation,
     dataset,
-    window_size: int = 3,
+    batch,
     title_suffix: Optional[str] = None,
     go_term: Optional[str] = None,
 ):
-    """Plot amino acid to protein explanation with sliding window smoothing."""
+    """Plot amino acid to protein explanation aligned by MSA."""
+    aligned_seqs = _perform_msa_from_batch(batch)
+    if aligned_seqs is None:
+        return
+
     context = build_plot_context(path, dataset, hetero_explanation.batch)
     key = ("aa", "belongs_to", "protein")
 
-    title = f"AA-Protein Explanation: {context.root_label}"
+    title = f"AA-Protein Explanation (MSA-aligned): {context.root_label}"
     if title_suffix:
         title += f" ({title_suffix})"
 
-    _plot_aa_sliding_window(
+    _plot_aa_to_protein_msa(
         context,
         hetero_explanation[key]["edge_index"].detach().cpu(),
         hetero_explanation[key]["edge_mask"].detach().cpu(),
+        aligned_seqs,
         title,
         "Edge Importance",
-        f"aa_explanation_window{window_size}",
-        window_size=window_size,
-        go_term=go_term,
+        "aa_explanation_msa",
+        go_term,
     )
 
 
-def plot_protein_attention_windowed(
-    path,
+def plot_protein_attention_msa(
+    path: str,
     layer_attention,
     dataset,
     batch,
-    layer_idx,
-    window_size: int = 3,
+    layer_idx: int,
     go_term: Optional[str] = None,
 ):
-    """Plot amino acid to protein attention with sliding window smoothing."""
+    """Plot amino acid to protein attention weights aligned by MSA."""
+    aligned_seqs = _perform_msa_from_batch(batch)
+    if aligned_seqs is None:
+        return
+
     context = build_plot_context(path, dataset, batch)
     key = ("aa", "belongs_to", "protein")
 
@@ -387,15 +410,15 @@ def plot_protein_attention_windowed(
 
     edge_index, attn_weights = layer_attention[key]
 
-    _plot_aa_sliding_window(
+    _plot_aa_to_protein_msa(
         context,
         edge_index.detach().cpu(),
         _mean_attention(attn_weights.detach().cpu()),
-        f"AA-Protein Attention (Layer {layer_idx}): {context.root_label}",
+        aligned_seqs,
+        f"AA-Protein Attention (Layer {layer_idx}, MSA-aligned): {context.root_label}",
         "Attention Weight",
-        f"aa_attention_layer{layer_idx}_window{window_size}",
-        window_size=window_size,
-        go_term=go_term,
+        f"aa_attention_layer{layer_idx}_msa",
+        go_term,
     )
 
 

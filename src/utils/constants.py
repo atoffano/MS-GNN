@@ -49,11 +49,12 @@ STRUCTURE_MISSING_FASTA = SWISSPROT_ROOT / "structure_missing.fasta"
 STRINGDB_TSV = DATA_ROOT / "swissprot_stringdb.tsv"
 
 # ============================================================================
-# DIAMOND Database Paths
+# Utilities Paths
 # ============================================================================
 
 DIAMOND_DB_DIR = DATA_ROOT / "diamond"
 DIAMOND_SWISSPROT_DB = SWISSPROT_ROOT / "swissprot_2024_01.dmnd"
+MUSCLE_EXECUTABLE = DATA_ROOT / "muscle-linux-x86.v5.3"
 
 # ============================================================================
 # Model Checkpoints and Configs

@@ -3,9 +3,11 @@
 import logging
 import os
 from typing import Dict, List, Optional, Tuple
+import subprocess
+import tempfile
 
 import torch
-
+from src.utils.constants import MUSCLE_EXECUTABLE
 from src.utils.visualize import (
     build_plot_context,
     render_structure_colormap,
@@ -93,6 +95,80 @@ def _render_structures(
         render_structure_colormap(
             pdb_path, residues, image_path, title=f"{uniprot_id} – {title_prefix}"
         )
+
+
+def _perform_msa(sequences: list[str], labels: list[str]):
+    """Perform multiple sequence alignment using MUSCLE via subprocess.
+
+    Returns:
+        aligned_seqs: List of aligned sequences with gaps
+        alignment_mappings: List of dicts mapping original_aa_idx -> aligned_position for each protein
+    """
+    if len(sequences) < 2:
+        # No alignment needed for single sequence
+        return [sequences[0]], [{i: i for i in range(len(sequences[0]))}]
+
+    logger.info(f"Performing MSA with MUSCLE for {len(sequences)} sequences...")
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".fasta", delete=False
+    ) as input_fasta:
+        input_path = input_fasta.name
+        for label, seq in zip(labels, sequences):
+            input_fasta.write(f">{label}\n{seq}\n")
+
+    output_path = input_path.replace(".fasta", "_aligned.fasta")
+
+    try:
+        cmd = [str(MUSCLE_EXECUTABLE), "-align", input_path, "-output", output_path]
+
+        logger.info(f"Running MUSCLE: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        if result.stderr:
+            logger.debug(f"MUSCLE stderr: {result.stderr}")
+
+        # Parse the alignment manually
+        aligned_seqs = []
+        current_seq = ""
+        current_label = None
+
+        with open(output_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(">"):
+                    if current_label is not None and current_seq:
+                        aligned_seqs.append(current_seq)
+                    current_label = line[1:]
+                    current_seq = ""
+                else:
+                    current_seq += line
+
+            # Add the last sequence
+            if current_label is not None and current_seq:
+                aligned_seqs.append(current_seq)
+
+        if len(aligned_seqs) != len(sequences):
+            raise ValueError(
+                f"Expected {len(sequences)} aligned sequences, got {len(aligned_seqs)}"
+            )
+
+        return aligned_seqs
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"MUSCLE failed with return code {e.returncode}: {e.stderr}")
+        return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
+    except Exception as e:
+        logger.error(f"MSA failed: {e}. Falling back to unaligned sequences.")
+        return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
+
+    finally:
+        try:
+            os.unlink(input_path)
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+        except:
+            pass
 
 
 def export_layer_attention_3d(
