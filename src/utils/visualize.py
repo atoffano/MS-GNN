@@ -106,11 +106,9 @@ def render_structure_colormap(
     residue_scores: Sequence[Tuple[int, float]],
     image_path: str,
     *,
-    colormap: str = "viridis",
     title: str | None = None,
-    normalize: bool = True,
 ) -> None:
-    """Color a structure by residue scores via PyMOL with multiple normalization methods."""
+    """Color a structure by residue scores via PyMOL."""
     if pymol2 is None:
         raise RuntimeError("pymol2 not installed")
 
@@ -120,101 +118,31 @@ def render_structure_colormap(
 
     res_idx, scores = zip(*residue_scores)
     res_idx = np.asarray(res_idx, dtype=np.int32)
-    scores_raw = np.asarray(scores, dtype=np.float32)
-
-    # Define normalization methods
-    norm_methods = {
-        "none": lambda x: x,
-        "minmax": lambda x: (
-            (x - x.min()) / (x.max() - x.min() + 1e-9) if x.max() > x.min() else x
-        ),
-        "zscore": lambda x: (x - x.mean()) / (x.std() + 1e-9) if x.std() > 1e-9 else x,
-    }
+    scores = np.asarray(scores, dtype=np.float32)
 
     os.makedirs(os.path.dirname(image_path), exist_ok=True)
+    logger.info(f"Rendering structure {pdb_path}")
 
-    # Iterate over normalization methods
-    for norm_name, norm_func in norm_methods.items():
-        if not normalize and norm_name != "none":
-            continue
-
-        scores = norm_func(scores_raw.copy())
-
-        # Modify output path to include normalization type
-        base_path, ext = os.path.splitext(image_path)
-        norm_image_path = f"{base_path}_{norm_name}{ext}"
-
-        logger.info(f"Rendering structure {pdb_path} with {norm_name} normalization")
-
-        with pymol2.PyMOL() as pymol:
-            cmd = pymol.cmd
-            cmd.reinitialize()
-            cmd.set("fetch_path", os.path.dirname(pdb_path))
-            cmd.load(pdb_path, "prot")
-            cmd.alter("prot", "b=0.0")
-            for idx, value in zip(res_idx, scores):
-                cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
-            cmd.rebuild()
-            cmd.spectrum("b", "rainbow", "prot")
-            if title:
-                full_title = f"{title} ({norm_name})"
-                cmd.set_title("title", state=0, text=full_title)
-            cmd.set("ray_opaque_background", 0)
-            cmd.bg_color("white")
-            cmd.orient("prot")
-            cmd.png(norm_image_path, width=1600, height=1200, dpi=300, ray=1)
-
-        logger.info(f"Saved structure rendering to {norm_image_path}")
-
-
-# def render_structure_colormap(
-#     pdb_path: str,
-#     residue_scores: Sequence[Tuple[int, float]],
-#     image_path: str,
-#     *,
-#     colormap: str = "viridis",
-#     title: str | None = None,
-#     normalize: bool = True,
-# ) -> None:
-#     """Color a structure by residue scores via PyMOL."""
-#     if pymol2 is None:
-#         raise RuntimeError("pymol2 not installed")
-
-#     if not residue_scores:
-#         logger.warning(f"No residue scores for {pdb_path}, skipping")
-#         return
-
-#     res_idx, scores = zip(*residue_scores)
-#     res_idx = np.asarray(res_idx, dtype=np.int32)
-#     scores = np.asarray(scores, dtype=np.float32)
-
-
-#     # Normalize scores using z-score
-#     # if normalize:
-#     #     mean, std = float(np.mean(scores)), float(np.std(scores)) + 1e-9
-#     #     scores = (scores - mean) / std
-
-#     os.makedirs(os.path.dirname(image_path), exist_ok=True)
-#     logger.info(f"Rendering structure {pdb_path}")
-
-#     with pymol2.PyMOL() as pymol:
-#         cmd = pymol.cmd
-#         cmd.reinitialize()
-#         cmd.set("fetch_path", os.path.dirname(pdb_path))
-#         cmd.load(pdb_path, "prot")
-#         cmd.alter("prot", "b=0.0")
-#         for idx, value in zip(res_idx, scores):
-#             cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
-#         cmd.rebuild()
-#         cmd.spectrum("b", "rainbow", "prot")
-#         if title:
-#             cmd.set_title("title", state=0, text=title)
-#         cmd.set("ray_opaque_background", 0)
-#         cmd.bg_color("white")
-#         cmd.orient("prot")
-#         cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
-
-#     logger.info(f"Saved structure rendering to {image_path}")
+    with pymol2.PyMOL() as pymol:
+        cmd = pymol.cmd
+        cmd.reinitialize()
+        cmd.set("fetch_path", os.path.dirname(pdb_path))
+        cmd.load(pdb_path, "prot")
+        cmd.alter("prot", "b=0.0")
+        for idx, value in zip(res_idx, scores):
+            cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
+        cmd.rebuild()
+        cmd.spectrum("b", "rainbow", "prot")
+        if title:
+            cmd.set_title("title", state=0, text=title)
+        cmd.set("ray_opaque_background", 0)
+        cmd.bg_color("black")
+        cmd.orient("prot")
+        cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
+        cmd.save(
+            image_path.replace(".png", "_scene.pse")
+        )  # Saves the entire session as a .pse file
+    logger.info(f"Saved structure rendering to {image_path}")
 
 
 def _save_plot(
@@ -330,6 +258,145 @@ def _plot_aa_to_protein_scatter(
         plt.title(title_template.format(protein=target_label))
         plt.tight_layout()
         _save_plot(context, filename_suffix, target_idx, go_term)
+
+
+def _plot_aa_sliding_window(
+    context: ProteinPlotContext,
+    edge_index: torch.Tensor,
+    edge_values: torch.Tensor,
+    title: str,
+    ylabel: str,
+    filename_suffix: str,
+    window_size: int = 3,
+    go_term: Optional[str] = None,
+):
+    """Plot AA attributions with sliding window smoothing for all proteins."""
+    src_local, dst_local = edge_index[0], edge_index[1]
+
+    # Prepare data for all proteins
+    protein_data = {}
+    for dst_val in torch.unique(dst_local, sorted=True).tolist():
+        mask = dst_local == dst_val
+        if not torch.any(mask):
+            continue
+
+        aa_indices = src_local[mask]
+        values = edge_values[mask].view(-1)
+
+        # Sort by residue index
+        sort_idx = torch.argsort(aa_indices)
+        sorted_aa = aa_indices[sort_idx].numpy()
+        sorted_vals = values[sort_idx].numpy()
+
+        # Apply sliding window smoothing
+        if len(sorted_vals) >= window_size:
+            smoothed = np.convolve(
+                sorted_vals, np.ones(window_size) / window_size, mode="valid"
+            )
+            # Create x positions starting from 1 (not using original AA indices)
+            x_pos = np.arange(1, len(smoothed) + 1)
+        else:
+            smoothed = sorted_vals
+            x_pos = np.arange(1, len(sorted_vals) + 1)
+
+        protein_data[dst_val] = (x_pos, smoothed)
+
+    if not protein_data:
+        return
+
+    # Create plot
+    plt.figure(figsize=(12, 6))
+
+    # Generate colors
+    cmap = plt.cm.get_cmap("tab10")
+    colors = [cmap(i % 10) for i in range(len(protein_data))]
+
+    # Plot each protein
+    for idx, (dst_val, (x_pos, smoothed)) in enumerate(protein_data.items()):
+        target_label = context.labels[int(dst_val)]
+        is_seed = context.protein_ids[int(dst_val)] == context.root_global
+
+        linewidth = 3.0 if is_seed else 1.5
+        alpha = 1.0 if is_seed else 0.7
+        zorder = 10 if is_seed else 5
+
+        plt.plot(
+            x_pos,
+            smoothed,
+            label=f"{target_label} (n={len(smoothed)})",
+            color=colors[idx],
+            linewidth=linewidth,
+            alpha=alpha,
+            zorder=zorder,
+        )
+
+    plt.xlabel("Residue Position")
+    plt.ylabel(ylabel)
+    plt.title(f"{title} (window={window_size})")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    _save_plot(context, filename_suffix, go_term=go_term)
+
+
+@timeit
+def plot_protein_explanation_windowed(
+    path: str,
+    hetero_explanation,
+    dataset,
+    window_size: int = 3,
+    title_suffix: Optional[str] = None,
+    go_term: Optional[str] = None,
+):
+    """Plot amino acid to protein explanation with sliding window smoothing."""
+    context = build_plot_context(path, dataset, hetero_explanation.batch)
+    key = ("aa", "belongs_to", "protein")
+
+    title = f"AA-Protein Explanation: {context.root_label}"
+    if title_suffix:
+        title += f" ({title_suffix})"
+
+    _plot_aa_sliding_window(
+        context,
+        hetero_explanation[key]["edge_index"].detach().cpu(),
+        hetero_explanation[key]["edge_mask"].detach().cpu(),
+        title,
+        "Edge Importance",
+        f"aa_explanation_window{window_size}",
+        window_size=window_size,
+        go_term=go_term,
+    )
+
+
+def plot_protein_attention_windowed(
+    path,
+    layer_attention,
+    dataset,
+    batch,
+    layer_idx,
+    window_size: int = 3,
+    go_term: Optional[str] = None,
+):
+    """Plot amino acid to protein attention with sliding window smoothing."""
+    context = build_plot_context(path, dataset, batch)
+    key = ("aa", "belongs_to", "protein")
+
+    if layer_attention is None or key not in layer_attention:
+        return
+
+    edge_index, attn_weights = layer_attention[key]
+
+    _plot_aa_sliding_window(
+        context,
+        edge_index.detach().cpu(),
+        _mean_attention(attn_weights.detach().cpu()),
+        f"AA-Protein Attention (Layer {layer_idx}): {context.root_label}",
+        "Attention Weight",
+        f"aa_attention_layer{layer_idx}_window{window_size}",
+        window_size=window_size,
+        go_term=go_term,
+    )
 
 
 @timeit
@@ -480,13 +547,6 @@ def analyze_attention_captum_correlation(
 
         attn_arr = np.asarray(shared_attn, dtype=np.float32)
         captum_arr = np.asarray(shared_captum, dtype=np.float32)
-        # Normalize
-        # attn_arr = (attn_arr - attn_arr.min()) / (
-        #     attn_arr.max() - attn_arr.min() + 1e-9
-        # )
-        # captum_arr = (captum_arr - captum_arr.min()) / (
-        #     captum_arr.max() - captum_arr.min() + 1e-9
-        # )
 
         # Compute correlation
         if (

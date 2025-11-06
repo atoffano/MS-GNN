@@ -16,12 +16,15 @@ from src.utils.constants import SUPPORTED_CAPTUM_METHODS, GO_OBO_PATH
 from src.utils.visualize import (
     plot_systemic_explanation,
     plot_protein_explanation,
+    plot_protein_explanation_windowed,
     plot_systemic_attention,
     plot_protein_attention,
+    plot_protein_attention_windowed,
     ensure_structure,
     analyze_attention_captum_correlation,
     build_plot_context,
 )
+
 from src.utils.structure_renderer import export_captum_3d, export_layer_attention_3d
 from src.utils.helpers import timeit
 
@@ -197,11 +200,14 @@ class ExplanationGenerator:
 class ExplanationExporter:
     """Exports explanations to various formats."""
 
-    def __init__(self, output_dir: str, dataset, go_mapper: GOTermMapper):
+    def __init__(
+        self, output_dir: str, dataset, go_mapper: GOTermMapper, window_size: int = 3
+    ):
         self.output_dir = output_dir
         self.dataset = dataset
         self.go_mapper = go_mapper
         self.structure_cache: Dict[str, str] = {}
+        self.window_size = window_size
 
     def _ensure_cache(self, batch):
         """Lazy-load structure cache when first needed."""
@@ -233,6 +239,12 @@ class ExplanationExporter:
 
         plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
         plot_protein_explanation(self.output_dir, hetero_explanation, self.dataset)
+        plot_protein_explanation_windowed(
+            self.output_dir,
+            hetero_explanation,
+            self.dataset,
+            window_size=self.window_size,
+        )
         export_captum_3d(
             self.output_dir,
             self.dataset,
@@ -268,6 +280,14 @@ class ExplanationExporter:
             title_suffix=title_suffix,
             go_term=go_term,
         )
+        plot_protein_explanation_windowed(
+            self.output_dir,
+            hetero_explanation,
+            self.dataset,
+            window_size=self.window_size,
+            title_suffix=title_suffix,
+            go_term=go_term,
+        )
         export_captum_3d(
             self.output_dir,
             self.dataset,
@@ -293,6 +313,15 @@ class ExplanationExporter:
 
             plot_protein_attention(
                 self.output_dir, layer_attention, self.dataset, batch, idx, go_term
+            )
+            plot_protein_attention_windowed(
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                window_size=self.window_size,
+                go_term=go_term,
             )
             export_layer_attention_3d(
                 self.output_dir,
@@ -397,6 +426,12 @@ def main():
         default="IntegratedGradients",
         choices=SUPPORTED_CAPTUM_METHODS,
     )
+    parser.add_argument(
+        "--window_size",
+        type=int,
+        default=3,
+        help="Sliding window size for smoothed line plots",
+    )
 
     args = parser.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -412,7 +447,9 @@ def main():
 
     # Process each batch
     for batch in loader:
-        exporter = ExplanationExporter(args.model_path, dataset, go_mapper)
+        exporter = ExplanationExporter(
+            args.model_path, dataset, go_mapper, window_size=args.window_size
+        )
         process_batch(
             batch, model, device, exporter, generator, go_mapper, args.go_terms
         )
