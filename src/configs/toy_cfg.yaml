@@ -1,9 +1,9 @@
 model:
-  hidden_channels: 128
+  hidden_channels: 256
   batch_size: 32
   edge_attrs: false
   edge_types:
-    - ["aa", "close_to", "aa"]
+    # - ["aa", "close_to", "aa"]
     - ["aa", "belongs_to", "protein"]
     - ["protein", "aligned_with", "protein"]
     # - ["protein", "stringdb", "protein"]
@@ -14,10 +14,10 @@ model:
     # protein__stringdb__protein: 30
 
 trainer:
-  epochs: 2
+  epochs: 8
   device: cuda
   compile: false  # Whether to use torch.compile
-  num_workers: 0
+  num_workers: 4
 
 optimizer:
   type: Adam

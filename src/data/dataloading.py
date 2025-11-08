@@ -68,6 +68,8 @@ class SwissProtDataset:
 
         # Create the protein-protein heterograph
         self.data = self._create_protein_graph(config)
+        # transform = T.Compose([T.ToUndirected(), T.AddRemainingSelfLoops()])
+        # self.data = transform(self.data)
 
         logger.info(
             f"Created protein graph with {self.data['protein'].num_nodes} proteins"
@@ -121,8 +123,8 @@ class SwissProtDataset:
         # Remove proteins from val/test if they are also in train
         # This should only happen if training on the full SwissProt release.
         if config["data"]["train_on_swissprot"]:
-            for val_test_split in ["val", "test"]:
-                splits["train"] = splits["train"] - splits[val_test_split]
+            for split in ["val", "test"]:
+                splits["train"] = splits["train"] - splits[split]
 
         self.protein_to_idx = {pid: i for i, pid in enumerate(self.proteins)}
         self.idx_to_protein = {v: k for k, v in self.protein_to_idx.items()}
@@ -155,41 +157,57 @@ class SwissProtDataset:
         logger.info(f"Computed pos weights for {len(self.pos_weights)} GO terms")
 
     @timeit
+    # def _compute_pos_weights(self):
+    #     """Compute positive weights for each GO term to handle class imbalance."""
+    #     go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
+    #     term_counts = torch.zeros(len(go_to_idx), dtype=torch.float32)
+
+    #     all_term_indices = []
+    #     for protein in self.train_idx:
+    #         pid = self.idx_to_protein[protein]
+    #         if pid in self.train_annots:
+    #             terms = self.train_annots[pid]["term"]
+    #             term_indices = [go_to_idx[term] for term in terms if term in go_to_idx]
+    #             all_term_indices.extend(term_indices)
+    #     if all_term_indices:
+    #         term_indices_tensor = torch.tensor(all_term_indices, dtype=torch.long)
+    #         term_counts = torch.bincount(
+    #             term_indices_tensor, minlength=len(go_to_idx)
+    #         ).float()
+    #     inf_mask = term_counts == 0
+    #     # pos_weights = len(self.train_idx) / (term_counts + 1)
+    #     pos_weights = len(self.train_idx) / (len(term_counts) * (term_counts + 1e-8))
+
+    #     # Replace pos weights equal to len(self.train_idx) with 1
+    #     if inf_mask.any():
+    #         pos_weights[inf_mask] = pos_weights.min().item()
+    #         logger.info(
+    #             f"{inf_mask.sum().item()} GO terms had zero positive samples; set pos weight to min"
+    #         )
+    #     logger.info(f"Pos weight sample: {pos_weights[:10]}")
+    #     logger.info(
+    #         f"Pos weight stats - Min: {pos_weights.min()}, Max: {pos_weights.max()}, Mean: {pos_weights.mean()}"
+    #     )
+    #     sorted_weights, _ = torch.sort(pos_weights)
+    #     logger.info(
+    #         f"Sorted pos weights sample: {sorted_weights[:10]} ... {sorted_weights[-10:]}"
+    #     )
+    #     return pos_weights
+
     def _compute_pos_weights(self):
         """Compute positive weights for each GO term to handle class imbalance."""
         go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
         term_counts = torch.zeros(len(go_to_idx), dtype=torch.float32)
 
-        all_term_indices = []
         for protein in self.train_idx:
             pid = self.idx_to_protein[protein]
             if pid in self.train_annots:
-                terms = self.train_annots[pid]["term"]
-                term_indices = [go_to_idx[term] for term in terms if term in go_to_idx]
-                all_term_indices.extend(term_indices)
-        if all_term_indices:
-            term_indices_tensor = torch.tensor(all_term_indices, dtype=torch.long)
-            term_counts = torch.bincount(
-                term_indices_tensor, minlength=len(go_to_idx)
-            ).float()
-        inf_mask = term_counts == 0
-        # pos_weights = len(self.train_idx) / (term_counts + 1)
-        pos_weights = len(self.train_idx) / (len(term_counts) * (term_counts + 1e-8))
+                terms = self.train_annots[pid].get("term", [])
+                for term in terms:
+                    if term in go_to_idx:
+                        term_counts[go_to_idx[term]] += 1
 
-        # Replace pos weights equal to len(self.train_idx) with 1
-        if inf_mask.any():
-            pos_weights[inf_mask] = pos_weights.min().item()
-            logger.info(
-                f"{inf_mask.sum().item()} GO terms had zero positive samples; set pos weight to min"
-            )
-        logger.info(f"Pos weight sample: {pos_weights[:10]}")
-        logger.info(
-            f"Pos weight stats - Min: {pos_weights.min()}, Max: {pos_weights.max()}, Mean: {pos_weights.mean()}"
-        )
-        sorted_weights, _ = torch.sort(pos_weights)
-        logger.info(
-            f"Sorted pos weights sample: {sorted_weights[:10]} ... {sorted_weights[-10:]}"
-        )
+        pos_weights = len(self.train_idx) / (term_counts + 1)
         return pos_weights
 
     def _create_protein_graph(self, config):
@@ -444,7 +462,7 @@ class SwissProtDataset:
         seed_nodes = batch["protein"].n_id[: batch["protein"].batch_size]
         batch["protein"].interpro = torch.stack(batch_interpro_features)
         batch["protein"].go = torch.stack(batch_go_features)
-        batch["protein"].y = batch["protein"].go[: batch["protein"].batch_size].clone()
+        batch["protein"].y = batch["protein"].go[: batch["protein"].batch_size].detach()
         batch["protein"].go[
             : batch["protein"].batch_size
         ] = 0.0  # Mask seed protein labels
@@ -453,7 +471,6 @@ class SwissProtDataset:
             batch["protein"].n_id[batch["protein"].batch_size :], seed_nodes
         ).any():
             logger.warning("Seed nodes found in neighborhood nodes of the batch!")
-            # Print which seed nodes are found in neighborhood nodes
             neighborhood_nodes = batch["protein"].n_id[batch["protein"].batch_size :]
             overlapping_nodes = torch.isin(neighborhood_nodes, seed_nodes)
             overlapping_indices = neighborhood_nodes[overlapping_nodes]
@@ -478,11 +495,14 @@ class SwissProtDataset:
             mask = mask_val | mask_test
             batch["protein"].go[mask] = 0.0
 
-        # batch["protein"].x = torch.stack(batch_interpro_features)
+        # Deletion experiment: set .x features to normal distribution samples
+        # batch["protein"].x = torch.randn(
+        #     batch["protein"].num_nodes, self.ipr_vocab_size + self.go_vocab_size
+        # ).float()
 
         # Set protein node features as concatenation of InterPro and GO one hots.
         batch["protein"].x = torch.cat(
-            [torch.stack(batch_interpro_features), torch.stack(batch_go_features)],
+            [batch["protein"].interpro, batch["protein"].go],
             dim=1,
         )
 

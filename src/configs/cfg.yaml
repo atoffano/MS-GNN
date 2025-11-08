@@ -38,7 +38,7 @@ data:
   stringdb_path: ./data/swissprot/2024_01/swissprot_stringdb.tsv
 
 run:
-  qualifier: 2layerGNN_POS((tc+1)*tc)0tomin  # Additional string to append to run_id for uniqueness
+  qualifier: 2layerGNN  # Additional string to append to run_id for uniqueness
   save_predictions:
     val: true
     test: true
