@@ -93,7 +93,9 @@ def train(
         ):
             try:
                 nb_prots = len(batch["protein"].n_id)
-                logger.info(f"Number of proteins in batch: {nb_prots}")
+                if i < 10:
+                    logger.info(f"Number of proteins in batch: {nb_prots}")
+
                 batch = batch.to(device)
                 optimizer.zero_grad()
 
