@@ -4,6 +4,7 @@ import time
 import os
 import psutil
 import torch
+import wandb
 import logging
 from functools import wraps
 from typing import Optional, Dict, Any
@@ -253,3 +254,84 @@ def log_process_tree_memory():
     logger.info(f"Total RSS across all processes: {total_rss:.1f} MB")
     logger.info(f"Total Shared memory: {total_shared:.1f} MB")
     logger.info("=" * 60)
+
+
+def get_gpu_memory_stats(device):
+    """Get current GPU memory usage statistics.
+
+    Args:
+        device: torch.device
+
+    Returns:
+        dict: Dictionary containing memory stats in MB
+    """
+    if not torch.cuda.is_available() or device.type != "cuda":
+        return {
+            "allocated_mb": 0,
+            "reserved_mb": 0,
+            "max_allocated_mb": 0,
+            "max_reserved_mb": 0,
+            "free_mb": 0,
+            "total_mb": 0,
+        }
+
+    # Get device index
+    device_idx = (
+        device.index if device.index is not None else torch.cuda.current_device()
+    )
+
+    # Convert bytes to MB
+    mb_divisor = 1024**2
+
+    return {
+        "allocated_mb": torch.cuda.memory_allocated(device_idx) / mb_divisor,
+        "reserved_mb": torch.cuda.memory_reserved(device_idx) / mb_divisor,
+        "max_allocated_mb": torch.cuda.max_memory_allocated(device_idx) / mb_divisor,
+        "max_reserved_mb": torch.cuda.max_memory_reserved(device_idx) / mb_divisor,
+        "free_mb": (
+            torch.cuda.get_device_properties(device_idx).total_memory
+            - torch.cuda.memory_allocated(device_idx)
+        )
+        / mb_divisor,
+        "total_mb": torch.cuda.get_device_properties(device_idx).total_memory
+        / mb_divisor,
+    }
+
+
+def log_gpu_memory(device, batch_idx=None, prefix=""):
+    """Log GPU memory usage to both logger and wandb.
+
+    Args:
+        device: torch.device
+        batch_idx: Optional batch index for logging
+        prefix: Optional prefix for log messages (e.g., "train", "val")
+    """
+    stats = get_gpu_memory_stats(device)
+
+    # Format log message
+    batch_str = f"Batch {batch_idx} - " if batch_idx is not None else ""
+    prefix_str = f"{prefix} - " if prefix else ""
+
+    log_msg = (
+        f"{prefix_str}{batch_str}GPU Memory: "
+        f"Allocated: {stats['allocated_mb']:.1f}MB, "
+        f"Reserved: {stats['reserved_mb']:.1f}MB, "
+        f"Free: {stats['free_mb']:.1f}MB, "
+        f"Total: {stats['total_mb']:.1f}MB"
+    )
+    logger.debug(log_msg)
+
+    # Log to wandb with appropriate prefix
+    wandb_prefix = f"{prefix}_" if prefix else ""
+    wandb.log(
+        {
+            f"{wandb_prefix}gpu_memory_allocated_mb": stats["allocated_mb"],
+            f"{wandb_prefix}gpu_memory_reserved_mb": stats["reserved_mb"],
+            f"{wandb_prefix}gpu_memory_free_mb": stats["free_mb"],
+            f"{wandb_prefix}gpu_memory_utilization_pct": (
+                (stats["allocated_mb"] / stats["total_mb"] * 100)
+                if stats["total_mb"] > 0
+                else 0
+            ),
+        }
+    )

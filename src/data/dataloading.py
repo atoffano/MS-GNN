@@ -401,14 +401,17 @@ class SwissProtDataset:
                 self.pid_mapping.get(pid, pid) for pid in sampled_protein_ids
             ]
 
+        use_edge_attrs = self.config["model"]["edge_attrs"]
+        use_contact = ["aa", "close_to", "aa"] in self.config["model"]["edge_types"]
+
         if return_sequences:
             sampled_sequences = []
         batch_interpro_features = []
         batch_go_features = []
         batch_aa_features = []
         aa_to_protein_edges = []
-        contact_edges = []
-        contact_attrs = [] if self.config["model"]["edge_attrs"] else None
+        contact_edges = [] if use_contact else None
+        contact_attrs = [] if use_edge_attrs else None
         protein_sizes = []
 
         aa_offset = 0  # Dynamic offset for aa nodes id (on-the-fly attribution)
@@ -421,12 +424,13 @@ class SwissProtDataset:
                 interpro_feat = torch.zeros(self.ipr_vocab_size, dtype=torch.float32)
                 go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
                 aa_feat = torch.zeros(200, 1280, dtype=torch.float32)  # Default 200 AAs
-                local_contact_edge_index = torch.empty((2, 0), dtype=torch.long)
-                local_contact_edge_attr = (
-                    torch.empty((0,), dtype=torch.float32)
-                    if self.config["model"]["edge_attrs"]
-                    else None
-                )
+                if use_contact:
+                    local_contact_edge_index = torch.empty((2, 0), dtype=torch.long)
+                    local_contact_edge_attr = (
+                        torch.empty((0,), dtype=torch.float32)
+                        if use_edge_attrs
+                        else None
+                    )
                 if return_sequences:
                     sampled_sequences.append("")
             else:
@@ -438,24 +442,23 @@ class SwissProtDataset:
                 go_feat = self.convert_go_terms_to_onehot(
                     protein_graph["protein"][f"go_terms_{self.subontology}"]
                 )
-                if ("aa", "close_to", "aa") in protein_graph.edge_types:
-                    contact_data = protein_graph["aa", "close_to", "aa"]
-                    local_contact_edge_index = contact_data.edge_index
-                    if self.config["model"]["edge_attrs"]:
-                        local_contact_edge_attr = contact_data.edge_attr
-                        if local_contact_edge_attr is None:
-                            local_contact_edge_attr = torch.empty(
-                                (0,), dtype=torch.float32
-                            )
+                if use_contact:
+                    if ("aa", "close_to", "aa") in protein_graph.edge_types:
+                        contact_data = protein_graph["aa", "close_to", "aa"]
+                        local_contact_edge_index = contact_data.edge_index
+                        if use_edge_attrs:
+                            local_contact_edge_attr = contact_data.edge_attr
+                            if local_contact_edge_attr is None:
+                                local_contact_edge_attr = torch.empty(
+                                    (0,), dtype=torch.float32
+                                )
                     else:
-                        local_contact_edge_attr = None
-                else:
-                    local_contact_edge_index = torch.empty((2, 0), dtype=torch.long)
-                    local_contact_edge_attr = (
-                        torch.empty((0,), dtype=torch.float32)
-                        if self.config["model"]["edge_attrs"]
-                        else None
-                    )
+                        local_contact_edge_index = torch.empty((2, 0), dtype=torch.long)
+                        local_contact_edge_attr = (
+                            torch.empty((0,), dtype=torch.float32)
+                            if use_edge_attrs
+                            else None
+                        )
 
             batch_interpro_features.append(interpro_feat)
             batch_go_features.append(go_feat)
@@ -467,13 +470,13 @@ class SwissProtDataset:
             aa_indices = torch.arange(aa_offset, aa_offset + num_aas)
             protein_indices = torch.full((num_aas,), local_idx, dtype=torch.long)
             aa_to_protein_edges.append(torch.stack([aa_indices, protein_indices]))
-            contact_edges.append(local_contact_edge_index + aa_offset)
+            if use_contact:
+                contact_edges.append(local_contact_edge_index + aa_offset)
             aa_offset += num_aas
 
             # Load aa contact edge attributes if applicable
-            if self.config["model"]["edge_attrs"] and local_contact_edge_index.numel():
+            if use_edge_attrs and use_contact:
                 contact_attrs.append(local_contact_edge_attr)
-                print(local_contact_edge_attr.max(), local_contact_edge_attr.min())
 
         # Update batch with function-related features & set labels
         seed_nodes = batch["protein"].n_id[: batch["protein"].batch_size]
@@ -536,23 +539,22 @@ class SwissProtDataset:
         batch["aa", "belongs_to", "protein"].edge_index = torch.cat(
             aa_to_protein_edges, dim=1
         )
-        batch["aa", "close_to", "aa"].edge_index = (
-            torch.cat(contact_edges, dim=1)
-            if contact_edges
-            else torch.empty((2, 0), dtype=torch.long)
-        )
+
+        if use_contact:
+            batch["aa", "close_to", "aa"].edge_index = (
+                torch.cat(contact_edges, dim=1)
+                if contact_edges
+                else torch.empty((2, 0), dtype=torch.long)
+            )
 
         # Normalized distance between aa as edge attributes.
-        if self.config["model"]["edge_attrs"]:
+        # Note: edge_attr is stored as sqrt of the Angstrom distance.
+        if use_edge_attrs and use_contact:
             batch["aa", "close_to", "aa"].edge_attr = (
                 torch.cat(contact_attrs, dim=0)
                 if contact_attrs
                 else torch.empty((0,), dtype=torch.float32)
-            )
-            batch["aa", "close_to", "aa"].edge_attr /= CONTACT_CUTOFF
-            logger.info(
-                f"Contact edge attr stats - Max: {batch['aa', 'close_to', 'aa'].edge_attr.max().item()}"
-            )
+            ) ** 2 / CONTACT_CUTOFF
 
         # Store metadata
         batch["protein"].protein_ids = sampled_protein_ids
