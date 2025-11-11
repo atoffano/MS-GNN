@@ -123,12 +123,15 @@ def train(
                 wandb.log({"train_loss": loss.item() / batch["protein"].batch_size})
                 train_loss_sum += loss.item() / batch["protein"].batch_size
 
+                del out, batch, loss
+                torch.cuda.empty_cache()
             # Handle OOM errors gracefully
             except RuntimeError as e:
                 logger.error(
                     f"Error occurred {e}, Batch {i}. Total proteins in batch: {nb_prots}. Skipping batch."
                 )
                 log_gpu_memory(device, batch_idx=i, prefix="train_oom")
+                wandb.log({"nb_proteins_in_oom_batch": nb_prots})
                 torch.cuda.empty_cache()
                 continue
 

@@ -256,7 +256,7 @@ class SwissProtDataset:
                 normalized_features = (features - means) / stds
                 edge_attrs = torch.tensor(
                     normalized_features.values, dtype=torch.float32
-                )
+                ).detach()
             else:
                 edge_attrs = None
 
@@ -332,7 +332,7 @@ class SwissProtDataset:
                 normalized_features = (features - means) / stds
                 edge_attrs = torch.tensor(
                     normalized_features.values, dtype=torch.float32
-                )
+                ).detach()
             else:
                 edge_attrs = None
 
@@ -551,10 +551,15 @@ class SwissProtDataset:
         # Note: edge_attr is stored as sqrt of the Angstrom distance.
         if use_edge_attrs and use_contact:
             batch["aa", "close_to", "aa"].edge_attr = (
-                torch.cat(contact_attrs, dim=0)
-                if contact_attrs
-                else torch.empty((0,), dtype=torch.float32)
-            ) ** 2 / CONTACT_CUTOFF
+                (
+                    torch.cat(contact_attrs, dim=0)
+                    if contact_attrs
+                    else torch.empty((0,), dtype=torch.float32)
+                )
+                ** 2
+                / CONTACT_CUTOFF
+            ).detach()
+            del contact_attrs
 
         # Store metadata
         batch["protein"].protein_ids = sampled_protein_ids
