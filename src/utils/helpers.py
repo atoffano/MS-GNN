@@ -325,9 +325,6 @@ def log_gpu_memory(device, batch_idx=None, prefix=""):
     wandb_prefix = f"{prefix}_" if prefix else ""
     wandb.log(
         {
-            f"{wandb_prefix}gpu_memory_allocated_mb": stats["allocated_mb"],
-            f"{wandb_prefix}gpu_memory_reserved_mb": stats["reserved_mb"],
-            f"{wandb_prefix}gpu_memory_free_mb": stats["free_mb"],
             f"{wandb_prefix}gpu_memory_utilization_pct": (
                 (stats["allocated_mb"] / stats["total_mb"] * 100)
                 if stats["total_mb"] > 0

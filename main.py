@@ -103,8 +103,6 @@ def train(
                 if i % config["run"]["logging"]["gpu_memory_freq"] == 0:
                     log_gpu_memory(device, batch_idx=i, prefix="train_after_load")
 
-                optimizer.zero_grad()
-
                 out = model(
                     batch.x_dict,
                     batch.edge_index_dict,
@@ -122,9 +120,11 @@ def train(
                 optimizer.step()
                 wandb.log({"train_loss": loss.item() / batch["protein"].batch_size})
                 train_loss_sum += loss.item() / batch["protein"].batch_size
-
-                del out, batch, loss
+                del out, loss, batch
+                optimizer.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
+                log_gpu_memory(device, batch_idx=i, prefix="train_after_cleanup")
+
             # Handle OOM errors gracefully
             except RuntimeError as e:
                 logger.error(
@@ -155,6 +155,7 @@ def train(
                 log_gpu_memory(device, batch_idx=i, prefix="train_after_cleanup")
 
         scheduler.step()
+
         val_loss, val_aupr, val_fmax, val_pr_plot = run_intermediate_validation(
             model, val_loader, criterion, device, num_batches=len(val_loader)
         )

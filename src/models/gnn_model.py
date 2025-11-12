@@ -5,11 +5,9 @@ from collections import defaultdict
 import torch
 from torch.nn import PReLU
 from torch_geometric.nn import (
-    HeteroConv,
     GATv2Conv,
     Linear,
     HeteroDictLinear,
-    BatchNorm,
     LayerNorm,
 )
 from src.utils.helpers import timeit
@@ -22,7 +20,7 @@ class HeteroGATConv(torch.nn.Module):
     and aggregates results by destination node type.
     """
 
-    def __init__(self, edge_types, channels):
+    def __init__(self, edge_types, channels, edge_dim=None):
         """Initialize HeteroGATConv layer.
 
         Args:
@@ -33,7 +31,9 @@ class HeteroGATConv(torch.nn.Module):
         self.convs = torch.nn.ModuleDict()
         for edge_type in edge_types:
             key = "__".join(edge_type)
-            self.convs[key] = GATv2Conv((-1, -1), channels, add_self_loops=False)
+            self.convs[key] = GATv2Conv(
+                (-1, -1), channels, edge_dim=edge_dim, add_self_loops=False
+            )
 
     def forward(
         self,
@@ -67,11 +67,16 @@ class HeteroGATConv(torch.nn.Module):
                 out, attn = self.convs[key](
                     (x_src, x_dst),
                     edge_index,
+                    edge_attr=edge_attr_dict.get(edge_type),
                     return_attention_weights=True,
                 )
                 attention_dict[edge_type] = attn
             else:
-                out = self.convs[key]((x_src, x_dst), edge_index)
+                out = self.convs[key](
+                    (x_src, x_dst),
+                    edge_index,
+                    edge_attr=edge_attr_dict.get(edge_type),
+                )
             out_dict[edge_type[2]].append(out)
 
         out_dict = {
@@ -117,6 +122,7 @@ class ProteinGNN(torch.nn.Module):
         self.conv1 = HeteroGATConv(
             edge_types=edge_types,
             channels=hidden_channels,
+            edge_dim=1 if self.edge_attrs else None,
         )
         self.prelu_gnn1 = PReLU()
         self.norm_gnn1 = LayerNorm(hidden_channels)
@@ -124,6 +130,7 @@ class ProteinGNN(torch.nn.Module):
         self.conv2 = HeteroGATConv(
             edge_types=edge_types,
             channels=hidden_channels,
+            edge_dim=1 if self.edge_attrs else None,
         )
         self.prelu_gnn2 = PReLU()
         self.norm_gnn2 = LayerNorm(hidden_channels)
@@ -150,7 +157,11 @@ class ProteinGNN(torch.nn.Module):
             torch.Tensor: Predicted GO term scores (or probabilities during inference)
             tuple: If return_attention_weights=True, returns (predictions, attentions)
         """
-        edge_attr_dict = batch.edge_attr_dict if self.edge_attrs else None
+        edge_attr_dict = (
+            {k: v.detach() for k, v in batch.edge_attr_dict.items()}
+            if self.edge_attrs
+            else None
+        )
 
         # Input linear
         x_dict = self.lin_in(x_dict)

@@ -250,13 +250,14 @@ class SwissProtDataset:
                 [source_indices, target_indices], dtype=torch.long
             )
             if config["model"]["edge_attrs"]:
-                features = alignment_df.drop(columns=["protein1", "protein2"])
+                # features = alignment_df.drop(columns=["protein1", "protein2"])
+                features = alignment_df[["bitscore"]]
                 means = features.mean()
                 stds = features.std()
                 normalized_features = (features - means) / stds
                 edge_attrs = torch.tensor(
                     normalized_features.values, dtype=torch.float32
-                ).detach()
+                )
             else:
                 edge_attrs = None
 
@@ -326,13 +327,14 @@ class SwissProtDataset:
                 [source_indices, target_indices], dtype=torch.long
             )
             if config["model"]["edge_attrs"]:
-                features = stringdb_df.drop(columns=["protein1", "protein2"])
+                features = stringdb_df[["combined_score"]]
+                # features = stringdb_df.drop(columns=["protein1", "protein2"])
                 means = features.mean()
                 stds = features.std()
                 normalized_features = (features - means) / stds
                 edge_attrs = torch.tensor(
                     normalized_features.values, dtype=torch.float32
-                ).detach()
+                )
             else:
                 edge_attrs = None
 
@@ -393,181 +395,211 @@ class SwissProtDataset:
 
     def get_batch_features(self, batch, return_sequences=False):
         """Load individual protein features and amino acid data for the sampled batch."""
-        sampled_protein_ids = [
-            self.idx_to_protein[idx.item()] for idx in batch["protein"].n_id
-        ]
-        if self.uses_entryid:
+        with torch.no_grad():
             sampled_protein_ids = [
-                self.pid_mapping.get(pid, pid) for pid in sampled_protein_ids
+                self.idx_to_protein[idx.item()] for idx in batch["protein"].n_id
             ]
+            if self.uses_entryid:
+                sampled_protein_ids = [
+                    self.pid_mapping.get(pid, pid) for pid in sampled_protein_ids
+                ]
 
-        use_edge_attrs = self.config["model"]["edge_attrs"]
-        use_contact = ["aa", "close_to", "aa"] in self.config["model"]["edge_types"]
+            use_edge_attrs = self.config["model"]["edge_attrs"]
+            use_contact = ["aa", "close_to", "aa"] in self.config["model"]["edge_types"]
 
-        if return_sequences:
-            sampled_sequences = []
-        batch_interpro_features = []
-        batch_go_features = []
-        batch_aa_features = []
-        aa_to_protein_edges = []
-        contact_edges = [] if use_contact else None
-        contact_attrs = [] if use_edge_attrs else None
-        protein_sizes = []
+            if return_sequences:
+                sampled_sequences = []
+            batch_interpro_features = []
+            batch_go_features = []
+            batch_aa_features = []
+            aa_to_protein_edges = []
+            contact_edges = [] if use_contact else None
+            contact_attrs = [] if use_edge_attrs else None
+            protein_sizes = []
 
-        aa_offset = 0  # Dynamic offset for aa nodes id (on-the-fly attribution)
+            aa_offset = 0  # Dynamic offset for aa nodes id (on-the-fly attribution)
 
-        for local_idx, protein_id in enumerate(sampled_protein_ids):
-            protein_graph = self.load_protein_graph(protein_id)
+            for local_idx, protein_id in enumerate(sampled_protein_ids):
+                protein_graph = self.load_protein_graph(protein_id)
 
-            if protein_graph is None:
-                logger.warning(f"Using empty features for missing protein {protein_id}")
-                interpro_feat = torch.zeros(self.ipr_vocab_size, dtype=torch.float32)
-                go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
-                aa_feat = torch.zeros(200, 1280, dtype=torch.float32)  # Default 200 AAs
-                if use_contact:
-                    local_contact_edge_index = torch.empty((2, 0), dtype=torch.long)
-                    local_contact_edge_attr = (
-                        torch.empty((0,), dtype=torch.float32)
-                        if use_edge_attrs
-                        else None
+                if protein_graph is None:
+                    logger.warning(
+                        f"Using empty features for missing protein {protein_id}"
                     )
-                if return_sequences:
-                    sampled_sequences.append("")
-            else:
-                # Load features
-                if return_sequences:
-                    sampled_sequences.append(protein_graph["protein"].sequence)
-                interpro_feat = protein_graph["protein"].interpro.squeeze(0)
-                aa_feat = protein_graph["aa"].x
-                go_feat = self.convert_go_terms_to_onehot(
-                    protein_graph["protein"][f"go_terms_{self.subontology}"]
-                )
-                if use_contact:
-                    if ("aa", "close_to", "aa") in protein_graph.edge_types:
-                        contact_data = protein_graph["aa", "close_to", "aa"]
-                        local_contact_edge_index = contact_data.edge_index
-                        if use_edge_attrs:
-                            local_contact_edge_attr = contact_data.edge_attr
-                            if local_contact_edge_attr is None:
-                                local_contact_edge_attr = torch.empty(
-                                    (0,), dtype=torch.float32
-                                )
-                    else:
+                    interpro_feat = torch.zeros(
+                        self.ipr_vocab_size, dtype=torch.float32
+                    )
+                    go_feat = torch.zeros(self.go_vocab_size, dtype=torch.float32)
+                    aa_feat = torch.zeros(
+                        200, 1280, dtype=torch.float32
+                    )  # Default 200 AAs
+                    if use_contact:
                         local_contact_edge_index = torch.empty((2, 0), dtype=torch.long)
                         local_contact_edge_attr = (
                             torch.empty((0,), dtype=torch.float32)
                             if use_edge_attrs
                             else None
                         )
+                    if return_sequences:
+                        sampled_sequences.append("")
+                else:
+                    # Load features
+                    if return_sequences:
+                        sampled_sequences.append(protein_graph["protein"].sequence)
+                    interpro_feat = protein_graph["protein"].interpro.squeeze(0)
+                    aa_feat = protein_graph["aa"].x
+                    go_feat = self.convert_go_terms_to_onehot(
+                        protein_graph["protein"][f"go_terms_{self.subontology}"]
+                    )
+                    if use_contact:
+                        if ("aa", "close_to", "aa") in protein_graph.edge_types:
+                            contact_data = protein_graph["aa", "close_to", "aa"]
+                            local_contact_edge_index = contact_data.edge_index
+                            if use_edge_attrs:
+                                local_contact_edge_attr = contact_data.edge_attr
+                                if local_contact_edge_attr is None:
+                                    local_contact_edge_attr = torch.empty(
+                                        (0,), dtype=torch.float32
+                                    )
+                        else:
+                            local_contact_edge_index = torch.empty(
+                                (2, 0), dtype=torch.long
+                            )
+                            local_contact_edge_attr = (
+                                torch.empty((0,), dtype=torch.float32)
+                                if use_edge_attrs
+                                else None
+                            )
 
-            batch_interpro_features.append(interpro_feat)
-            batch_go_features.append(go_feat)
-            batch_aa_features.append(aa_feat)
-            protein_sizes.append(aa_feat.shape[0])
+                batch_interpro_features.append(interpro_feat)
+                batch_go_features.append(go_feat)
+                batch_aa_features.append(aa_feat)
+                protein_sizes.append(aa_feat.shape[0])
 
-            # Create AA edges
-            num_aas = aa_feat.shape[0]
-            aa_indices = torch.arange(aa_offset, aa_offset + num_aas)
-            protein_indices = torch.full((num_aas,), local_idx, dtype=torch.long)
-            aa_to_protein_edges.append(torch.stack([aa_indices, protein_indices]))
+                # Create AA edges
+                num_aas = aa_feat.shape[0]
+                aa_indices = torch.arange(aa_offset, aa_offset + num_aas)
+                protein_indices = torch.full((num_aas,), local_idx, dtype=torch.long)
+                aa_to_protein_edges.append(torch.stack([aa_indices, protein_indices]))
+                if use_contact:
+                    contact_edges.append(local_contact_edge_index + aa_offset)
+                aa_offset += num_aas
+
+                # Load aa contact edge attributes if applicable
+                if use_edge_attrs and use_contact:
+                    contact_attrs.append(local_contact_edge_attr)
+
+            # Update batch with function-related features & set labels
+            seed_nodes = batch["protein"].n_id[: batch["protein"].batch_size]
+            batch["protein"].interpro = torch.stack(batch_interpro_features)
+
+            batch["protein"].y = torch.stack(batch_go_features)[
+                : batch["protein"].batch_size
+            ].clone()
+            batch["protein"].go = torch.stack(batch_go_features)
+            batch["protein"].go[
+                : batch["protein"].batch_size
+            ] = 0.0  # Mask seed protein labels
+            batch["protein"].go
+
+            if torch.isin(
+                batch["protein"].n_id[batch["protein"].batch_size :], seed_nodes
+            ).any():
+                logger.warning("Seed nodes found in neighborhood nodes of the batch!")
+                neighborhood_nodes = batch["protein"].n_id[
+                    batch["protein"].batch_size :
+                ]
+                overlapping_nodes = torch.isin(neighborhood_nodes, seed_nodes)
+                overlapping_indices = neighborhood_nodes[overlapping_nodes]
+                overlapping_proteins = [
+                    self.idx_to_protein[idx.item()] for idx in overlapping_indices
+                ]
+                logger.warning(
+                    f"Overlapping seed proteins in neighborhood nodes: {overlapping_proteins}"
+                )
+                logger.warning(
+                    f"Nid of neighborhood nodes with overlap: {overlapping_indices}"
+                )
+                logger.warning(f"Seed node nids: {seed_nodes}")
+                logger.warning(f"Neighborhood node nids: {neighborhood_nodes}")
+                logger.warning(f"Batch protein nids: {batch['protein'].n_id}")
+
+            # Mask GO features for val/test proteins
+            if batch["mode"] == "train":
+                n_id = batch["protein"].n_id
+                mask_val = self.val_mask[n_id]
+                mask_test = self.test_mask[n_id]
+                mask = mask_val | mask_test
+                batch["protein"].go[mask] = 0.0
+
+            # Deletion experiment: set .x features to normal distribution samples
+            # batch["protein"].x = torch.randn(
+            #     batch["protein"].num_nodes, self.ipr_vocab_size + self.go_vocab_size
+            # ).float()
+
+            # Set protein node features as concatenation of InterPro and GO one hots.
+            batch["protein"].x = torch.cat(
+                [batch["protein"].interpro, batch["protein"].go],
+                dim=1,
+            )
+
+            # Add amino acid nodes and features
+            batch["aa"].x = torch.cat(batch_aa_features, dim=0).float()
+            batch["aa"].num_nodes = batch["aa"].x.shape[0]
+
+            # Add AA to protein edges
+            batch["aa", "belongs_to", "protein"].edge_index = torch.cat(
+                aa_to_protein_edges, dim=1
+            )
+
             if use_contact:
-                contact_edges.append(local_contact_edge_index + aa_offset)
-            aa_offset += num_aas
+                batch["aa", "close_to", "aa"].edge_index = (
+                    torch.cat(contact_edges, dim=1)
+                    if contact_edges
+                    else torch.empty((2, 0), dtype=torch.long)
+                )
 
-            # Load aa contact edge attributes if applicable
+            # Normalized distance between aa as edge attributes.
+            # Note: edge_attr is stored as sqrt of the Angstrom distance.
             if use_edge_attrs and use_contact:
-                contact_attrs.append(local_contact_edge_attr)
-
-        # Update batch with function-related features & set labels
-        seed_nodes = batch["protein"].n_id[: batch["protein"].batch_size]
-        batch["protein"].interpro = torch.stack(batch_interpro_features)
-
-        batch["protein"].y = (
-            torch.stack(batch_go_features)[: batch["protein"].batch_size]
-            .clone()
-            .detach()
-        )
-        batch["protein"].go = torch.stack(batch_go_features)
-        batch["protein"].go[
-            : batch["protein"].batch_size
-        ] = 0.0  # Mask seed protein labels
-
-        if torch.isin(
-            batch["protein"].n_id[batch["protein"].batch_size :], seed_nodes
-        ).any():
-            logger.warning("Seed nodes found in neighborhood nodes of the batch!")
-            neighborhood_nodes = batch["protein"].n_id[batch["protein"].batch_size :]
-            overlapping_nodes = torch.isin(neighborhood_nodes, seed_nodes)
-            overlapping_indices = neighborhood_nodes[overlapping_nodes]
-            overlapping_proteins = [
-                self.idx_to_protein[idx.item()] for idx in overlapping_indices
-            ]
-            logger.warning(
-                f"Overlapping seed proteins in neighborhood nodes: {overlapping_proteins}"
-            )
-            logger.warning(
-                f"Nid of neighborhood nodes with overlap: {overlapping_indices}"
-            )
-            logger.warning(f"Seed node nids: {seed_nodes}")
-            logger.warning(f"Neighborhood node nids: {neighborhood_nodes}")
-            logger.warning(f"Batch protein nids: {batch['protein'].n_id}")
-
-        # Mask GO features for val/test proteins
-        if batch["mode"] == "train":
-            n_id = batch["protein"].n_id
-            mask_val = self.val_mask[n_id]
-            mask_test = self.test_mask[n_id]
-            mask = mask_val | mask_test
-            batch["protein"].go[mask] = 0.0
-
-        # Deletion experiment: set .x features to normal distribution samples
-        # batch["protein"].x = torch.randn(
-        #     batch["protein"].num_nodes, self.ipr_vocab_size + self.go_vocab_size
-        # ).float()
-
-        # Set protein node features as concatenation of InterPro and GO one hots.
-        batch["protein"].x = torch.cat(
-            [batch["protein"].interpro, batch["protein"].go],
-            dim=1,
-        )
-
-        # Add amino acid nodes and features
-        batch["aa"].x = torch.cat(batch_aa_features, dim=0).float()
-        batch["aa"].num_nodes = batch["aa"].x.shape[0]
-
-        # Add AA to protein edges
-        batch["aa", "belongs_to", "protein"].edge_index = torch.cat(
-            aa_to_protein_edges, dim=1
-        )
-
-        if use_contact:
-            batch["aa", "close_to", "aa"].edge_index = (
-                torch.cat(contact_edges, dim=1)
-                if contact_edges
-                else torch.empty((2, 0), dtype=torch.long)
-            )
-
-        # Normalized distance between aa as edge attributes.
-        # Note: edge_attr is stored as sqrt of the Angstrom distance.
-        if use_edge_attrs and use_contact:
-            batch["aa", "close_to", "aa"].edge_attr = (
-                (
+                batch["aa", "close_to", "aa"].edge_attr = (
                     torch.cat(contact_attrs, dim=0)
                     if contact_attrs
                     else torch.empty((0,), dtype=torch.float32)
-                )
-                ** 2
-                / CONTACT_CUTOFF
-            ).detach()
-            del contact_attrs
+                ) ** 2 / CONTACT_CUTOFF
 
-        # Store metadata
-        batch["protein"].protein_ids = sampled_protein_ids
-        batch["protein"].protein_sizes = protein_sizes
-        if return_sequences:
-            batch["protein"].sequences = sampled_sequences
+            # Store metadata
+            batch["protein"].protein_ids = sampled_protein_ids
+            batch["protein"].protein_sizes = protein_sizes
+            if return_sequences:
+                batch["protein"].sequences = sampled_sequences
 
-        return batch
+            # Del everything but batch
+            # del (
+            #     sampled_protein_ids,
+            #     batch_interpro_features,
+            #     batch_go_features,
+            #     batch_aa_features,
+            #     aa_to_protein_edges,
+            #     contact_edges,
+            #     contact_attrs,
+            #     protein_sizes,
+            #     protein_graph,
+            #     interpro_feat,
+            #     go_feat,
+            #     aa_feat,
+            #     local_contact_edge_index,
+            #     local_contact_edge_attr,
+            #     contact_data,
+            #     aa_indices,
+            #     seed_nodes,
+            #     mask_val,
+            #     n_id,
+            #     mask_test,
+            #     mask,
+            # )
+            torch.cuda.empty_cache()
+            return batch
 
 
 def make_batch_transform(dataset, mode, return_sequences=False):
