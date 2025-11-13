@@ -1,5 +1,5 @@
 model:
-  hidden_channels: 264
+  hidden_channels: 256
   batch_size: 32
   edge_attrs: false
   edge_types:
@@ -39,6 +39,9 @@ data:
 
 run:
   qualifier: 2layerGNN  # Additional string to append to run_id for uniqueness
+  logging:
+    status: true
+    gpu_memory_freq: 1  # Batches  
   save_predictions:
     val: true
     test: true

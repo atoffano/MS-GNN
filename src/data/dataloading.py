@@ -281,7 +281,7 @@ class SwissProtDataset:
             stringdb_df = pd.read_csv(
                 stringdb_path,
                 sep="\t",
-                header=None,
+                header=0,
                 names=[
                     "protein1",
                     "protein2",
@@ -292,7 +292,7 @@ class SwissProtDataset:
                     "experimental",
                     "database",
                     "textmining",
-                    "combined_score",
+                    "src/configs/toy_cfg.yaml ",
                 ],
             )
             stringdb_df["protein1"] = stringdb_df["protein1"].map(rev_stringdb_mapping)
@@ -574,32 +574,7 @@ class SwissProtDataset:
             if return_sequences:
                 batch["protein"].sequences = sampled_sequences
 
-            # Del everything but batch
-            # del (
-            #     sampled_protein_ids,
-            #     batch_interpro_features,
-            #     batch_go_features,
-            #     batch_aa_features,
-            #     aa_to_protein_edges,
-            #     contact_edges,
-            #     contact_attrs,
-            #     protein_sizes,
-            #     protein_graph,
-            #     interpro_feat,
-            #     go_feat,
-            #     aa_feat,
-            #     local_contact_edge_index,
-            #     local_contact_edge_attr,
-            #     contact_data,
-            #     aa_indices,
-            #     seed_nodes,
-            #     mask_val,
-            #     n_id,
-            #     mask_test,
-            #     mask,
-            # )
-            torch.cuda.empty_cache()
-            return batch
+            return batch.detach().clone()
 
 
 def make_batch_transform(dataset, mode, return_sequences=False):
