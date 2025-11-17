@@ -31,12 +31,14 @@ class HeteroGATConv(torch.nn.Module):
         """
         super().__init__()
         self.convs = torch.nn.ModuleDict()
-        edge_types += [
+        conv_edges = [
             (et[2], f"rev_{et[1]}", et[0])
             for et in edge_types
             if et[0] != et[2]  # Add reverse edges for different node types
         ]
-        for edge_type in edge_types:
+        conv_edges += edge_types
+
+        for edge_type in conv_edges:
             key = "__".join(edge_type)
             self.convs[key] = GATv2Conv(
                 (-1, -1), channels, edge_dim=edge_dim, add_self_loops=False
@@ -117,7 +119,6 @@ class ProteinGNN(torch.nn.Module):
         hidden_channels = config["model"]["hidden_channels"]
         out_channels = dataset.go_vocab_size
         node_types = ["protein", "aa"]
-        # Get edge types from config, convert to tuples
         edge_types = [tuple(et) for et in config["model"]["edge_types"]]
 
         self.lin_in = HeteroDictLinear(
