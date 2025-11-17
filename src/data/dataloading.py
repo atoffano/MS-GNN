@@ -1,6 +1,7 @@
 import torch
 from torch_geometric.data import HeteroData
 from torch_geometric.loader import NeighborLoader
+import torch_geometric.transforms as T
 import pandas as pd
 import pickle
 from pathlib import Path
@@ -69,8 +70,14 @@ class SwissProtDataset:
 
         # Create the protein-protein heterograph
         self.data = self._create_protein_graph(config)
-        # transform = T.Compose([T.ToUndirected(), T.AddRemainingSelfLoops()])
-        # self.data = transform(self.data)
+        self.transform = T.Compose(
+            [
+                T.RemoveDuplicatedEdges(reduce="mean"),
+                T.ToUndirected(merge=True),
+                T.RemoveSelfLoops(),
+            ]
+        )
+        self.data = self.transform(self.data)
 
         logger.info(
             f"Created protein graph with {self.data['protein'].num_nodes} proteins"
@@ -292,7 +299,7 @@ class SwissProtDataset:
                     "experimental",
                     "database",
                     "textmining",
-                    "src/configs/toy_cfg.yaml ",
+                    "combined_score",
                 ],
             )
             stringdb_df["protein1"] = stringdb_df["protein1"].map(rev_stringdb_mapping)
@@ -362,7 +369,7 @@ class SwissProtDataset:
         num_proteins = len(self.proteins)
         data["protein"].num_nodes = num_proteins
 
-        return data
+        return data.detach().clone()
 
     def load_protein_graph(self, protein_id):
         """Load a single protein graph from disk."""
@@ -566,7 +573,7 @@ class SwissProtDataset:
                     torch.cat(contact_attrs, dim=0)
                     if contact_attrs
                     else torch.empty((0,), dtype=torch.float32)
-                ) ** 2 / CONTACT_CUTOFF
+                ).unsqueeze(1) ** 2 / CONTACT_CUTOFF
 
             # Store metadata
             batch["protein"].protein_ids = sampled_protein_ids
@@ -574,6 +581,7 @@ class SwissProtDataset:
             if return_sequences:
                 batch["protein"].sequences = sampled_sequences
 
+            batch = self.transform(batch)
             return batch.detach().clone()
 
 

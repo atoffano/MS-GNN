@@ -12,6 +12,7 @@ from torch_geometric.nn import (
 )
 from src.utils.helpers import timeit
 from src.utils.helpers import log_gpu_memory
+import gc
 
 
 class HeteroGATConv(torch.nn.Module):
@@ -30,6 +31,11 @@ class HeteroGATConv(torch.nn.Module):
         """
         super().__init__()
         self.convs = torch.nn.ModuleDict()
+        edge_types += [
+            (et[2], f"rev_{et[1]}", et[0])
+            for et in edge_types
+            if et[0] != et[2]  # Add reverse edges for different node types
+        ]
         for edge_type in edge_types:
             key = "__".join(edge_type)
             self.convs[key] = GATv2Conv(
@@ -68,7 +74,9 @@ class HeteroGATConv(torch.nn.Module):
                 out, attn = self.convs[key](
                     (x_src, x_dst),
                     edge_index,
-                    edge_attr=edge_attr_dict[edge_type] if edge_attr_dict else None,
+                    edge_attr=(
+                        edge_attr_dict.get(edge_type, None) if edge_attr_dict else None
+                    ),
                     return_attention_weights=True,
                 )
                 attention_dict[edge_type] = attn
@@ -76,7 +84,9 @@ class HeteroGATConv(torch.nn.Module):
                 out = self.convs[key](
                     (x_src, x_dst),
                     edge_index,
-                    edge_attr=edge_attr_dict[edge_type] if edge_attr_dict else None,
+                    edge_attr=(
+                        edge_attr_dict.get(edge_type, None) if edge_attr_dict else None
+                    ),
                 )
             out_dict[edge_type[2]].append(out)
 
@@ -145,6 +155,7 @@ class ProteinGNN(torch.nn.Module):
         self.norm_post = LayerNorm(hidden_channels)
 
         self.lin_out = Linear(hidden_channels, out_channels)
+        self.previous_tensors = {}
 
     def forward(self, x_dict, edge_index_dict, batch, return_attention_weights=None):
         """Forward pass through the protein GNN.
@@ -163,6 +174,31 @@ class ProteinGNN(torch.nn.Module):
         edge_attr_dict = (
             {k: v for k, v in batch.edge_attr_dict.items()} if self.edge_attrs else None
         )
+
+        # print("--- Tensors with changed shape since last forward call ---")
+        # current_tensors = {}
+        # for obj in gc.get_objects():
+        #     try:
+        #         if torch.is_tensor(obj) or (
+        #             hasattr(obj, "data") and torch.is_tensor(obj.data)
+        #         ):
+        #             obj_id = id(obj)
+        #             shape = tuple(obj.size())
+        #             current_tensors[obj_id] = shape
+        #             if (
+        #                 obj_id in self.previous_tensors
+        #                 and self.previous_tensors[obj_id] != shape
+        #             ):
+        #                 print(
+        #                     f"Tensor: {obj}, Previous shape: {self.previous_tensors[obj_id]} -> New shape: {shape}"
+        #                 )
+        #     except Exception:
+        #         pass
+        # self.previous_tensors = current_tensors
+        # print(
+        #     f"{[v.shape for v in [v for v in batch.edge_attr_dict.values()]] if self.edge_attrs else None}"
+        # )
+        # print("---------------------------------------------")
 
         # Input linear
         x_in = self.lin_in(x_dict)
@@ -202,6 +238,7 @@ class ProteinGNN(torch.nn.Module):
         x_prot = self.prelu_prot(x_prot)
         x_prot = self.norm_prot(x_prot)
         log_gpu_memory(batch["protein"].go.device, prefix="forward")
+
         # Post-process lin layers
         x_prot = self.lin_post(x_prot)
         x_prot = self.prelu_post(x_prot)
@@ -217,7 +254,7 @@ class ProteinGNN(torch.nn.Module):
             return x_prot, attentions
 
         # Cleanup memory
-        del x_dict, x_gnn1, x_gnn2, edge_index_dict, edge_attr_dict
+        del x_in, x_dict, x_gnn1, x_gnn2, edge_index_dict, edge_attr_dict
         torch.cuda.empty_cache()
         log_gpu_memory(batch["protein"].go.device, prefix="forward")
         return x_prot

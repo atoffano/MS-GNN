@@ -1,6 +1,6 @@
 model:
   hidden_channels: 256
-  batch_size: 32
+  batch_size: 16
   edge_attrs: false
   edge_types:
     - ["aa", "close_to", "aa"]
@@ -14,7 +14,7 @@ model:
     # protein__stringdb__protein: 30
 
 trainer:
-  epochs: 2
+  epochs: 20
   device: cuda
   compile: false  # Whether to use torch.compile
   num_workers: 4

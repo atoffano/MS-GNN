@@ -3,7 +3,7 @@ model:
   batch_size: 32
   edge_attrs: false
   edge_types:
-    #- ["aa", "close_to", "aa"]
+    - ["aa", "close_to", "aa"]
     - ["aa", "belongs_to", "protein"]
     - ["protein", "aligned_with", "protein"]
     #- ["protein", "stringdb", "protein"]
@@ -31,7 +31,7 @@ scheduler:
 data:
   dataset: 'D1'
   subontology: ['MFO']  # One or more from ['CCO', 'MFO', 'BPO']
-  train_on_swissprot: False  # Whether to train on SwissProt or original train dataset
+  train_on_swissprot: false  # Whether to train on SwissProt or original train dataset
   exp_only: true  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV
   protein_graphs: ./data/swissprot/2024_01/protein_graphs

@@ -32,6 +32,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+torch.cuda.memory._record_memory_history()
+
 
 def train(
     config,
@@ -87,7 +89,6 @@ def train(
     for epoch in range(start_epoch, config["trainer"]["epochs"] + 1):
         model.train()
         train_loss_sum = 0
-
         logger.info(f"\n{'='*60}")
         logger.info(f"Starting Epoch {epoch}")
         for i, batch in tqdm.tqdm(
@@ -99,9 +100,11 @@ def train(
                 if i < 10:
                     logger.info(f"Number of proteins in batch: {nb_prots}")
 
+                log_gpu_memory(device, batch_idx=i, prefix="trainloop")
                 batch = batch.to(device)
-                if i % config["run"]["logging"]["gpu_memory_freq"] == 0:
-                    log_gpu_memory(device, batch_idx=i, prefix="train_after_load")
+                log_gpu_memory(device, batch_idx=i, prefix="trainloop")
+                # if i % config["run"]["logging"]["gpu_memory_freq"] == 0:
+                #     log_gpu_memory(device, batch_idx=i, prefix="train_after_load")
 
                 out = model(
                     batch.x_dict,
@@ -114,17 +117,19 @@ def train(
                     batch["protein"].y,
                 )
                 loss.backward()
-                if i % config["run"]["logging"]["gpu_memory_freq"] == 0:
-                    log_gpu_memory(device, batch_idx=i, prefix="train_after_backward")
+                # if i % config["run"]["logging"]["gpu_memory_freq"] == 0:
+                #     log_gpu_memory(device, batch_idx=i, prefix="train_after_backward")
+                log_gpu_memory(device, batch_idx=i, prefix="trainloop")
 
                 optimizer.step()
                 wandb.log({"train_loss": loss.item() / batch["protein"].batch_size})
                 train_loss_sum += loss.item() / batch["protein"].batch_size
                 del out, loss, batch
+                log_gpu_memory(device, batch_idx=i, prefix="trainloop")
+
                 optimizer.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
                 log_gpu_memory(device, batch_idx=i, prefix="train_after_cleanup")
-
             # Handle OOM errors gracefully
             except RuntimeError as e:
                 logger.error(
@@ -149,7 +154,7 @@ def train(
                 logger.info(
                     f"Epoch {epoch}, Batch {i}, Train Loss: {train_loss_sum / 50}, Intermediate Val Loss: {avg_val_loss}"
                 )
-                train_loss_sum = 0
+                train_loss_sum = 0.0
                 torch.cuda.empty_cache()
                 gc.collect()
                 log_gpu_memory(device, batch_idx=i, prefix="train_after_cleanup")
@@ -208,6 +213,9 @@ def train(
         torch.cuda.empty_cache()
         gc.collect()
         log_gpu_memory(device, prefix=f"epoch_end")
+        torch.cuda.memory._dump_snapshot(
+            f"{config["run"]["results_dir"]}/snapshot.pickle"
+        )
 
 
 def run_intermediate_validation(model, val_loader, criterion, device, num_batches=5):
@@ -247,7 +255,8 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
             val_loss_sum += val_loss.item() / val_batch["protein"].batch_size
             all_scores.append(val_out.cpu().numpy())
             all_targets.append(val_batch["protein"].y.cpu().numpy())
-
+    del val_batch, val_out, val_loss
+    torch.cuda.empty_cache()
     precision, recall, aupr, fmax = compute_metrics(all_scores, all_targets)
     val_loss = val_loss_sum / num_batches if num_batches > 0 else val_loss_sum
 
