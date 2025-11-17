@@ -72,9 +72,9 @@ class SwissProtDataset:
         self.data = self._create_protein_graph(config)
         self.transform = T.Compose(
             [
-                T.RemoveDuplicatedEdges(reduce="mean"),
-                T.ToUndirected(merge=True),
-                T.RemoveSelfLoops(),
+                T.RemoveDuplicatedEdges(key="edge_attr", reduce="mean"),
+                T.ToUndirected(reduce="max"),
+                T.AddRemainingSelfLoops(attr="edge_attr", fill_value=1.0),
             ]
         )
         self.data = self.transform(self.data)
@@ -164,43 +164,43 @@ class SwissProtDataset:
         # self.pos_weights = self._compute_pos_weights()
         # logger.info(f"Computed pos weights for {len(self.pos_weights)} GO terms")
 
-    # @timeit
-    # def _compute_pos_weights(self):
-    #     """Compute positive weights for each GO term to handle class imbalance."""
-    #     go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
-    #     term_counts = torch.zeros(len(go_to_idx), dtype=torch.float32)
+    @timeit
+    def _compute_pos_weights(self):
+        """Compute positive weights for each GO term to handle class imbalance."""
+        go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
+        term_counts = torch.zeros(len(go_to_idx), dtype=torch.float32)
 
-    #     all_term_indices = []
-    #     for protein in self.train_idx:
-    #         pid = self.idx_to_protein[protein]
-    #         if pid in self.train_annots:
-    #             terms = self.train_annots[pid]["term"]
-    #             term_indices = [go_to_idx[term] for term in terms if term in go_to_idx]
-    #             all_term_indices.extend(term_indices)
-    #     if all_term_indices:
-    #         term_indices_tensor = torch.tensor(all_term_indices, dtype=torch.long)
-    #         term_counts = torch.bincount(
-    #             term_indices_tensor, minlength=len(go_to_idx)
-    #         ).float()
-    #     inf_mask = term_counts == 0
-    #     # pos_weights = len(self.train_idx) / (term_counts + 1)
-    #     pos_weights = len(self.train_idx) / (len(term_counts) * (term_counts + 1e-8))
+        all_term_indices = []
+        for protein in self.train_idx:
+            pid = self.idx_to_protein[protein]
+            if pid in self.train_annots:
+                terms = self.train_annots[pid]["term"]
+                term_indices = [go_to_idx[term] for term in terms if term in go_to_idx]
+                all_term_indices.extend(term_indices)
+        if all_term_indices:
+            term_indices_tensor = torch.tensor(all_term_indices, dtype=torch.long)
+            term_counts = torch.bincount(
+                term_indices_tensor, minlength=len(go_to_idx)
+            ).float()
+        inf_mask = term_counts == 0
+        # pos_weights = len(self.train_idx) / (term_counts + 1)
+        pos_weights = len(self.train_idx) / (len(term_counts) * (term_counts + 1e-8))
 
-    #     # Replace pos weights equal to len(self.train_idx) with 1
-    #     if inf_mask.any():
-    #         pos_weights[inf_mask] = pos_weights.min().item()
-    #         logger.info(
-    #             f"{inf_mask.sum().item()} GO terms had zero positive samples; set pos weight to min"
-    #         )
-    #     logger.info(f"Pos weight sample: {pos_weights[:10]}")
-    #     logger.info(
-    #         f"Pos weight stats - Min: {pos_weights.min()}, Max: {pos_weights.max()}, Mean: {pos_weights.mean()}"
-    #     )
-    #     sorted_weights, _ = torch.sort(pos_weights)
-    #     logger.info(
-    #         f"Sorted pos weights sample: {sorted_weights[:10]} ... {sorted_weights[-10:]}"
-    #     )
-    #     return pos_weights
+        # Replace pos weights equal to len(self.train_idx) with 1
+        if inf_mask.any():
+            pos_weights[inf_mask] = pos_weights.min().item()
+            logger.info(
+                f"{inf_mask.sum().item()} GO terms had zero positive samples; set pos weight to min"
+            )
+        logger.info(f"Pos weight sample: {pos_weights[:10]}")
+        logger.info(
+            f"Pos weight stats - Min: {pos_weights.min()}, Max: {pos_weights.max()}, Mean: {pos_weights.mean()}"
+        )
+        sorted_weights, _ = torch.sort(pos_weights)
+        logger.info(
+            f"Sorted pos weights sample: {sorted_weights[:10]} ... {sorted_weights[-10:]}"
+        )
+        return pos_weights
 
     def _create_protein_graph(self, config):
         """Creates the high-level protein network."""
