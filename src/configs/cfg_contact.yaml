@@ -1,12 +1,12 @@
 model:
   hidden_channels: 256
-  batch_size: 1
-  edge_attrs: true
+  batch_size: 32
+  edge_attrs: false
   edge_types:
     - ["aa", "close_to", "aa"]
     - ["aa", "belongs_to", "protein"]
     - ["protein", "aligned_with", "protein"]
-    # - ["protein", "stringdb", "protein"]
+    #- ["protein", "stringdb", "protein"]
 
   # How many edges to sample to build mini-batch subgraphs. Follows PyG nomenclature
   sampled_edges:
@@ -14,7 +14,7 @@ model:
     # protein__stringdb__protein: 30
 
 trainer:
-  epochs: 20
+  epochs: 6
   device: cuda
   compile: false  # Whether to use torch.compile
   num_workers: 4
@@ -29,24 +29,23 @@ scheduler:
   gamma: 0.5
 
 data:
-  dataset: 'toy'
-  subontology: ['BPO']  # One or more from ['CCO', 'MFO', 'BPO']
+  dataset: 'D1'
+  subontology: ['MFO']  # One or more from ['CCO', 'MFO', 'BPO']
   train_on_swissprot: false  # Whether to train on SwissProt or original train dataset
   exp_only: true  # If training on SwissProt, whether to use only experimental annotations
-  alignment_path: ./data/toy/toy_swissprot_2024_01_alignment.tsv  # Alignment TSV
-  protein_graphs: ./data/toy/protein_graphs
-  stringdb_path: ./data/toy/toy_stringdb.tsv
+  alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV
+  protein_graphs: ./data/swissprot/2024_01/protein_graphs
+  stringdb_path: ./data/swissprot/2024_01/swissprot_stringdb.tsv
 
 run:
-  qualifier: default  # Additional string to append to run_id for uniqueness
+  qualifier: 2layerGNN_CONTACT  # Additional string to append to run_id for uniqueness
   logging:
     status: true
-    gpu_memory_freq: 1  # Batches
+    gpu_memory_freq: 1  # Batches  
   save_predictions:
     val: true
     test: true
   test_only: false  # Whether to run evaluation only on the test set (no validation)
   save_model: true
   save_epoch_checkpoints: true  # Whether to save checkpoint for each epoch (in addition to latest)
-  project_path: "/home/atoffano/PFP_layer"  # From constants.py
-  # project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
+  project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"

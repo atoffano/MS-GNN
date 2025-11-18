@@ -95,8 +95,6 @@ class HeteroGATConv(torch.nn.Module):
         out_dict = {
             dst: torch.stack(outputs).sum(dim=0) for dst, outputs in out_dict.items()
         }
-        del x_dict, edge_index_dict, edge_attr_dict
-        torch.cuda.empty_cache()
         return out_dict, attention_dict
 
 
@@ -176,31 +174,6 @@ class ProteinGNN(torch.nn.Module):
             {k: v for k, v in batch.edge_attr_dict.items()} if self.edge_attrs else None
         )
 
-        # print("--- Tensors with changed shape since last forward call ---")
-        # current_tensors = {}
-        # for obj in gc.get_objects():
-        #     try:
-        #         if torch.is_tensor(obj) or (
-        #             hasattr(obj, "data") and torch.is_tensor(obj.data)
-        #         ):
-        #             obj_id = id(obj)
-        #             shape = tuple(obj.size())
-        #             current_tensors[obj_id] = shape
-        #             if (
-        #                 obj_id in self.previous_tensors
-        #                 and self.previous_tensors[obj_id] != shape
-        #             ):
-        #                 print(
-        #                     f"Tensor: {obj}, Previous shape: {self.previous_tensors[obj_id]} -> New shape: {shape}"
-        #                 )
-        #     except Exception:
-        #         pass
-        # self.previous_tensors = current_tensors
-        # print(
-        #     f"{[v.shape for v in [v for v in batch.edge_attr_dict.values()]] if self.edge_attrs else None}"
-        # )
-        # print("---------------------------------------------")
-
         # Input linear
         x_in = self.lin_in(x_dict)
         x_in = {k: self.norm1[k](self.prelu1[k](v)) for k, v in x_in.items()}
@@ -254,8 +227,5 @@ class ProteinGNN(torch.nn.Module):
             attentions = (attn1, attn2)
             return x_prot, attentions
 
-        # Cleanup memory
-        del x_in, x_dict, x_gnn1, x_gnn2, edge_index_dict, edge_attr_dict
-        torch.cuda.empty_cache()
         log_gpu_memory(batch["protein"].go.device, prefix="forward")
         return x_prot

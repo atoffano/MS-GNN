@@ -38,7 +38,6 @@ torch.cuda.memory._record_memory_history()
 def train(
     config,
     model,
-    dataset,
     train_loader,
     val_loader,
     test_loader,
@@ -52,7 +51,6 @@ def train(
     Args:
         config: Configuration dictionary with training parameters
         model: ProteinGNN model instance
-        dataset: SwissProtDataset instance
         train_loader: DataLoader for training data
         val_loader: DataLoader for validation data
         test_loader: DataLoader for test data
@@ -82,8 +80,6 @@ def train(
 
     # criterion = torch.nn.BCEWithLogitsLoss(pos_weight=dataset.pos_weights.to(device))
     criterion = torch.nn.BCEWithLogitsLoss()
-
-    log_gpu_memory(device, prefix="initial")
 
     # Training loop
     for epoch in range(start_epoch, config["trainer"]["epochs"] + 1):
@@ -124,7 +120,6 @@ def train(
                 optimizer.step()
                 wandb.log({"train_loss": loss.item() / batch["protein"].batch_size})
                 train_loss_sum += loss.item() / batch["protein"].batch_size
-                del out, loss, batch
                 log_gpu_memory(device, batch_idx=i, prefix="trainloop")
 
                 optimizer.zero_grad(set_to_none=True)
@@ -136,9 +131,6 @@ def train(
                     f"Error occurred {e}, Batch {i}. Total proteins in batch: {nb_prots}. Skipping batch."
                 )
                 log_gpu_memory(device, batch_idx=i, prefix="train_oom")
-                wandb.log({"nb_proteins_in_oom_batch": nb_prots})
-                gc.collect()
-                torch.cuda.empty_cache()
                 torch.cuda.memory._dump_snapshot(
                     f"{config["run"]["results_dir"]}/snapshot.pickle"
                 )
@@ -159,8 +151,6 @@ def train(
                     f"Epoch {epoch}, Batch {i}, Train Loss: {train_loss_sum / 50}, Intermediate Val Loss: {avg_val_loss}"
                 )
                 train_loss_sum = 0.0
-                torch.cuda.empty_cache()
-                gc.collect()
                 log_gpu_memory(device, batch_idx=i, prefix="train_after_cleanup")
                 torch.cuda.memory._dump_snapshot(
                     f"{config["run"]["results_dir"]}/snapshot.pickle"
@@ -216,9 +206,6 @@ def train(
             )
             wandb.log({"best_val_aupr": best_val_aupr})
 
-        # free memory, both CPU and GPU
-        torch.cuda.empty_cache()
-        gc.collect()
         log_gpu_memory(device, prefix=f"epoch_end")
 
 
@@ -259,8 +246,6 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
             val_loss_sum += val_loss.item() / val_batch["protein"].batch_size
             all_scores.append(val_out.cpu().numpy())
             all_targets.append(val_batch["protein"].y.cpu().numpy())
-    del val_batch, val_out, val_loss
-    torch.cuda.empty_cache()
     precision, recall, aupr, fmax = compute_metrics(all_scores, all_targets)
     val_loss = val_loss_sum / num_batches if num_batches > 0 else val_loss_sum
 
@@ -413,7 +398,6 @@ def main():
         train(
             config,
             model,
-            dataset,
             train_loader,
             val_loader,
             test_loader,

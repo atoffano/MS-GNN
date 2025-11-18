@@ -582,7 +582,7 @@ class SwissProtDataset:
                 batch["protein"].sequences = sampled_sequences
 
             batch = self.transform(batch)
-            return batch.detach().clone()
+            return batch
 
 
 def make_batch_transform(dataset, mode, return_sequences=False):
@@ -615,12 +615,7 @@ def define_loaders(config, dataset):
         transform=make_batch_transform(dataset, mode="train"),
         shuffle=True,
         num_workers=config["trainer"]["num_workers"],
-        # persistent_workers=True if config["trainer"]["num_workers"] > 0 else False,
-        # pin_memory=True,
         drop_last=True,
-        # worker_init_fn=(
-        #     worker_init_fn if config["trainer"]["num_workers"] > 0 else None
-        # ),
     )
 
     test_loader = NeighborLoader(
@@ -631,11 +626,6 @@ def define_loaders(config, dataset):
         transform=make_batch_transform(dataset, mode="predict"),
         shuffle=False,
         num_workers=config["trainer"]["num_workers"],
-        # persistent_workers=True if config["trainer"]["num_workers"] > 0 else False,
-        # pin_memory=True,
-        # worker_init_fn=(
-        #     worker_init_fn if config["trainer"]["num_workers"] > 0 else None
-        # ),
     )
 
     # Some datasets, like H30, do not have a validation set
@@ -649,11 +639,6 @@ def define_loaders(config, dataset):
             transform=make_batch_transform(dataset, mode="predict"),
             shuffle=False,
             num_workers=config["trainer"]["num_workers"],
-            # persistent_workers=True if config["trainer"]["num_workers"] > 0 else False,
-            # pin_memory=True,
-            # worker_init_fn=(
-            #     worker_init_fn if config["trainer"]["num_workers"] > 0 else None
-            # ),
         )
         return train_loader, val_loader, test_loader
     else:
