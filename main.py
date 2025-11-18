@@ -137,7 +137,11 @@ def train(
                 )
                 log_gpu_memory(device, batch_idx=i, prefix="train_oom")
                 wandb.log({"nb_proteins_in_oom_batch": nb_prots})
+                gc.collect()
                 torch.cuda.empty_cache()
+                torch.cuda.memory._dump_snapshot(
+                    f"{config["run"]["results_dir"]}/snapshot.pickle"
+                )
                 continue
 
             if i % 50 == 0:
@@ -158,6 +162,9 @@ def train(
                 torch.cuda.empty_cache()
                 gc.collect()
                 log_gpu_memory(device, batch_idx=i, prefix="train_after_cleanup")
+                torch.cuda.memory._dump_snapshot(
+                    f"{config["run"]["results_dir"]}/snapshot.pickle"
+                )
 
         scheduler.step()
 
@@ -213,9 +220,6 @@ def train(
         torch.cuda.empty_cache()
         gc.collect()
         log_gpu_memory(device, prefix=f"epoch_end")
-        torch.cuda.memory._dump_snapshot(
-            f"{config["run"]["results_dir"]}/snapshot.pickle"
-        )
 
 
 def run_intermediate_validation(model, val_loader, criterion, device, num_batches=5):
