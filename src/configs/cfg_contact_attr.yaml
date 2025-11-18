@@ -38,7 +38,7 @@ data:
   stringdb_path: ./data/swissprot/2024_01/swissprot_stringdb.tsv
 
 run:
-  qualifier: 2layerGNN_CONTACT  # Additional string to append to run_id for uniqueness
+  qualifier: 2layerGNN_CONTACT_ATTR  # Additional string to append to run_id for uniqueness
   logging:
     status: true
     gpu_memory_freq: 1  # Batches  

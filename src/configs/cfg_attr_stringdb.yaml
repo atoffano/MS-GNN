@@ -1,6 +1,6 @@
 model:
   hidden_channels: 256
-  batch_size: 32
+  batch_size: 16
   edge_attrs: true
   edge_types:
     #- ["aa", "close_to", "aa"]
