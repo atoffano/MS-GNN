@@ -346,11 +346,10 @@ def create_data_loader(dataset, config, protein_names: list[str]) -> NeighborLoa
 
     # Parse sampled_edges from config
     num_neighbors = {}
-    if "sampled_edges" in config:
-        for key, val in config["sampled_edges"].items():
-            parts = key.split("__")
-            if len(parts) == 3:
-                num_neighbors[tuple(parts)] = [val]
+    for key, val in config["model"]["sampled_edges"].items():
+        parts = key.split("__")
+        if len(parts) == 3:
+            num_neighbors[tuple(parts)] = [val]
 
     return NeighborLoader(
         dataset.data,

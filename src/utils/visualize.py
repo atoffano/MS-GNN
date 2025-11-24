@@ -269,6 +269,7 @@ def _plot_aa_to_protein_msa(
     ylabel: str,
     filename_suffix: str,
     go_term: Optional[str] = None,
+    window_size: Optional[int] = 3,
 ):
     """Plot AA→protein scores aligned by MSA."""
     src_local, dst_local = edge_index[0], edge_index[1]
@@ -312,9 +313,21 @@ def _plot_aa_to_protein_msa(
                     x_pos.append(aligned_pos)
                     y_vals.append(aa_to_score[global_aa_idx])
                 residue_idx += 1
+            else:
+                x_pos.append(aligned_pos)
+                y_vals.append(np.nan)
 
         if not x_pos:
             continue
+
+        # Apply sliding window if requested
+        if window_size and window_size > 1 and len(y_vals) >= window_size:
+            kernel = np.ones(window_size) / window_size
+            y_vals = np.convolve(y_vals, kernel, mode="valid")
+            # Adjust x_pos to center the window
+            trim_start = (window_size - 1) // 2
+            trim_end = trim_start + len(y_vals)
+            x_pos = x_pos[trim_start:trim_end]
 
         plt.plot(
             x_pos,
@@ -484,6 +497,15 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
                 continue
 
             attn_values = _mean_attention(attn_weights).detach().cpu()
+
+            # Filter out self-loops for non-seed proteins (seed is at index 0 when batch_size = 1)
+            src_idx, dst_idx = edge_index[0], edge_index[1]
+            mask = ~((src_idx == dst_idx) & (src_idx != 0))
+            edge_index = edge_index[:, mask]
+            attn_values = attn_values[mask]
+
+            if edge_index.numel() == 0:
+                continue
 
             title = f"Protein-Protein Attention (Layer {layer_idx}, {rel}): {context.root_label}"
             _plot_protein_network(

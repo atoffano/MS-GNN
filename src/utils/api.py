@@ -11,7 +11,7 @@ def download_pdb(uniprot_id: str, dest_path: str) -> bool:
     """Try downloading PDB structure from RCSB."""
     try:
         response = requests.get(
-            UNIPROT_JSON_URL.format(uniprot_id=uniprot_id), timeout=15
+            UNIPROT_JSON_URL.format(uniprot_id=uniprot_id), timeout=2
         )
         response.raise_for_status()
         data = response.json()
@@ -23,7 +23,7 @@ def download_pdb(uniprot_id: str, dest_path: str) -> bool:
             if not pdb_id:
                 continue
 
-            pdb_resp = requests.get(PDB_DOWNLOAD_URL.format(pdb_id=pdb_id), timeout=15)
+            pdb_resp = requests.get(PDB_DOWNLOAD_URL.format(pdb_id=pdb_id), timeout=2)
             pdb_resp.raise_for_status()
             with open(dest_path, "wb") as f:
                 f.write(pdb_resp.content)
