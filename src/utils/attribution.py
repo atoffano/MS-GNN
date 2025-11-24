@@ -321,7 +321,7 @@ class ExplanationExporter:
             )
 
 
-def create_data_loader(dataset, protein_names: list[str]) -> NeighborLoader:
+def create_data_loader(dataset, config, protein_names: list[str]) -> NeighborLoader:
     """Create data loader for specified proteins."""
     proteins = []
     for protein in protein_names:
@@ -344,9 +344,17 @@ def create_data_loader(dataset, protein_names: list[str]) -> NeighborLoader:
     mask = torch.zeros(len(dataset.proteins), dtype=torch.bool)
     mask[protein_ids] = True
 
+    # Parse sampled_edges from config
+    num_neighbors = {}
+    if "sampled_edges" in config:
+        for key, val in config["sampled_edges"].items():
+            parts = key.split("__")
+            if len(parts) == 3:
+                num_neighbors[tuple(parts)] = [val]
+
     return NeighborLoader(
         dataset.data,
-        num_neighbors={("protein", "aligned_with", "protein"): [-1]},
+        num_neighbors=num_neighbors,
         batch_size=1,
         input_nodes=("protein", mask),
         transform=make_batch_transform(dataset, mode="predict", return_sequences=True),
@@ -419,12 +427,12 @@ def main():
     logger.info(f"Using device: {device}")
 
     # Load model and dataset
-    _, model, dataset = load_model_and_config(args.model_path, device)
+    config, model, dataset = load_model_and_config(args.model_path, device)
 
     # Initialize components
     go_mapper = GOTermMapper(dataset, obo_path=GO_OBO_PATH)
     generator = ExplanationGenerator(model, device, args.captum_method)
-    loader = create_data_loader(dataset, args.proteins)
+    loader = create_data_loader(dataset, config, args.proteins)
 
     # Process each batch
     for batch in loader:

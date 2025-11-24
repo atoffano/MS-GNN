@@ -428,47 +428,76 @@ def plot_systemic_explanation(
 ):
     """Plot protein-protein explanation graph."""
     context = build_plot_context(path, dataset, hetero_explanation.batch)
-    key = ("protein", "aligned_with", "protein")
 
-    edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
-    edge_mask = hetero_explanation[key]["edge_mask"].detach().cpu().view(-1)
+    plotted = False
+    for edge_type in hetero_explanation.edge_types:
+        src, rel, dst = edge_type
+        if src == "protein" and dst == "protein":
+            if edge_type not in hetero_explanation:
+                continue
 
-    title = f"Protein-Protein Explanation: {context.root_label}"
-    if title_suffix:
-        title += f" ({title_suffix})"
+            expl_data = hetero_explanation[edge_type]
+            if (
+                not hasattr(expl_data, "edge_index")
+                or expl_data.edge_index.numel() == 0
+            ):
+                continue
 
-    _plot_protein_network(
-        context,
-        edge_index,
-        edge_mask,
-        title,
-        "Edge importance",
-        "system_explanation",
-        go_term,
-    )
+            edge_index = expl_data.edge_index.detach().cpu()
+            edge_mask = expl_data.edge_mask.detach().cpu().view(-1)
+
+            title = f"Protein-Protein Explanation ({rel}): {context.root_label}"
+            if title_suffix:
+                title += f" ({title_suffix})"
+
+            _plot_protein_network(
+                context,
+                edge_index,
+                edge_mask,
+                title,
+                "Edge importance",
+                f"system_explanation_{rel}",
+                go_term,
+            )
+            plotted = True
+
+    if not plotted:
+        logger.info("No systemic edges found to plot.")
 
 
 def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
     """Plot protein-protein attention graph."""
     context = build_plot_context(path, dataset, batch)
-    key = ("protein", "aligned_with", "protein")
 
-    if layer_attention is None or key not in layer_attention:
+    if layer_attention is None:
         return
 
-    edge_index, attn_weights = layer_attention[key]
-    edge_index = edge_index.detach().cpu()
-    attn_values = _mean_attention(attn_weights).detach().cpu()
+    plotted = False
+    for edge_type, (edge_index, attn_weights) in layer_attention.items():
+        if not isinstance(edge_type, tuple) or len(edge_type) != 3:
+            continue
 
-    title = f"Protein-Protein Attention (Layer {layer_idx}): {context.root_label}"
-    _plot_protein_network(
-        context,
-        edge_index,
-        attn_values,
-        title,
-        "Attention weight",
-        f"system_attention_layer{layer_idx}",
-    )
+        src, rel, dst = edge_type
+        if src == "protein" and dst == "protein":
+            edge_index = edge_index.detach().cpu()
+            if edge_index.numel() == 0:
+                continue
+
+            attn_values = _mean_attention(attn_weights).detach().cpu()
+
+            title = f"Protein-Protein Attention (Layer {layer_idx}, {rel}): {context.root_label}"
+            _plot_protein_network(
+                context,
+                edge_index,
+                attn_values,
+                title,
+                "Attention weight",
+                f"system_attention_layer{layer_idx}_{rel}",
+            )
+            plotted = True
+
+    if not plotted:
+        logger.info(f"No systemic attention found for layer {layer_idx}.")
 
 
 @timeit

@@ -106,11 +106,11 @@ class SwissProtDataset:
                     [self.rev_pid_mapping.get(pid, pid) for pid in splits["train"]]
                 )
             # Store train annotations for on-the-fly GO term loading
-            self.train_annots = train_df.set_index("EntryID").to_dict(orient="index")
-            for pid in self.train_annots:
-                self.train_annots[pid]["term"] = self.train_annots[pid]["term"].split(
-                    "; "
-                )
+            # self.train_annots = train_df.set_index("EntryID").to_dict(orient="index")
+            # for pid in self.train_annots:
+            #     self.train_annots[pid]["term"] = self.train_annots[pid]["term"].split(
+            #         "; "
+            #     )
         logger.info(f"Using {len(splits['train'])} train proteins from {train_path}")
 
         # Load val and test
