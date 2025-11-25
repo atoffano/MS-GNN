@@ -157,9 +157,11 @@ def convert_predictions_to_cafa_format(predictions_file, output_dir):
             raise ValueError(f"Missing required column: {col}. Found columns: {list(df.columns)}")
 
     # Handle cases where term_ID might contain multiple terms separated by "; "
-    if df["term_ID"].str.contains("; ", regex=False).any():
+    # Ensure term_ID is string type and handle NaN values
+    term_id_col = df["term_ID"].dropna().astype(str)
+    if len(term_id_col) > 0 and term_id_col.str.contains("; ", regex=False).any():
         # Split and explode the terms
-        df["term_ID"] = df["term_ID"].str.split("; ")
+        df["term_ID"] = df["term_ID"].astype(str).str.split("; ")
         df = df.explode("term_ID")
 
     # Keep only required columns
@@ -220,8 +222,10 @@ def convert_ground_truth_to_cafa_format(gt_file, output_file):
         raise ValueError(f"Missing term column. Found columns: {list(df.columns)}")
 
     # Handle cases where term_ID might contain multiple terms separated by "; "
-    if df["term_ID"].str.contains("; ", regex=False).any():
-        df["term_ID"] = df["term_ID"].str.split("; ")
+    # Ensure term_ID is string type and handle NaN values
+    term_id_col = df["term_ID"].dropna().astype(str)
+    if len(term_id_col) > 0 and term_id_col.str.contains("; ", regex=False).any():
+        df["term_ID"] = df["term_ID"].astype(str).str.split("; ")
         df = df.explode("term_ID")
 
     # Keep only required columns

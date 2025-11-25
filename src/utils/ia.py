@@ -12,6 +12,7 @@ for term propagation. Otherwise, this may result in negative IA values.
 """
 
 import sys
+import os
 import argparse
 import numpy as np
 import pandas as pd
@@ -126,18 +127,21 @@ def propagate_terms(terms_df, subontologies):
     }
 
     propagated_terms = []
+    grouped = terms_df.groupby(["EntryID", "aspect"])
     for (protein, aspect), entry_df in tqdm.tqdm(
-        terms_df.groupby(["EntryID", "aspect"]),
+        grouped,
         desc="Propagating terms",
-        total=len(terms_df),
+        total=grouped.ngroups,
     ):
-        protein_terms = set().union(
-            *[list(ancestor_lookup[aspect][t]) + [t] for t in set(entry_df.term.values)]
-        )
-
-        propagated_terms += [
-            {"EntryID": protein, "term": t, "aspect": aspect} for t in protein_terms
-        ]
+        # Only include terms that are in the ancestor lookup
+        valid_terms = [t for t in set(entry_df.term.values) if t in ancestor_lookup[aspect]]
+        if valid_terms:
+            protein_terms = set().union(
+                *[list(ancestor_lookup[aspect][t]) + [t] for t in valid_terms]
+            )
+            propagated_terms += [
+                {"EntryID": protein, "term": t, "aspect": aspect} for t in protein_terms
+            ]
 
     return pd.DataFrame(propagated_terms)
 
@@ -184,10 +188,16 @@ def calc_ia(term, count_matrix, ontology, terms_index):
     # count of proteins with term
     prots_with_term = count_matrix[:, terms_index[term]].sum()
 
-    # count of proteins with all parents
-    num_parents = len(parents)
+    # count of proteins with all parents - only consider parents in the index
+    valid_parents = [p for p in parents if p in terms_index]
+    num_parents = len(valid_parents)
+    
+    if num_parents == 0:
+        # Root term or no valid parents
+        return 0
+    
     prots_with_parents = (
-        count_matrix[:, [terms_index[p] for p in parents]].sum(1) == num_parents
+        count_matrix[:, [terms_index[p] for p in valid_parents]].sum(1) == num_parents
     ).sum()
 
     # avoid floating point errors by returning exactly zero
@@ -323,9 +333,11 @@ def compute_ia(
 
     annotation_df = annotation_df.dropna(subset=["term"])
 
-    # Handle multiple terms per cell
-    annotation_df["term"] = annotation_df["term"].apply(lambda x: x.split("; "))
-    annotation_df = annotation_df[annotation_df["term"].notna()]
+    # Handle multiple terms per cell - ensure term is string before split
+    annotation_df["term"] = annotation_df["term"].astype(str).apply(
+        lambda x: x.split("; ") if x and x != "nan" else []
+    )
+    annotation_df = annotation_df[annotation_df["term"].apply(lambda x: len(x) > 0)]
     annotation_df = annotation_df[["EntryID", "term"]].explode("term")
     annotation_df["term"] = annotation_df["term"].map(lambda x: old_to_new.get(x, x))
     annotation_df = annotation_df[~annotation_df["term"].isin(obsolete)]
@@ -414,10 +426,6 @@ def compute_ia(
     ia_df[["term", "ic"]].to_csv(out_path, header=None, sep="\t", index=False)
 
     return ia_df
-
-
-# Add import for os at the top if not present
-import os
 
 
 if __name__ == "__main__":
