@@ -1,10 +1,8 @@
 import argparse
-import obonet
+import go3
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-import numpy as np
-import os
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 from matplotlib import cm
@@ -47,45 +45,60 @@ def parse_ground_truth(gt_file, target_id):
     return go_terms
 
 
-def get_descendants(go_terms, ontology_graph):
-    """Return all descendants (including self) for a set of GO terms."""
+def get_ancestors(go_terms):
+    """Return all ancestors (including self) for a set of GO terms using go3.
+
+    Uses the go3 package for fast ancestor lookups instead of networkx.
+    """
     all_terms = set()
     for go_term in go_terms:
-        if go_term in ontology_graph:
-            all_terms.add(go_term)
-            all_terms.update(nx.descendants(ontology_graph, go_term))
+        try:
+            ancestors = go3.ancestors(go_term)
+            all_terms.update(ancestors)
+        except (ValueError, KeyError):
+            # Term not found in ontology, skip it
+            continue
     return all_terms
 
 
-def build_subgraph(go_terms, ontology_graph):
-    """Build a subgraph containing only the GO terms and their descendants (is_a only)."""
-    nodes = get_descendants(go_terms, ontology_graph)
+def build_subgraph(go_terms):
+    """Build a subgraph containing only the GO terms and their ancestors using go3.
+
+    Uses the go3 package for fast ontology traversal and builds a networkx
+    DiGraph for visualization purposes.
+    """
+    nodes = get_ancestors(go_terms)
     subgraph = nx.DiGraph()
+
+    # Add nodes with their attributes from go3
     for node in nodes:
-        subgraph.add_node(node, **ontology_graph.nodes[node])
+        try:
+            term = go3.get_term_by_id(node)
+            subgraph.add_node(
+                node,
+                name=term.name,
+                namespace=term.namespace,
+            )
+        except (ValueError, KeyError):
+            # Term not found, add with minimal attributes
+            subgraph.add_node(node, name="", namespace="")
+
+    # Add edges (from parent to child for visualization)
     for node in nodes:
-        for child in ontology_graph.predecessors(node):
-            if child in nodes:
-                subgraph.add_edge(node, child)
+        try:
+            term = go3.get_term_by_id(node)
+            # Add edges from this node to its parents (in go3, parents are the ancestors direction)
+            for parent in term.parents:
+                if parent in nodes:
+                    # Edge from parent to child for hierarchy visualization
+                    subgraph.add_edge(parent, node)
+        except (ValueError, KeyError):
+            continue
+
     print(
         f"Subgraph contains {len(subgraph.nodes())} nodes and {len(subgraph.edges())} edges."
     )
     return subgraph
-
-
-def clean_ontology_edges(ontology):
-    remove_edges = [
-        (i, j, k) for i, j, k in ontology.edges if not (k == "is_a" or k == "part_of")
-    ]
-    ontology.remove_edges_from(remove_edges)
-    crossont_edges = [
-        (i, j, k)
-        for i, j, k in ontology.edges
-        if ontology.nodes[i]["namespace"] != ontology.nodes[j]["namespace"]
-    ]
-    if len(crossont_edges) > 0:
-        ontology.remove_edges_from(crossont_edges)
-    return ontology
 
 
 def get_hierarchy_pos(
@@ -367,9 +380,8 @@ def main():
     )
     args = parser.parse_args()
 
-    print("Loading ontology...")
-    ontology_graph = obonet.read_obo(args.obo)
-    ontology_graph = clean_ontology_edges(ontology_graph)
+    print("Loading ontology with go3...")
+    go3.load_go_terms(args.obo)
 
     print("Parsing ground truth...")
     gt_terms = parse_ground_truth(args.gt, args.protein)
@@ -400,7 +412,7 @@ def main():
         for pred in pred_dicts:
             all_terms |= set(pred.keys())
     # If --truth_only, do NOT add predicted terms not in GT
-    subgraph = build_subgraph(all_terms, ontology_graph)
+    subgraph = build_subgraph(all_terms)
     print("Plotting...")
     plot_multi_pred_gt(
         pred_dicts,
