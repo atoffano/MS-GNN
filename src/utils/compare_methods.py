@@ -381,7 +381,11 @@ def main():
     args = parser.parse_args()
 
     print("Loading ontology with go3...")
-    go3.load_go_terms(args.obo)
+    try:
+        go3.load_go_terms(args.obo)
+    except Exception as e:
+        print(f"Error loading ontology from {args.obo}: {e}")
+        return
 
     print("Parsing ground truth...")
     gt_terms = parse_ground_truth(args.gt, args.protein)
