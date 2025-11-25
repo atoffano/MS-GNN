@@ -20,8 +20,7 @@ import pandas as pd
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -43,77 +42,77 @@ def parse_args(argv):
         "--predictions",
         "-p",
         required=True,
-        help="Path to prediction TSV file with columns: target_ID, term_ID, score"
+        help="Path to prediction TSV file with columns: target_ID, term_ID, score",
     )
 
     parser.add_argument(
         "--ground_truth",
         "-gt",
         required=True,
-        help="Path to ground truth annotation TSV file"
+        help="Path to ground truth annotation TSV file",
     )
 
     parser.add_argument(
         "--ontology",
         "-go",
         default=None,
-        help="Path to OBO ontology file. If empty, uses ./data/go.obo"
+        help="Path to OBO ontology file. If empty, uses ./data/go.obo",
     )
 
     parser.add_argument(
         "--ia",
         "-ia",
         default=None,
-        help="Path to Information Accretion file (optional). If provided, weighted metrics will be computed."
+        help="Path to Information Accretion file (optional). If provided, weighted metrics will be computed.",
     )
 
     parser.add_argument(
         "--output",
         "-o",
         default=None,
-        help="Output directory for evaluation results. If not specified, will be derived from predictions path."
+        help="Output directory for evaluation results. If not specified, will be derived from predictions path.",
     )
 
     parser.add_argument(
         "--th_step",
         type=float,
         default=0.01,
-        help="Threshold step size for PR curve calculation. Default: 0.01"
+        help="Threshold step size for PR curve calculation. Default: 0.01",
     )
 
     parser.add_argument(
         "--prop",
         choices=["max", "fill"],
         default="max",
-        help="Propagation strategy: 'max' or 'fill'. Default: max"
+        help="Propagation strategy: 'max' or 'fill'. Default: max",
     )
 
     parser.add_argument(
         "--norm",
         choices=["cafa", "pred", "gt"],
         default="cafa",
-        help="Normalization strategy. Default: cafa"
+        help="Normalization strategy. Default: cafa",
     )
 
     parser.add_argument(
         "--no_orphans",
         action="store_true",
-        help="Exclude orphan nodes (e.g. roots) from the calculation"
+        help="Exclude orphan nodes (e.g. roots) from the calculation",
     )
 
     parser.add_argument(
         "--max_terms",
         type=int,
         default=None,
-        help="Maximum number of terms per protein to consider"
+        help="Maximum number of terms per protein to consider",
     )
 
     parser.add_argument(
         "--threads",
         "-t",
         type=int,
-        default=1,
-        help="Number of parallel threads. Default: 1"
+        default=10,
+        help="Number of parallel threads. Default: 1",
     )
 
     return parser.parse_args(argv)
@@ -154,7 +153,9 @@ def convert_predictions_to_cafa_format(predictions_file, output_dir):
     required_cols = ["target_ID", "term_ID", "score"]
     for col in required_cols:
         if col not in df.columns:
-            raise ValueError(f"Missing required column: {col}. Found columns: {list(df.columns)}")
+            raise ValueError(
+                f"Missing required column: {col}. Found columns: {list(df.columns)}"
+            )
 
     # Handle cases where term_ID might contain multiple terms separated by "; "
     # Ensure term_ID is string type and handle NaN values
@@ -174,11 +175,9 @@ def convert_predictions_to_cafa_format(predictions_file, output_dir):
     df["score"] = pd.to_numeric(df["score"], errors="coerce")
     df = df.dropna(subset=["score"])
 
-    # Create predictions directory
     pred_dir = os.path.join(output_dir, "predictions")
     os.makedirs(pred_dir, exist_ok=True)
 
-    # Write to CAFA format (no header)
     output_file = os.path.join(pred_dir, "predictions.tsv")
     df.to_csv(output_file, sep="\t", header=False, index=False)
 
@@ -217,24 +216,20 @@ def convert_ground_truth_to_cafa_format(gt_file, output_file):
 
     # Ensure required columns exist
     if "target_ID" not in df.columns:
-        raise ValueError(f"Missing target/entry ID column. Found columns: {list(df.columns)}")
+        raise ValueError(
+            f"Missing target/entry ID column. Found columns: {list(df.columns)}"
+        )
     if "term_ID" not in df.columns:
         raise ValueError(f"Missing term column. Found columns: {list(df.columns)}")
 
     # Handle cases where term_ID might contain multiple terms separated by "; "
-    # Ensure term_ID is string type and handle NaN values
     term_id_col = df["term_ID"].dropna().astype(str)
     if len(term_id_col) > 0 and term_id_col.str.contains("; ", regex=False).any():
         df["term_ID"] = df["term_ID"].astype(str).str.split("; ")
         df = df.explode("term_ID")
 
-    # Keep only required columns
     df = df[["target_ID", "term_ID"]]
-
-    # Remove rows with missing values
     df = df.dropna()
-
-    # Write to CAFA format (no header)
     df.to_csv(output_file, sep="\t", header=False, index=False)
 
     logger.info(f"Saved {len(df)} ground truth annotations to {output_file}")
@@ -252,7 +247,7 @@ def run_cafa_evaluation(
     norm="cafa",
     no_orphans=False,
     max_terms=None,
-    n_threads=1
+    n_threads=1,
 ):
     """Run CAFA evaluation on predictions.
 
@@ -312,14 +307,13 @@ def run_cafa_evaluation(
             prop=prop,
             max_terms=max_terms,
             th_step=th_step,
-            n_cpu=n_threads
+            n_cpu=n_threads,
         )
 
         # Write results
         logger.info(f"Writing results to {output_dir}")
         write_results(df, dfs_best, out_dir=output_dir, th_step=th_step)
 
-        # Print summary
         logger.info("\n" + "=" * 60)
         logger.info("CAFA Evaluation Summary")
         logger.info("=" * 60)
@@ -340,20 +334,7 @@ def run_cafa_evaluation(
 
 
 def derive_output_dir_from_predictions(predictions_file, subontology=None, split=None):
-    """Derive output directory from predictions file path following project conventions.
-
-    The convention follows the pattern:
-    {results_dir}/evaluation/{split}_{subontology}/cafa-eval/
-
-    For example, if predictions_file is:
-    results/D1/20251118_143647_D1_2layerGNN/predictions/predictions_test_MFO.tsv
-
-    The output will be:
-    results/D1/20251118_143647_D1_2layerGNN/evaluation/test_MFO/cafa-eval/
-
-    If split and subontology cannot be inferred from the filename, a fallback path is used:
-    {results_dir}/evaluation/cafa-eval/
-
+    """Derive output directory from predictions file path.
     Args:
         predictions_file: Path to the predictions TSV file
         subontology: Optional subontology (MFO, BPO, CCO) - inferred from filename if not provided
@@ -387,9 +368,10 @@ def derive_output_dir_from_predictions(predictions_file, subontology=None, split
     else:
         results_dir = predictions_dir
 
-    # Build output path: {results_dir}/evaluation/{split}_{subontology}/cafa-eval/
     if split is not None and subontology is not None:
-        output_dir = os.path.join(results_dir, "evaluation", f"{split}_{subontology}", "cafa-eval")
+        output_dir = os.path.join(
+            results_dir, "evaluation", f"{split}_{subontology}", "cafa-eval"
+        )
     else:
         output_dir = os.path.join(results_dir, "evaluation", "cafa-eval")
 
@@ -432,11 +414,9 @@ def main(argv=None):
         logger.error(f"IA file not found: {args.ia}")
         sys.exit(1)
 
-    # Determine output directory
     if args.output:
         output_dir = args.output
     else:
-        # Derive from predictions file path following project conventions
         output_dir = derive_output_dir_from_predictions(args.predictions)
         logger.info(f"Output directory derived from predictions path: {output_dir}")
 
@@ -453,7 +433,7 @@ def main(argv=None):
             norm=args.norm,
             no_orphans=args.no_orphans,
             max_terms=args.max_terms,
-            n_threads=args.threads
+            n_threads=args.threads,
         )
         logger.info("CAFA evaluation completed successfully!")
     except Exception as e:
