@@ -70,8 +70,8 @@ def parse_args(argv):
     parser.add_argument(
         "--output",
         "-o",
-        default="./cafa_results",
-        help="Output directory for evaluation results. Default: ./cafa_results"
+        default=None,
+        help="Output directory for evaluation results. If not specified, will be derived from predictions path."
     )
 
     parser.add_argument(
@@ -339,6 +339,63 @@ def run_cafa_evaluation(
             logger.info(f"Cleaned up temporary directory: {temp_dir}")
 
 
+def derive_output_dir_from_predictions(predictions_file, subontology=None, split=None):
+    """Derive output directory from predictions file path following project conventions.
+
+    The convention follows the pattern:
+    {results_dir}/evaluation/{split}_{subontology}/cafa-eval/
+
+    For example, if predictions_file is:
+    results/D1/20251118_143647_D1_2layerGNN/predictions/predictions_test_MFO.tsv
+
+    The output will be:
+    results/D1/20251118_143647_D1_2layerGNN/evaluation/test_MFO/cafa-eval/
+
+    If split and subontology cannot be inferred from the filename, a fallback path is used:
+    {results_dir}/evaluation/cafa-eval/
+
+    Args:
+        predictions_file: Path to the predictions TSV file
+        subontology: Optional subontology (MFO, BPO, CCO) - inferred from filename if not provided
+        split: Optional data split (train, val, test) - inferred from filename if not provided
+
+    Returns:
+        str: Path to output directory for CAFA evaluation results
+    """
+    predictions_path = os.path.abspath(predictions_file)
+    predictions_dir = os.path.dirname(predictions_path)
+    predictions_filename = os.path.basename(predictions_file)
+
+    # Extract split and subontology from filename if not provided
+    # Expected format: predictions_{split}_{subontology}.tsv
+    if split is None or subontology is None:
+        try:
+            parts = predictions_filename.replace(".tsv", "").split("_")
+            if len(parts) >= 3:
+                if split is None:
+                    split = parts[1]  # e.g., "test"
+                if subontology is None:
+                    subontology = parts[2]  # e.g., "MFO"
+        except (IndexError, AttributeError):
+            # Filename doesn't match expected format, use fallback
+            pass
+
+    # Navigate up from predictions directory to results directory
+    # Structure: {results_dir}/predictions/predictions_{split}_{subontology}.tsv
+    if os.path.basename(predictions_dir) == "predictions":
+        results_dir = os.path.dirname(predictions_dir)
+    else:
+        results_dir = predictions_dir
+
+    # Build output path: {results_dir}/evaluation/{split}_{subontology}/cafa-eval/
+    if split is not None and subontology is not None:
+        output_dir = os.path.join(results_dir, "evaluation", f"{split}_{subontology}", "cafa-eval")
+    else:
+        output_dir = os.path.join(results_dir, "evaluation", "cafa-eval")
+
+    return output_dir
+
+
 def main(argv=None):
     """Main entry point for CAFA evaluation.
 
@@ -375,13 +432,21 @@ def main(argv=None):
         logger.error(f"IA file not found: {args.ia}")
         sys.exit(1)
 
+    # Determine output directory
+    if args.output:
+        output_dir = args.output
+    else:
+        # Derive from predictions file path following project conventions
+        output_dir = derive_output_dir_from_predictions(args.predictions)
+        logger.info(f"Output directory derived from predictions path: {output_dir}")
+
     # Run evaluation
     try:
         run_cafa_evaluation(
             predictions_file=args.predictions,
             gt_file=args.ground_truth,
             ontology_file=ontology_file,
-            output_dir=args.output,
+            output_dir=output_dir,
             ia_file=args.ia,
             th_step=args.th_step,
             prop=args.prop,
