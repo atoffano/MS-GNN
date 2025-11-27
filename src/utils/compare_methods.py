@@ -6,10 +6,13 @@ import matplotlib as mpl
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 from matplotlib import cm
+import os
 
 
-def parse_predictions(pred_file, target_id, threshold):
+def parse_predictions(pred_file, target_id, threshold, gt_terms=None):
     """Parse the prediction TSV and return a dict of GO terms and their scores for the given target IDs above threshold."""
+    if gt_terms is None:
+        gt_terms = set()
     go_terms = {}
     with open(pred_file) as f:
         header = next(f)
@@ -21,7 +24,7 @@ def parse_predictions(pred_file, target_id, threshold):
             if target == target_id:
                 try:
                     score = float(score)
-                    if score >= threshold:
+                    if score >= threshold or go_term in gt_terms:
                         go_terms[go_term] = score
                 except ValueError:
                     continue
@@ -40,8 +43,8 @@ def parse_ground_truth(gt_file, target_id):
                 continue
             target, go_term = parts[0], parts[1]
             if target == target_id:
-                go_terms = set(go_term.split("; "))
-                go_terms.add(go_term)
+                terms = [t.strip() for t in go_term.split(";")]
+                go_terms.update(terms)
     return go_terms
 
 
@@ -196,10 +199,15 @@ def plot_multi_pred_gt(
             root = r
             break
     hier_pos = get_hierarchy_pos(subgraph, root=root)
+
+    # Filter nodes to those present in the hierarchy layout (handles disconnected components)
+    nodes_to_plot = [n for n in nodes_to_plot if n in hier_pos]
     pos = {n: (hier_pos[n][0], hier_pos[n][1]) for n in nodes_to_plot}
 
     plt.figure(figsize=(24, 15))
     ax = plt.gca()
+    ax.set_xlim(0.0, 1.0)  # Fix X axis to prevent autoscaling distortion
+
     # Draw edges, curve if nodes are on the same y level
     for u, v in subgraph.edges():
         if u not in nodes_to_plot or v not in nodes_to_plot:
@@ -260,23 +268,30 @@ def plot_multi_pred_gt(
         )
 
     # Draw subnodes for each prediction file
-    y_offset = 0.03
+    # Calculate dynamic y_offset based on graph height to maintain consistent physical distance
+    y_values = [y for _, y in pos.values()]
+    if y_values:
+        y_span = max(y_values) - min(y_values)
+        y_span = max(y_span, 0.2)  # Minimum span
+    else:
+        y_span = 1.0
+    y_offset = 0.03 * y_span
+
+    spacing = 0.01  # Spacing between subnodes
+    num_preds = len(pred_dicts)
 
     for n in nodes_to_plot:
         x, y = pos[n]
-        # Center subnodes horizontally under the node without gap between them
-        start_x = x
+        # Center subnodes horizontally under the node
         for i, (pred, cmap, name) in enumerate(zip(pred_dicts, pred_cmaps, pred_names)):
             if n in pred:
                 score = pred[n]
                 color = cmap(mpl.colors.Normalize(vmin=0, vmax=1)(score))
 
-                if i == 0:
-                    x_shift = 0.0
-                else:
-                    x_shift = i * 0.01
+                # Center the dots: shift left/right based on index relative to center
+                x_shift = i * spacing
 
-                x_off = start_x + x_shift
+                x_off = x + x_shift
                 y_off = y - y_offset
                 ax.scatter(
                     [x_off],
@@ -298,17 +313,20 @@ def plot_multi_pred_gt(
 
     plt.title(f"GO graph: predictions (subnodes) & GT (main node) for {protein_name}")
     plt.axis("off")
-    plt.tight_layout(rect=[0, 0, 0.92, 1])  # Leave space for colorbar
+    # Increase right margin to accommodate legend and colorbars
+    plt.tight_layout(rect=[0, 0, 0.85, 1])
 
-    # Colorbars for each method
+    # Colorbars for each method (Bottom Right)
     for i, (cmap, name) in enumerate(zip(pred_cmaps, pred_names)):
-        cbar_ax = plt.gcf().add_axes([0.93, 0.2 + 0.08 * i, 0.02, 0.06])
+        # Place colorbars in the bottom right margin
+        # Start from bottom (0.1) and go up
+        cbar_ax = plt.gcf().add_axes([0.87, 0.1 + i * 0.07, 0.02, 0.04])
         sm = mpl.cm.ScalarMappable(cmap=cmap, norm=mpl.colors.Normalize(vmin=0, vmax=1))
         sm.set_array([])
         cbar = plt.colorbar(sm, cax=cbar_ax)
-        cbar.set_label(f"{name} score", fontsize=10)
+        cbar.set_label(f"{name} score", fontsize=10, rotation=360, labelpad=15)
 
-    # Custom legend for shapes and subnodes
+    # Custom legend for shapes and subnodes (Top Right)
     legend_elements = [
         Line2D(
             [0],
@@ -347,11 +365,10 @@ def plot_multi_pred_gt(
                 markersize=6,
             )
         )
-    plt.legend(handles=legend_elements, loc="upper right", bbox_to_anchor=(1, 1.08))
+    plt.legend(handles=legend_elements, loc="upper right", bbox_to_anchor=(1.25, 1.0))
 
     # Save with protein name
-    safe_name = "".join([c if c.isalnum() or c in "-_." else "_" for c in protein_name])
-    outname = f"go_multi_pred_gt_{safe_name}.png"
+    outname = f"pred_{protein_name}.png"
     plt.savefig(outname, format="png", dpi=300, bbox_inches="tight")
     print(f"Saved GO multi-prediction+GT graph to {outname}")
 
@@ -406,11 +423,14 @@ def main():
     ]
     for i, (pred_file, thresh, name) in enumerate(args.pred):
         print(f"Parsing predictions from {pred_file} with threshold {thresh}...")
-        pred_dicts.append(parse_predictions(pred_file, args.protein, float(thresh)))
+        pred_dicts.append(
+            parse_predictions(pred_file, args.protein, float(thresh), gt_terms)
+        )
         pred_cmaps.append(color_maps[i % len(color_maps)])
         pred_names.append(name)
 
     print("Building subgraph...")
+
     all_terms = set(gt_terms)
     if not args.truth_only:
         for pred in pred_dicts:

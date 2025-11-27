@@ -18,8 +18,8 @@ class SwissProtDataset:
     @timeit
     def __init__(self, config):
         self.config = config
-        if config["data"]["dataset"] in ["D1"]:
-            self.uses_entryid = True  # D1 uses EntryIDs
+        if config["data"]["dataset"] in ["D1", "H30"]:
+            self.uses_entryid = True
         else:
             self.uses_entryid = False
 

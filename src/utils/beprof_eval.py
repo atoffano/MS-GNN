@@ -198,25 +198,25 @@ def fmax(go, targets, scores, idx_goid):
         except ZeroDivisionError:
             pass
 
-    # Add endpoints when dealing with undefined regions
-    for rec, prec in [
-        (recalls, precisions),
-        (icrecalls, icprecisions),
-        (dprecalls, dpprecisions),
-    ]:
-        if rec[0] > 0:
-            rec = np.concatenate(([0], rec))
-            prec = np.concatenate(([1], prec))
-        if rec[-1] < 1:
-            rec = np.concatenate((rec, [1.0]))
-            prec = np.concatenate((prec, [0.0]))
-        # Assign back to original variables
-        if rec is recalls:
-            recalls, precisions = rec, prec
-        elif rec is icrecalls:
-            icrecalls, icprecisions = rec, prec
-        else:
-            dprecalls, dpprecisions = rec, prec
+    # # Add endpoints when dealing with undefined regions
+    # for rec, prec in [
+    #     (recalls, precisions),
+    #     (icrecalls, icprecisions),
+    #     (dprecalls, dpprecisions),
+    # ]:
+    #     if rec[0] > 0:
+    #         rec = np.concatenate(([0], rec))
+    #         prec = np.concatenate(([1], prec))
+    #     if rec[-1] < 1:
+    #         rec = np.concatenate((rec, [1.0]))
+    #         prec = np.concatenate((prec, [0.0]))
+    #     # Assign back to original variables
+    #     if rec is recalls:
+    #         recalls, precisions = rec, prec
+    #     elif rec is icrecalls:
+    #         icrecalls, icprecisions = rec, prec
+    #     else:
+    #         dprecalls, dpprecisions = rec, prec
 
     return (
         fmax_[0],

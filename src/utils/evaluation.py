@@ -26,8 +26,8 @@ import wandb
 def compute_metrics(all_scores, all_targets):
     """
     Compute Area Under the Precision-Recall Curve (AUPR) and F-max.
+    Precision and recall are computed on the global pool of predictions (Micro).
     """
-    # Fix: handle both list of arrays and single array
     if isinstance(all_scores, (list, tuple)):
         all_scores = np.concatenate(all_scores, axis=0).flatten()
     else:
@@ -51,7 +51,6 @@ def plot_aupr(precision, recall, aupr=None):
     """
     Compute Area Under the Precision-Recall Curve (AUPR).
     """
-    # Plot PR curve and log to wandb
     plt.figure(figsize=(6, 5))
     plt.plot(recall, precision, label=f"AUPR={aupr:.3f}")
     plt.xlabel("Recall")
