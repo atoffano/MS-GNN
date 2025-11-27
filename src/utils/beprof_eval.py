@@ -152,7 +152,6 @@ def parse_args(argv=None):
 
 __all__ = [
     "fmax",
-    "aupr",
     "ROOT_GO_TERMS",
     "compute_performance",
     "run_beprof_evaluation",
@@ -161,6 +160,7 @@ __all__ = [
     "derive_output_dir_from_predictions",
     "read_pkl",
     "save_pkl",
+    "Ontology",
 ]
 
 # Re-export constants for backwards compatibility
@@ -956,34 +956,6 @@ def run_beprof_evaluation(
 
     logger.info(f"BEPROF evaluation completed. Results saved to: {output_dir}")
     return output_dir
-
-
-def main_cli(
-    input_file,
-    output_path,
-    test_data_file,
-    all_protein_information_file,
-    go_file,
-    metrics,
-):
-    """Legacy main function for backward compatibility.
-
-    Args:
-        input_file: Path to prediction PKL file
-        output_path: Output directory path
-        test_data_file: Path to ground truth PKL file
-        all_protein_information_file: Path to background PKL file
-        go_file: Path to GO ontology file
-        metrics: List of metric indices to compute
-    """
-    with open(test_data_file, "rb") as f:
-        test_data = pkl.load(f)
-    with open(all_protein_information_file, "rb") as f:
-        all_protein_information = pkl.load(f)
-    logger.info("Test data and all protein information loaded.")
-    generate_result(
-        input_file, output_path, go_file, test_data, all_protein_information, metrics
-    )
 
 
 def main(argv=None):
