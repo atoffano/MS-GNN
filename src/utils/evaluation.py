@@ -4,7 +4,7 @@ This module provides functions for evaluating protein function predictions, incl
 - Computing precision-recall metrics (AUPR, F-max)
 - Saving model predictions to files
 - Generating evaluation plots and visualizations
-- Integration with BEPROF evaluation framework
+- Integration with BEPROF and CAFA evaluation frameworks
 """
 
 import pandas as pd
@@ -12,15 +12,27 @@ import os
 import sys
 import subprocess
 import pickle
-from collections import defaultdict
 import tqdm
 import argparse
+import logging
 import torch
 from src.utils.helpers import timeit
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.metrics import precision_recall_curve, auc
 import wandb
+
+# Import BEPROF evaluation functions
+from src.utils.beprof_eval import (
+    run_beprof_evaluation as run_beprof,
+    gt_convert,
+    convert_predictions,
+)
+
+# Import CAFA evaluation functions
+from src.utils.cafa_evaluation import (
+    run_cafa_evaluation as run_cafa,
+)
 
 
 def compute_metrics(all_scores, all_targets):
@@ -112,9 +124,18 @@ def save_predictions(config, model, loader, device, dataset, split=None):
 
 
 @timeit
-def evaluate(logger, dataset, output_dir, subontology, split):
+def evaluate(logger, dataset, output_dir, subontology, split, run_cafa_eval=True, run_beprof_eval=True):
     """
-    Evaluate the predictions using the ground truth (GT) annotations and the BeProf evaluation method.
+    Evaluate the predictions using both CAFA and BeProf evaluation methods.
+
+    Args:
+        logger: Logger instance for output
+        dataset: Dataset name (e.g., "swissprot")
+        output_dir: Base output directory containing predictions
+        subontology: GO subontology (BPO, CCO, MFO)
+        split: Data split (train, val, test)
+        run_cafa_eval: Whether to run CAFA evaluation (default: True)
+        run_beprof_eval: Whether to run BEPROF evaluation (default: True)
     """
     background_pkl = f"./data/{dataset}/background_{dataset}_{split}.pkl"
     if os.path.exists(background_pkl):
@@ -156,8 +177,8 @@ def evaluate(logger, dataset, output_dir, subontology, split):
 
     # Check if GT exists in pkl format. If not, convert GT TSV to pkl using gt_convert
     gt_pkl = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.pkl"
+    gt_tsv = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.tsv"
     if not os.path.exists(gt_pkl):
-        gt_tsv = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.tsv"
         if os.path.exists(gt_tsv):
             logger.info(f"Converting Ground Truth TSV {gt_tsv} to pkl format")
             gt_convert(gt_tsv)
@@ -166,160 +187,59 @@ def evaluate(logger, dataset, output_dir, subontology, split):
             raise FileNotFoundError(f"Ground Truth TSV file {gt_tsv} does not exist.")
 
     # Evaluate predictions
-    logger.info(f"Evaluating predictions")
-    # Convert predictions to pkl
     pred_file = f"{output_dir}/predictions/predictions_{split}_{subontology}.tsv"
     pred_pkl = f"{output_dir}/predictions/predictions_{split}_{subontology}.pkl"
-    if os.path.exists(pred_file):
-        pred_dict = convert_predictions(pred_file, subontology)
-        with open(pred_pkl, "wb") as f:
-            pickle.dump(pred_dict, f)
-        # pid_mapping = (
-        #     pd.read_csv(
-        #         f"./data/swissprot/2024_01/swissprot_2024_01_annotations.tsv",  # Most up to date mapping
-        #         sep="\t",
-        #         usecols=["EntryID", "Entry Name"],
-        #     )
-        #     .set_index("EntryID")
-        #     .to_dict()["Entry Name"]
-        # )
-        # Apply mapping to pred_dict keys
-        # rev_mapping = {v: k for k, v in pid_mapping.items()}
-        # pred_dict_mapped = {rev_mapping.get(k, k): v for k, v in pred_dict.items()}
-        # with open(pred_pkl, "wb") as f:
-        #     pickle.dump(pred_dict_mapped, f)
-        # logger.info(f"Converted predictions saved to {pred_pkl}")
-
-        run_beprof_evaluation(
-            logger,
-            pred_pkl,
-            gt_pkl,
-            background_pkl,
-            go_obo_file,
-            f"{output_dir}/evaluation/{split}_{subontology}",
-        )
-    else:
+    
+    if not os.path.exists(pred_file):
         logger.warning(f"Predictions file {pred_file} does not exist.")
+        return
 
+    logger.info(f"Evaluating predictions for {subontology} on {split} split")
 
-@timeit
-def run_beprof_evaluation(
-    logger, pred_pkl, gt_pkl, background_pkl, go_obo_file, eval_output_dir
-):
-    """
-    Run beprof_eval.py as a subprocess.
-    """
-    os.makedirs(eval_output_dir, exist_ok=True)
+    # Convert predictions to pkl for BEPROF evaluation
+    pred_dict = convert_predictions(pred_file, subontology)
+    with open(pred_pkl, "wb") as f:
+        pickle.dump(pred_dict, f)
+    logger.info(f"Converted predictions saved to {pred_pkl}")
 
-    cmd = [
-        sys.executable,
-        "src/utils/beprof_eval.py",
-        "--predict",
-        pred_pkl,
-        "--output_path",
-        eval_output_dir,
-        "--true",
-        gt_pkl,
-        "--background",
-        background_pkl,
-        "--go",
-        go_obo_file,
-        "--metrics",
-        "0,1,2,3,4,5",  # All metrics: F_max, Smin, Aupr, ICAupr, DPAupr, threshold
-    ]
+    # Run BEPROF evaluation
+    if run_beprof_eval:
+        logger.info("Running BEPROF evaluation...")
+        beprof_output_dir = f"{output_dir}/evaluation/{split}_{subontology}/beprof-eval"
+        try:
+            run_beprof(
+                predictions_file=pred_pkl,
+                gt_file=gt_pkl,
+                background_file=background_pkl,
+                ontology_file=go_obo_file,
+                output_dir=beprof_output_dir,
+                subontology=subontology,
+                metrics="0,1,2,3,4,5",
+            )
+            logger.info(f"BEPROF evaluation completed. Results saved to: {beprof_output_dir}")
+        except Exception as e:
+            logger.error(f"BEPROF evaluation failed: {e}")
+            raise
 
-    logger.info(f"Running BeProf evaluation: {' '.join(cmd)}")
+    # Run CAFA evaluation
+    if run_cafa_eval:
+        logger.info("Running CAFA evaluation...")
+        cafa_output_dir = f"{output_dir}/evaluation/{split}_{subontology}/cafa-eval"
+        try:
+            run_cafa(
+                predictions_file=pred_file,
+                gt_file=gt_tsv,
+                ontology_file=go_obo_file,
+                output_dir=cafa_output_dir,
+            )
+            logger.info(f"CAFA evaluation completed. Results saved to: {cafa_output_dir}")
+        except ImportError as e:
+            logger.warning(f"CAFA evaluation skipped (cafaeval not installed): {e}")
+        except Exception as e:
+            logger.error(f"CAFA evaluation failed: {e}")
+            # Don't raise - allow BEPROF to complete even if CAFA fails
 
-    try:
-        result = subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-        logger.info(f"BeProf evaluation completed successfully")
-        logger.info(f"Results saved to: {eval_output_dir}")
-
-        if result.stdout:
-            logger.info(f"BeProf stdout:\n{result.stdout}")
-
-    except subprocess.CalledProcessError as e:
-        logger.error(f"BeProf evaluation failed with return code {e.returncode}")
-        if e.stdout:
-            logger.error(f"BeProf stdout:\n{e.stdout}")
-        if e.stderr:
-            logger.error(f"BeProf stderr:\n{e.stderr}")
-        raise
-    except Exception as e:
-        logger.error(f"Error running BeProf evaluation: {str(e)}")
-        raise
-
-
-def gt_convert(gt_tsv):
-    """
-    Convert GT to pkl.
-    """
-    # Extract the ontology type (BPO, CCO, MFO) from the filename
-    base_name = os.path.basename(gt_tsv)
-    ontology_type = base_name.split("_")[1]  # Extract BPO, CCO, or MFO
-    ontology_mapping = {"BPO": "all_bp", "CCO": "all_cc", "MFO": "all_mf"}
-    ontology_key = ontology_mapping[ontology_type]
-
-    # Output filename: same as input but with .pkl extension
-    gt_pkl = os.path.splitext(gt_tsv)[0] + ".pkl"
-
-    print(f"Processing {base_name}...")
-
-    # Read the input file
-    df = pd.read_csv(gt_tsv, sep="\t")
-    df["term"] = df["term"].str.split("; ")
-    df = df.explode("term")
-
-    # Build the nested dictionary for pickling
-    protein_go_terms = defaultdict(
-        lambda: {"all_bp": set(), "all_cc": set(), "all_mf": set()}
-    )
-    for _, row in df.iterrows():
-        protein_id = row["EntryID"]
-        term_id = row["term"]
-        protein_go_terms[protein_id][ontology_key].add(term_id)
-
-    protein_go_terms_dict = dict(protein_go_terms)
-
-    # Save to pickle file
-    with open(gt_pkl, "wb") as f:
-        pickle.dump(protein_go_terms_dict, f)
-    print(f"Saved pickle file: {gt_pkl}")
-
-    # # Print sample data for verification
-    # if protein_go_terms_dict:
-    #     sample_protein = next(iter(protein_go_terms_dict))
-    #     print(f"Sample data for {sample_protein} in {ontology_type}:")
-    #     print(protein_go_terms_dict[sample_protein])
-
-
-def convert_predictions(pred_file, subontology):
-    """
-    Converts a TSV prediction file with columns: target_ID, term_ID
-    into a dictionary where each protein gets a 'bp' dictionary of GO term predictions.
-    """
-    subontology = subontology[:2].lower()
-    df = pd.read_csv(pred_file, sep="\t")
-    # Split term column by '; ' and explode
-    df["term_ID"] = df["term_ID"].str.split("; ")
-    df = df.explode("term_ID")
-    pred_dict = {}
-    for prot, group in tqdm.tqdm(df.groupby("target_ID")):
-        # if subontology == "all":
-        #     for sub in ["cc", "mf", "bp"]:
-        #         pred_dict[prot] = {
-        #             f"{sub}": dict(zip(group["term_ID"], [1] * len(group["term_ID"])))
-        #         }
-        pred_dict[prot] = {
-            f"{subontology}": dict(zip(group["term_ID"], group["score"]))
-        }
-    return pred_dict
+    logger.info(f"Evaluation completed for {subontology} on {split} split")
 
 
 def setup_logging(output_dir, subontology):
@@ -362,7 +282,9 @@ def setup_logging(output_dir, subontology):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate predictions using BeProf.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate predictions using BEPROF and/or CAFA evaluators."
+    )
     parser.add_argument(
         "--input_dir",
         required=True,
@@ -377,6 +299,24 @@ if __name__ == "__main__":
         default="test",
         help="Data split to evaluate on (train, val, test). Default: test",
     )
+    parser.add_argument(
+        "--no-cafa",
+        action="store_true",
+        help="Skip CAFA evaluation",
+    )
+    parser.add_argument(
+        "--no-beprof",
+        action="store_true",
+        help="Skip BEPROF evaluation",
+    )
     args = parser.parse_args()
-    logger = setup_logging(args.input_dir, args.subontology)
-    evaluate(logger, args.dataset, args.input_dir, args.subontology, args.split)
+    eval_logger = setup_logging(args.input_dir, args.subontology)
+    evaluate(
+        eval_logger,
+        args.dataset,
+        args.input_dir,
+        args.subontology,
+        args.split,
+        run_cafa_eval=not args.no_cafa,
+        run_beprof_eval=not args.no_beprof,
+    )
