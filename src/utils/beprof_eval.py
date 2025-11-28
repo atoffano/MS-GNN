@@ -4,6 +4,12 @@ This module implements evaluation metrics compatible with the BEPROF (Benchmark 
 Protein Function) framework. It includes functions for computing F-max, AUPR, and
 other performance metrics for multi-label GO term prediction, along with utilities
 for handling GO term hierarchies and information content.
+
+It supports:
+- Reading predictions from TSV or PKL files
+- Converting ground truth annotations for BEPROF evaluation
+- Computing IC (Information Content) weights
+- Running full BEPROF evaluation with metrics like F-max, S-min, AUPR, ICAupr, DPAupr
 """
 
 import warnings
@@ -11,14 +17,15 @@ import numpy as np
 import scipy.sparse as ssp
 import math
 import pandas as pd
-from collections import OrderedDict, deque, Counter
-import math
+from collections import OrderedDict, deque, Counter, defaultdict
 import pickle as pkl
 import os
+import sys
 import argparse
+import logging
 import tqdm
 
-from constants import (
+from src.utils.constants import (
     GO_ROOT_TERMS,
     GO_BIOLOGICAL_PROCESS,
     GO_MOLECULAR_FUNCTION,
@@ -27,6 +34,12 @@ from constants import (
     GO_NAMESPACES,
     GO_NAMESPACES_REVERT,
 )
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 EXP_CODES = {
     "EXP",
@@ -66,36 +79,205 @@ CAFA_TARGETS = {
 }
 
 
-def parse_args():
+def parse_args(argv=None):
     """Parse command-line arguments for BEPROF evaluation.
+
+    Args:
+        argv: Command line arguments list (defaults to sys.argv[1:])
 
     Returns:
         Parsed arguments namespace
     """
-    parser = argparse.ArgumentParser(description="uniprot_API")
-    parser.add_argument("--predict")
-    parser.add_argument("--output_path")
-    parser.add_argument("--true")
-    parser.add_argument("--background")
-    parser.add_argument("--go")
-    parser.add_argument("--metrics")
+    parser = argparse.ArgumentParser(
+        description="Evaluate protein function predictions using BEPROF metrics."
+    )
 
-    args = parser.parse_args()
-    return args
+    parser.add_argument(
+        "--predictions",
+        "-p",
+        dest="predict",
+        required=True,
+        help="Path to prediction file (TSV or PKL format)",
+    )
+
+    parser.add_argument(
+        "--ground_truth",
+        "-gt",
+        dest="true",
+        required=True,
+        help="Path to ground truth annotation file (TSV or PKL format)",
+    )
+
+    parser.add_argument(
+        "--background",
+        "-b",
+        required=True,
+        help="Path to background annotation file (PKL format)",
+    )
+
+    parser.add_argument(
+        "--ontology",
+        "-go",
+        dest="go",
+        default=None,
+        help="Path to OBO ontology file. If empty, uses ./data/go.obo",
+    )
+
+    parser.add_argument(
+        "--output",
+        "-o",
+        dest="output_path",
+        default=None,
+        help="Output directory for evaluation results. If not specified, will be derived from predictions path.",
+    )
+
+    parser.add_argument(
+        "--metrics",
+        "-m",
+        default="0,1,2,3,4,5",
+        help="Comma-separated list of metric indices: 0=F_max, 1=Smin, 2=Aupr, 3=ICAupr, 4=DPAupr, 5=threshold. Default: 0,1,2,3,4,5",
+    )
+
+    parser.add_argument(
+        "--subontology",
+        "-s",
+        default=None,
+        help="Subontology to evaluate (BPO, CCO, MFO). If not provided, inferred from prediction filename.",
+    )
+
+    if argv is None:
+        return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 __all__ = [
     "fmax",
-    "aupr",
     "ROOT_GO_TERMS",
     "compute_performance",
-    "compute_performance_deepgoplus",
+    "run_beprof_evaluation",
+    "gt_convert",
+    "convert_predictions",
+    "derive_output_dir_from_predictions",
     "read_pkl",
     "save_pkl",
+    "Ontology",
 ]
 
 # Re-export constants for backwards compatibility
 ROOT_GO_TERMS = GO_ROOT_TERMS
+
+
+def gt_convert(gt_tsv):
+    """Convert ground truth TSV file to pickle format for BEPROF evaluation.
+
+    Args:
+        gt_tsv: Path to ground truth TSV file with columns: EntryID, term
+
+    Returns:
+        Path to the generated pickle file
+    """
+    # Extract the ontology type (BPO, CCO, MFO) from the filename
+    base_name = os.path.basename(gt_tsv)
+    ontology_type = base_name.split("_")[1]  # Extract BPO, CCO, or MFO
+    ontology_mapping = {"BPO": "all_bp", "CCO": "all_cc", "MFO": "all_mf"}
+    ontology_key = ontology_mapping[ontology_type]
+
+    # Output filename: same as input but with .pkl extension
+    gt_pkl = os.path.splitext(gt_tsv)[0] + ".pkl"
+
+    logger.info(f"Converting {base_name} to pickle format...")
+
+    # Read the input file
+    df = pd.read_csv(gt_tsv, sep="\t")
+    df["term"] = df["term"].str.split("; ")
+    df = df.explode("term")
+
+    # Build the nested dictionary for pickling
+    protein_go_terms = defaultdict(
+        lambda: {"all_bp": set(), "all_cc": set(), "all_mf": set()}
+    )
+    for _, row in df.iterrows():
+        protein_id = row["EntryID"]
+        term_id = row["term"]
+        protein_go_terms[protein_id][ontology_key].add(term_id)
+
+    protein_go_terms_dict = dict(protein_go_terms)
+
+    # Save to pickle file
+    with open(gt_pkl, "wb") as f:
+        pkl.dump(protein_go_terms_dict, f)
+    logger.info(f"Saved pickle file: {gt_pkl}")
+
+    return gt_pkl
+
+
+def convert_predictions(pred_file, subontology):
+    """Convert a TSV prediction file to pickle format for BEPROF evaluation.
+
+    Args:
+        pred_file: Path to prediction TSV file with columns: target_ID, term_ID, score
+        subontology: Subontology type (BPO, CCO, MFO)
+
+    Returns:
+        Dictionary with protein predictions in BEPROF format
+    """
+    subontology = subontology[:2].lower()
+    df = pd.read_csv(pred_file, sep="\t")
+    # Split term column by '; ' and explode
+    df["term_ID"] = df["term_ID"].str.split("; ")
+    df = df.explode("term_ID")
+    pred_dict = {}
+    for prot, group in tqdm.tqdm(df.groupby("target_ID"), desc="Converting predictions"):
+        pred_dict[prot] = {
+            f"{subontology}": dict(zip(group["term_ID"], group["score"]))
+        }
+    return pred_dict
+
+
+def derive_output_dir_from_predictions(predictions_file, subontology=None, split=None):
+    """Derive output directory from predictions file path.
+
+    Args:
+        predictions_file: Path to the predictions file (TSV or PKL)
+        subontology: Optional subontology (MFO, BPO, CCO) - inferred from filename if not provided
+        split: Optional data split (train, val, test) - inferred from filename if not provided
+
+    Returns:
+        str: Path to output directory for BEPROF evaluation results
+    """
+    predictions_path = os.path.abspath(predictions_file)
+    predictions_dir = os.path.dirname(predictions_path)
+    predictions_filename = os.path.basename(predictions_file)
+
+    # Extract split and subontology from filename if not provided
+    # Expected format: predictions_{split}_{subontology}.tsv or .pkl
+    if split is None or subontology is None:
+        try:
+            parts = predictions_filename.replace(".tsv", "").replace(".pkl", "").split("_")
+            if len(parts) >= 3:
+                if split is None:
+                    split = parts[1]  # e.g., "test"
+                if subontology is None:
+                    subontology = parts[2]  # e.g., "MFO"
+        except (IndexError, AttributeError):
+            # Filename doesn't match expected format, use fallback
+            pass
+
+    # Navigate up from predictions directory to results directory
+    # Structure: {results_dir}/predictions/predictions_{split}_{subontology}.tsv
+    if os.path.basename(predictions_dir) == "predictions":
+        results_dir = os.path.dirname(predictions_dir)
+    else:
+        results_dir = predictions_dir
+
+    if split is not None and subontology is not None:
+        output_dir = os.path.join(
+            results_dir, "evaluation", f"{split}_{subontology}", "beprof-eval"
+        )
+    else:
+        output_dir = os.path.join(results_dir, "evaluation", "beprof-eval")
+
+    return output_dir
 
 
 def fmax(go, targets, scores, idx_goid):
@@ -680,40 +862,160 @@ def generate_result(
     # df.to_csv("{0}/eval_beprof_test_evaluation_results.csv".format(output_path))
 
 
-def main(
-    input_file,
-    output_path,
-    test_data_file,
-    all_protein_information_file,
-    go_file,
-    metrics,
+def run_beprof_evaluation(
+    predictions_file,
+    gt_file,
+    background_file,
+    ontology_file,
+    output_dir,
+    subontology=None,
+    metrics="0,1,2,3,4,5",
 ):
-    with open(test_data_file, "rb") as f:
+    """Run BEPROF evaluation on predictions.
+
+    This function provides a programmatic interface for running BEPROF evaluation,
+    similar to how run_cafa_evaluation works in cafa_evaluation.py.
+
+    Args:
+        predictions_file: Path to prediction file (TSV or PKL format)
+        gt_file: Path to ground truth annotation file (TSV or PKL format)
+        background_file: Path to background annotation file (PKL format)
+        ontology_file: Path to GO ontology file (OBO format)
+        output_dir: Output directory for results
+        subontology: Subontology type (BPO, CCO, MFO). If None, inferred from filename.
+        metrics: Comma-separated list of metric indices (default: "0,1,2,3,4,5")
+
+    Returns:
+        Path to output directory containing evaluation results
+    """
+    # Infer subontology from filename if not provided
+    if subontology is None:
+        base_name = os.path.basename(predictions_file)
+        if "CCO" in base_name:
+            subontology = "CCO"
+        elif "BPO" in base_name:
+            subontology = "BPO"
+        elif "MFO" in base_name:
+            subontology = "MFO"
+        else:
+            raise ValueError(
+                f"Could not infer subontology from filename: {base_name}. "
+                "Please provide subontology parameter."
+            )
+
+    logger.info(f"Running BEPROF evaluation for subontology: {subontology}")
+    logger.info(f"  Predictions: {predictions_file}")
+    logger.info(f"  Ground Truth: {gt_file}")
+    logger.info(f"  Background: {background_file}")
+    logger.info(f"  Ontology: {ontology_file}")
+
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Convert predictions to PKL if TSV
+    if predictions_file.endswith(".tsv"):
+        logger.info("Converting predictions TSV to PKL format...")
+        pred_dict = convert_predictions(predictions_file, subontology)
+        pred_pkl = os.path.join(output_dir, "predictions.pkl")
+        with open(pred_pkl, "wb") as f:
+            pkl.dump(pred_dict, f)
+        predictions_file = pred_pkl
+        logger.info(f"Converted predictions saved to {pred_pkl}")
+
+    # Convert ground truth to PKL if TSV
+    if gt_file.endswith(".tsv"):
+        gt_pkl = os.path.splitext(gt_file)[0] + ".pkl"
+        if not os.path.exists(gt_pkl):
+            logger.info("Converting ground truth TSV to PKL format...")
+            gt_convert(gt_file)
+        gt_file = gt_pkl
+
+    # Parse metrics
+    if isinstance(metrics, str):
+        metrics_list = metrics.strip().split(",")
+    else:
+        metrics_list = metrics
+
+    # Load data
+    logger.info("Loading ground truth and background data...")
+    with open(gt_file, "rb") as f:
         test_data = pkl.load(f)
-    with open(all_protein_information_file, "rb") as f:
+    with open(background_file, "rb") as f:
         all_protein_information = pkl.load(f)
-    print("Test data and all protein information loaded.")
+    logger.info("Test data and all protein information loaded.")
+
+    # Run evaluation
     generate_result(
-        input_file, output_path, go_file, test_data, all_protein_information, metrics
+        predictions_file,
+        output_dir,
+        ontology_file,
+        test_data,
+        all_protein_information,
+        metrics_list,
     )
+
+    logger.info(f"BEPROF evaluation completed. Results saved to: {output_dir}")
+    return output_dir
+
+
+def main(argv=None):
+    """Main entry point for BEPROF evaluation CLI.
+
+    Args:
+        argv: Command line arguments (defaults to sys.argv[1:])
+    """
+    args = parse_args(argv)
+
+    # Determine ontology path
+    if args.go:
+        ontology_file = args.go
+    else:
+        # Default to project's go.obo file
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(script_dir))
+        ontology_file = os.path.join(project_root, "data", "go.obo")
+
+    if not os.path.exists(ontology_file):
+        logger.error(f"Ontology file not found: {ontology_file}")
+        sys.exit(1)
+
+    if not os.path.exists(args.predict):
+        logger.error(f"Predictions file not found: {args.predict}")
+        sys.exit(1)
+
+    if not os.path.exists(args.true):
+        logger.error(f"Ground truth file not found: {args.true}")
+        sys.exit(1)
+
+    if not os.path.exists(args.background):
+        logger.error(f"Background file not found: {args.background}")
+        sys.exit(1)
+
+    # Determine output directory
+    if args.output_path:
+        output_dir = args.output_path
+    else:
+        output_dir = derive_output_dir_from_predictions(
+            args.predict, subontology=args.subontology
+        )
+        logger.info(f"Output directory derived from predictions path: {output_dir}")
+
+    # Run evaluation
+    try:
+        run_beprof_evaluation(
+            predictions_file=args.predict,
+            gt_file=args.true,
+            background_file=args.background,
+            ontology_file=ontology_file,
+            output_dir=output_dir,
+            subontology=args.subontology,
+            metrics=args.metrics,
+        )
+        logger.info("BEPROF evaluation completed successfully!")
+    except Exception as e:
+        logger.error(f"Error during evaluation: {e}")
+        raise
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    input_file = args.predict
-    output_path = args.output_path
-    if not os.path.exists(output_path):
-        os.mkdir(output_path)
-    test_data_file = args.true
-    all_protein_information_file = args.background
-    go_file = args.go
-    metrics = args.metrics
-    metrics = metrics.strip().split(",")
-    main(
-        input_file,
-        output_path,
-        test_data_file,
-        all_protein_information_file,
-        go_file,
-        metrics,
-    )
+    main()
