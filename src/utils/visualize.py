@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import networkx as nx
 import numpy as np
 import torch
@@ -132,7 +133,7 @@ def render_structure_colormap(
         for idx, value in zip(res_idx, scores):
             cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
         cmd.rebuild()
-        cmd.spectrum("b", "rainbow", "prot")
+        cmd.spectrum("b", "blue_white_red", "prot")
         if title:
             cmd.set_title("title", state=0, text=title)
         cmd.set("ray_opaque_background", 0)
@@ -180,6 +181,7 @@ def _plot_protein_network(
     colorbar_label: str,
     filename_suffix: str,
     go_term: Optional[str] = None,
+    uniform_baseline: Optional[float] = None,
 ):
     """Create and save protein network graph."""
     G = nx.Graph()
@@ -189,7 +191,16 @@ def _plot_protein_network(
     src, dst = edge_index[0], edge_index[1]
     for i in range(edge_index.size(1)):
         G.add_edge(int(src[i]), int(dst[i]), color=float(weights[i].item()))
+
+    # 1. Remove isolated nodes
     G.remove_nodes_from(list(nx.isolates(G)))
+
+    # 2. Filter labels to only include nodes remaining in the graph
+    # This is the fix for the traceback error.
+    active_nodes = set(G.nodes())
+    filtered_labels = {
+        idx: label for idx, label in context.labels.items() if idx in active_nodes
+    }
 
     pos = nx.spring_layout(G, seed=RANDOM_SEED)
     nx.draw_networkx_nodes(G, pos, node_color="#d9d9d9")
@@ -197,11 +208,34 @@ def _plot_protein_network(
     edges = None
     if G.number_of_edges():
         edge_colors = [data for (_, _, data) in G.edges(data="color")]
-        edges = nx.draw_networkx_edges(
-            G, pos, edge_color=edge_colors, edge_cmap=plt.cm.viridis
-        )
 
-    nx.draw_networkx_labels(G, pos, labels=context.labels, font_size=9)
+        if uniform_baseline is not None:
+            # Use diverging colormap centered at uniform_baseline
+            vals = np.array(edge_colors)
+            max_deviation = max(
+                abs(vals.max() - uniform_baseline), abs(vals.min() - uniform_baseline)
+            )
+            # Enforce minimum scale to avoid noise amplification
+            scale = max(max_deviation, 0.01)
+
+            vmin = uniform_baseline - scale
+            vmax = uniform_baseline + scale
+
+            edges = nx.draw_networkx_edges(
+                G,
+                pos,
+                edge_color=edge_colors,
+                edge_cmap=plt.cm.coolwarm,
+                edge_vmin=vmin,
+                edge_vmax=vmax,
+            )
+        else:
+            edges = nx.draw_networkx_edges(
+                G, pos, edge_color=edge_colors, edge_cmap=plt.cm.coolwarm
+            )
+
+    # 3. Use the filtered labels for plotting
+    nx.draw_networkx_labels(G, pos, labels=filtered_labels, font_size=9)
     plt.title(title)
 
     if edges is not None:
@@ -251,7 +285,7 @@ def _plot_aa_to_protein_scatter(
             x_positions.numpy(),
             values_sorted.numpy(),
             c=values_sorted.numpy(),
-            cmap=plt.cm.viridis,
+            cmap=plt.cm.coolwarm,
         )
         plt.colorbar(scatter, label=ylabel)
         plt.xlabel("Residue")
@@ -271,6 +305,7 @@ def _plot_aa_to_protein_msa(
     filename_suffix: str,
     go_term: Optional[str] = None,
     window_size: Optional[int] = 3,
+    center_on_uniform: bool = False,
 ):
     """Plot AA→protein scores aligned by MSA."""
     src_local, dst_local = edge_index[0], edge_index[1]
@@ -299,11 +334,21 @@ def _plot_aa_to_protein_msa(
     plt.figure(figsize=(14, 6))
     cmap = plt.cm.get_cmap("tab10")
 
+    if center_on_uniform:
+        plt.axhline(y=0, color="black", linestyle="--", linewidth=1, alpha=0.5)
+
     for idx, (dst_val, aa_to_score) in enumerate(protein_data.items()):
         target_label = context.labels[int(dst_val)]
         is_seed = context.protein_ids[int(dst_val)] == context.root_global
         aligned_seq = aligned_seqs[int(dst_val)]
         offset = offsets[int(dst_val)]
+
+        # Calculate uniform baseline for this sequence if requested
+        baseline = 0.0
+        if center_on_uniform:
+            seq_len = sum(1 for c in aligned_seq if c != "-")
+            if seq_len > 0:
+                baseline = 1.0 / seq_len
 
         x_pos, y_vals = [], []
         residue_idx = 0
@@ -312,7 +357,7 @@ def _plot_aa_to_protein_msa(
                 global_aa_idx = offset + residue_idx
                 if global_aa_idx in aa_to_score:
                     x_pos.append(aligned_pos)
-                    y_vals.append(aa_to_score[global_aa_idx])
+                    y_vals.append(aa_to_score[global_aa_idx] - baseline)
                 residue_idx += 1
             else:
                 x_pos.append(aligned_pos)
@@ -443,6 +488,7 @@ def _plot_attn_seed_vs_neighbor_scatter(
             if len(xs) > 1:
                 try:
                     m, b = np.polyfit(xs, ys, 1)
+                    r = np.corrcoef(xs, ys)[0, 1]
                     x_range = np.array([min(xs), max(xs)])
                     y_range = m * x_range + b
                     plt.plot(
@@ -453,7 +499,7 @@ def _plot_attn_seed_vs_neighbor_scatter(
                         alpha=0.5,
                         linewidth=1.5,
                     )
-                    label_suffix = f" (m={m:.2f})"
+                    label_suffix = f" (R={r:.2f})"
                 except Exception:
                     pass
 
@@ -563,9 +609,10 @@ def plot_protein_attention_msa(
         _mean_attention(attn_weights.detach().cpu()),
         aligned_seqs,
         f"AA-Protein Attention (Layer {layer_idx}, MSA-aligned): {context.root_label}",
-        "Attention Weight",
+        "Normalized Attention Weight",
         f"aa_attention_layer{layer_idx}_msa",
         go_term,
+        center_on_uniform=True,
     )
 
 
@@ -596,7 +643,7 @@ def plot_attn_seed_vs_neighbor_scatter(
         edge_index.detach().cpu(),
         _mean_attention(attn_weights.detach().cpu()),
         aligned_seqs,
-        f"Seed vs Neighbor Attention (Layer {layer_idx}): {context.root_label}",
+        f"Seed vs Neighbor Normalized Attention (Layer {layer_idx}): {context.root_label}",
         f"attn_seed_vs_neighbor_layer{layer_idx}",
         go_term,
     )
@@ -667,6 +714,7 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
 
             # Filter out self-loops for non-seed proteins (seed is at index 0 when batch_size = 1)
             src_idx, dst_idx = edge_index[0], edge_index[1]
+            uniform_baseline = 1.0 / len(dst_idx.unique())
             mask = ~((src_idx == dst_idx) & (src_idx != 0))
             edge_index = edge_index[:, mask]
             attn_values = attn_values[mask]
@@ -680,8 +728,9 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
                 edge_index,
                 attn_values,
                 title,
-                "Attention weight",
+                "Normalized Attention Weight",
                 f"system_attention_layer{layer_idx}_{rel}",
+                uniform_baseline=uniform_baseline,
             )
             plotted = True
 
