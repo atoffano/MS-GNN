@@ -123,7 +123,15 @@ def save_predictions(config, model, loader, device, dataset, split=None):
 
 
 @timeit
-def evaluate(logger, dataset, output_dir, subontology, split, run_cafa_eval=True, run_beprof_eval=True):
+def evaluate(
+    logger,
+    dataset,
+    output_dir,
+    subontology,
+    split,
+    run_cafa_eval=True,
+    run_beprof_eval=True,
+):
     """
     Evaluate the predictions using both CAFA and BeProf evaluation methods.
 
@@ -136,73 +144,77 @@ def evaluate(logger, dataset, output_dir, subontology, split, run_cafa_eval=True
         run_cafa_eval: Whether to run CAFA evaluation (default: True)
         run_beprof_eval: Whether to run BEPROF evaluation (default: True)
     """
-    background_pkl = f"./data/{dataset}/background_{dataset}_{split}.pkl"
-    if os.path.exists(background_pkl):
-        logger.info(f"Using existing background file: {background_pkl}")
-    background_pkl = f"./data/{dataset}/background_{dataset}_{split}.pkl"
-    # If background file does not exist, run background.py to create it
-    if not os.path.exists(background_pkl):
-        logger.info(f"Background file {background_pkl} does not exist. Creating it...")
-        background_cmd = [
-            sys.executable,
-            "src/utils/background.py",
-            "--cco",
-            f"./data/{dataset}/{dataset}_CCO_train_annotations.tsv",
-            "--bpo",
-            f"./data/{dataset}/{dataset}_BPO_train_annotations.tsv",
-            "--mfo",
-            f"./data/{dataset}/{dataset}_MFO_train_annotations.tsv",
-            "--test_cco",
-            f"./data/{dataset}/{dataset}_CCO_{split}_annotations.tsv",
-            "--test_bpo",
-            f"./data/{dataset}/{dataset}_BPO_{split}_annotations.tsv",
-            "--test_mfo",
-            f"./data/{dataset}/{dataset}_MFO_{split}_annotations.tsv",
-            "--output",
-            background_pkl,
-        ]
-        try:
-            subprocess.run(
-                background_cmd,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            logger.info(f"Background file created at {background_pkl}")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to create background file: {e.stderr}")
-            raise e
-    go_obo_file = "./data/go.obo"
-
-    # Check if GT exists in pkl format. If not, convert GT TSV to pkl using gt_convert
-    gt_pkl = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.pkl"
-    gt_tsv = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.tsv"
-    if not os.path.exists(gt_pkl):
-        if os.path.exists(gt_tsv):
-            logger.info(f"Converting Ground Truth TSV {gt_tsv} to pkl format")
-            gt_convert(gt_tsv)
-        else:
-            logger.error(f"Ground Truth TSV file {gt_tsv} does not exist.")
-            raise FileNotFoundError(f"Ground Truth TSV file {gt_tsv} does not exist.")
-
-    # Evaluate predictions
-    pred_file = f"{output_dir}/predictions/predictions_{split}_{subontology}.tsv"
-    pred_pkl = f"{output_dir}/predictions/predictions_{split}_{subontology}.pkl"
-    
-    if not os.path.exists(pred_file):
-        logger.warning(f"Predictions file {pred_file} does not exist.")
-        return
-
-    logger.info(f"Evaluating predictions for {subontology} on {split} split")
-
-    # Convert predictions to pkl for BEPROF evaluation
-    pred_dict = convert_predictions(pred_file, subontology)
-    with open(pred_pkl, "wb") as f:
-        pickle.dump(pred_dict, f)
-    logger.info(f"Converted predictions saved to {pred_pkl}")
-
     # Run BEPROF evaluation
     if run_beprof_eval:
+        background_pkl = f"./data/{dataset}/background_{dataset}_{split}.pkl"
+        if os.path.exists(background_pkl):
+            logger.info(f"Using existing background file: {background_pkl}")
+        background_pkl = f"./data/{dataset}/background_{dataset}_{split}.pkl"
+        # Gets IC values from training set annotations
+        if not os.path.exists(background_pkl):
+            logger.info(
+                f"Background file {background_pkl} does not exist. Creating it..."
+            )
+            background_cmd = [
+                sys.executable,
+                "src/utils/background.py",
+                "--cco",
+                f"./data/{dataset}/{dataset}_CCO_train_annotations.tsv",
+                "--bpo",
+                f"./data/{dataset}/{dataset}_BPO_train_annotations.tsv",
+                "--mfo",
+                f"./data/{dataset}/{dataset}_MFO_train_annotations.tsv",
+                "--test_cco",
+                f"./data/{dataset}/{dataset}_CCO_{split}_annotations.tsv",
+                "--test_bpo",
+                f"./data/{dataset}/{dataset}_BPO_{split}_annotations.tsv",
+                "--test_mfo",
+                f"./data/{dataset}/{dataset}_MFO_{split}_annotations.tsv",
+                "--output",
+                background_pkl,
+            ]
+            try:
+                subprocess.run(
+                    background_cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                logger.info(f"Background file created at {background_pkl}")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to create background file: {e.stderr}")
+                raise e
+        go_obo_file = "./data/go.obo"
+
+        # BEPROF requires ground truth in pkl format
+        gt_pkl = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.pkl"
+        gt_tsv = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.tsv"
+        if not os.path.exists(gt_pkl):
+            if os.path.exists(gt_tsv):
+                logger.info(f"Converting Ground Truth TSV {gt_tsv} to pkl format")
+                gt_convert(gt_tsv)
+            else:
+                logger.error(f"Ground Truth TSV file {gt_tsv} does not exist.")
+                raise FileNotFoundError(
+                    f"Ground Truth TSV file {gt_tsv} does not exist."
+                )
+
+        # Evaluate predictions
+        pred_file = f"{output_dir}/predictions/predictions_{split}_{subontology}.tsv"
+        pred_pkl = f"{output_dir}/predictions/predictions_{split}_{subontology}.pkl"
+
+        if not os.path.exists(pred_file):
+            logger.warning(f"Predictions file {pred_file} does not exist.")
+            return
+
+        logger.info(f"Evaluating predictions for {subontology} on {split} split")
+
+        # Convert predictions to pkl for BEPROF evaluation
+        pred_dict = convert_predictions(pred_file, subontology)
+        with open(pred_pkl, "wb") as f:
+            pickle.dump(pred_dict, f)
+        logger.info(f"Converted predictions saved to {pred_pkl}")
+
         logger.info("Running BEPROF evaluation...")
         beprof_output_dir = f"{output_dir}/evaluation/{split}_{subontology}/beprof-eval"
         try:
@@ -215,7 +227,9 @@ def evaluate(logger, dataset, output_dir, subontology, split, run_cafa_eval=True
                 subontology=subontology,
                 metrics="0,1,2,3,4,5",
             )
-            logger.info(f"BEPROF evaluation completed. Results saved to: {beprof_output_dir}")
+            logger.info(
+                f"BEPROF evaluation completed. Results saved to: {beprof_output_dir}"
+            )
         except Exception as e:
             logger.error(f"BEPROF evaluation failed: {e}")
             raise
@@ -231,7 +245,9 @@ def evaluate(logger, dataset, output_dir, subontology, split, run_cafa_eval=True
                 ontology_file=go_obo_file,
                 output_dir=cafa_output_dir,
             )
-            logger.info(f"CAFA evaluation completed. Results saved to: {cafa_output_dir}")
+            logger.info(
+                f"CAFA evaluation completed. Results saved to: {cafa_output_dir}"
+            )
         except ImportError as e:
             logger.warning(f"CAFA evaluation skipped (cafaeval not installed): {e}")
         except Exception as e:

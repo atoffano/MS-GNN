@@ -189,6 +189,7 @@ def _plot_protein_network(
     src, dst = edge_index[0], edge_index[1]
     for i in range(edge_index.size(1)):
         G.add_edge(int(src[i]), int(dst[i]), color=float(weights[i].item()))
+    G.remove_nodes_from(list(nx.isolates(G)))
 
     pos = nx.spring_layout(G, seed=RANDOM_SEED)
     nx.draw_networkx_nodes(G, pos, node_color="#d9d9d9")
@@ -350,6 +351,139 @@ def _plot_aa_to_protein_msa(
     _save_plot(context, filename_suffix, go_term=go_term)
 
 
+def _plot_attn_seed_vs_neighbor_scatter(
+    context: ProteinPlotContext,
+    edge_index: torch.Tensor,
+    edge_values: torch.Tensor,
+    aligned_seqs: list[str],
+    title: str,
+    filename_suffix: str,
+    go_term: Optional[str] = None,
+):
+    """Scatter plot of Seed Attention vs Neighbor Attention for aligned residues."""
+    src_local, dst_local = edge_index[0], edge_index[1]
+
+    # Map protein index -> (aa_index -> score)
+    protein_data = {}
+    for dst_val in torch.unique(dst_local, sorted=True).tolist():
+        mask = dst_local == dst_val
+        if not torch.any(mask):
+            continue
+        aa_indices = src_local[mask].numpy()
+        values = edge_values[mask].view(-1).numpy()
+        protein_data[dst_val] = dict(zip(map(int, aa_indices), map(float, values)))
+
+    if not protein_data or not aligned_seqs:
+        return
+
+    # Calculate AA offsets per protein (global index of first AA in sequence)
+    offsets = {}
+    cumulative = 0
+    for i, seq in enumerate(aligned_seqs):
+        offsets[i] = cumulative
+        cumulative += sum(1 for c in seq if c != "-")
+
+    # Identify seed
+    seed_local_idx = None
+    for idx, global_id in enumerate(context.protein_ids):
+        if global_id == context.root_global:
+            seed_local_idx = idx
+            break
+
+    if seed_local_idx is None or seed_local_idx not in protein_data:
+        return
+
+    seed_scores_map = protein_data[seed_local_idx]  # global_aa_idx -> score
+    seed_offset = offsets[seed_local_idx]
+    seed_seq = aligned_seqs[seed_local_idx]
+
+    # Map MSA position to seed score
+    msa_pos_to_seed_score = {}
+    residue_idx = 0
+    for msa_pos, char in enumerate(seed_seq):
+        if char != "-":
+            global_aa_idx = seed_offset + residue_idx
+            if global_aa_idx in seed_scores_map:
+                msa_pos_to_seed_score[msa_pos] = seed_scores_map[global_aa_idx]
+            residue_idx += 1
+
+    plt.figure(figsize=(10, 8))
+    cmap = plt.cm.get_cmap("tab10")
+
+    has_points = False
+
+    for idx, (dst_val, neighbor_scores_map) in enumerate(protein_data.items()):
+        if dst_val == seed_local_idx:
+            continue  # Skip seed vs seed
+
+        neighbor_label = context.labels[int(dst_val)]
+        neighbor_seq = aligned_seqs[int(dst_val)]
+        neighbor_offset = offsets[int(dst_val)]
+
+        xs = []  # Seed attn scores
+        ys = []  # Neighbor attn scores
+
+        residue_idx = 0
+        for msa_pos, char in enumerate(neighbor_seq):
+            if char != "-":
+                global_aa_idx = neighbor_offset + residue_idx
+                if (
+                    global_aa_idx in neighbor_scores_map
+                    and msa_pos in msa_pos_to_seed_score
+                ):
+                    xs.append(msa_pos_to_seed_score[msa_pos])
+                    ys.append(neighbor_scores_map[global_aa_idx])
+                residue_idx += 1
+
+        if xs:
+            color = cmap(idx % 10)
+
+            # Add linear regression line
+            label_suffix = ""
+            if len(xs) > 1:
+                try:
+                    m, b = np.polyfit(xs, ys, 1)
+                    x_range = np.array([min(xs), max(xs)])
+                    y_range = m * x_range + b
+                    plt.plot(
+                        x_range,
+                        y_range,
+                        color=color,
+                        linestyle="--",
+                        alpha=0.5,
+                        linewidth=1.5,
+                    )
+                    label_suffix = f" (m={m:.2f})"
+                except Exception:
+                    pass
+
+            plt.scatter(
+                xs,
+                ys,
+                label=f"{neighbor_label}{label_suffix}",
+                alpha=0.6,
+                s=20,
+                color=color,
+            )
+
+            has_points = True
+
+    if not has_points:
+        plt.close()
+        return
+
+    plt.xlabel(f"Seed Attention ({context.root_label})")
+    plt.ylabel("Neighbor Attention")
+    plt.title(title)
+    plt.legend(
+        bbox_to_anchor=(1.05, 1), loc="upper left", borderaxespad=0.0, fontsize=9
+    )
+
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    _save_plot(context, filename_suffix, go_term=go_term)
+
+
 def _perform_msa_from_batch(batch) -> Optional[list[str]]:
     """Perform MSA on batch sequences, returning None on failure."""
     from src.utils.structure_renderer import _perform_msa
@@ -431,6 +565,39 @@ def plot_protein_attention_msa(
         f"AA-Protein Attention (Layer {layer_idx}, MSA-aligned): {context.root_label}",
         "Attention Weight",
         f"aa_attention_layer{layer_idx}_msa",
+        go_term,
+    )
+
+
+@timeit
+def plot_attn_seed_vs_neighbor_scatter(
+    path: str,
+    layer_attention,
+    dataset,
+    batch,
+    layer_idx: int,
+    go_term: Optional[str] = None,
+):
+    """Plot scatter of seed vs neighbor attention for aligned residues."""
+    aligned_seqs = _perform_msa_from_batch(batch)
+    if aligned_seqs is None:
+        return
+
+    context = build_plot_context(path, dataset, batch)
+    key = ("aa", "belongs_to", "protein")
+
+    if layer_attention is None or key not in layer_attention:
+        return
+
+    edge_index, attn_weights = layer_attention[key]
+
+    _plot_attn_seed_vs_neighbor_scatter(
+        context,
+        edge_index.detach().cpu(),
+        _mean_attention(attn_weights.detach().cpu()),
+        aligned_seqs,
+        f"Seed vs Neighbor Attention (Layer {layer_idx}): {context.root_label}",
+        f"attn_seed_vs_neighbor_layer{layer_idx}",
         go_term,
     )
 

@@ -227,7 +227,9 @@ def convert_predictions(pred_file, subontology):
     df["term_ID"] = df["term_ID"].str.split("; ")
     df = df.explode("term_ID")
     pred_dict = {}
-    for prot, group in tqdm.tqdm(df.groupby("target_ID"), desc="Converting predictions"):
+    for prot, group in tqdm.tqdm(
+        df.groupby("target_ID"), desc="Converting predictions"
+    ):
         pred_dict[prot] = {
             f"{subontology}": dict(zip(group["term_ID"], group["score"]))
         }
@@ -253,7 +255,9 @@ def derive_output_dir_from_predictions(predictions_file, subontology=None, split
     # Expected format: predictions_{split}_{subontology}.tsv or .pkl
     if split is None or subontology is None:
         try:
-            parts = predictions_filename.replace(".tsv", "").replace(".pkl", "").split("_")
+            parts = (
+                predictions_filename.replace(".tsv", "").replace(".pkl", "").split("_")
+            )
             if len(parts) >= 3:
                 if split is None:
                     split = parts[1]  # e.g., "test"
@@ -348,21 +352,21 @@ def fmax(go, targets, scores, idx_goid):
             dpp, dpr = np.average(dpp[np.invert(np.isnan(dpp))]), np.average(dpr)
 
         if np.isnan(p):
-            precisions.append(0.0)
+            precisions.append(1.0)
             recalls.append(r)
         else:
             precisions.append(p)
             recalls.append(r)
 
         if np.isnan(icp):
-            icprecisions.append(0.0)
+            icprecisions.append(1.0)
             icrecalls.append(icr)
         else:
             icprecisions.append(icp)
             icrecalls.append(icr)
 
         if np.isnan(dpp):
-            dpprecisions.append(0.0)
+            dpprecisions.append(1.0)
             dprecalls.append(dpr)
         else:
             dpprecisions.append(dpp)
@@ -379,26 +383,6 @@ def fmax(go, targets, scores, idx_goid):
             )
         except ZeroDivisionError:
             pass
-
-    # # Add endpoints when dealing with undefined regions
-    # for rec, prec in [
-    #     (recalls, precisions),
-    #     (icrecalls, icprecisions),
-    #     (dprecalls, dpprecisions),
-    # ]:
-    #     if rec[0] > 0:
-    #         rec = np.concatenate(([0], rec))
-    #         prec = np.concatenate(([1], prec))
-    #     if rec[-1] < 1:
-    #         rec = np.concatenate((rec, [1.0]))
-    #         prec = np.concatenate((prec, [0.0]))
-    #     # Assign back to original variables
-    #     if rec is recalls:
-    #         recalls, precisions = rec, prec
-    #     elif rec is icrecalls:
-    #         icrecalls, icprecisions = rec, prec
-    #     else:
-    #         dprecalls, dpprecisions = rec, prec
 
     return (
         fmax_[0],
@@ -944,6 +928,28 @@ def run_beprof_evaluation(
         all_protein_information = pkl.load(f)
     logger.info("Test data and all protein information loaded.")
 
+    ############### Filter predictions to remove proteins not in ground truth
+    logger.info("Checking for proteins in predictions not in ground truth...")
+    with open(predictions_file, "rb") as f:
+        pred_data = pkl.load(f)
+
+    proteins_to_remove = [p for p in pred_data if p not in test_data]
+    if proteins_to_remove:
+        logger.info(
+            f"Removing {len(proteins_to_remove)} proteins from predictions that are not in ground truth."
+        )
+        for p in proteins_to_remove:
+            del pred_data[p]
+
+        # Save filtered predictions
+        filtered_pred_file = os.path.join(output_dir, "predictions_filtered.pkl")
+        with open(filtered_pred_file, "wb") as f:
+            pkl.dump(pred_data, f)
+        predictions_file = filtered_pred_file
+    else:
+        logger.info("All predicted proteins are present in ground truth.")
+    ###############
+
     # Run evaluation
     generate_result(
         predictions_file,
@@ -1000,7 +1006,6 @@ def main(argv=None):
         )
         logger.info(f"Output directory derived from predictions path: {output_dir}")
 
-    # Run evaluation
     try:
         run_beprof_evaluation(
             predictions_file=args.predict,

@@ -20,6 +20,7 @@ from src.utils.visualize import (
     plot_systemic_attention,
     plot_protein_attention,
     plot_protein_attention_msa,
+    plot_attn_seed_vs_neighbor_scatter,
     ensure_structure,
     analyze_attention_captum_correlation,
     build_plot_context,
@@ -212,7 +213,6 @@ class ExplanationExporter:
 
         logger.info("Loading protein structures...")
         protein_ids = batch["protein"].n_id.detach().cpu().tolist()
-        context = build_plot_context(self.output_dir, self.dataset, batch)
 
         for protein_id in protein_ids:
             uniprot_id = self.dataset.idx_to_protein[protein_id]
@@ -310,6 +310,9 @@ class ExplanationExporter:
             plot_protein_attention_msa(
                 self.output_dir, layer_attention, self.dataset, batch, idx, go_term
             )
+            plot_attn_seed_vs_neighbor_scatter(
+                self.output_dir, layer_attention, self.dataset, batch, idx, go_term
+            )
             export_layer_attention_3d(
                 self.output_dir,
                 self.dataset,
@@ -362,7 +365,9 @@ def create_data_loader(dataset, config, protein_names: list[str]) -> NeighborLoa
     )
 
 
-def process_batch(batch, model, device, exporter, generator, go_mapper, go_terms):
+def process_batch(
+    batch, model, device, exporter, generator, go_mapper, go_terms, threshold=0.5
+):
     """Process a single batch: run inference and generate explanations."""
     batch = batch.to(device)
     preds, attn = model(
@@ -386,7 +391,7 @@ def process_batch(batch, model, device, exporter, generator, go_mapper, go_terms
 
     # Determine leaf terms
     if go_terms == ["predicted"]:
-        leaf_terms = go_mapper.get_leaf_terms_from_predictions(preds[0])
+        leaf_terms = go_mapper.get_leaf_terms_from_predictions(preds[0], threshold)
         if not leaf_terms:
             logger.warning("No leaf terms found in predictions")
             return
@@ -415,6 +420,9 @@ def main():
     parser.add_argument("--proteins", nargs="*", default=None)
     parser.add_argument("--go_terms", nargs="*", default=None)
     parser.add_argument(
+        "--threshold", type=float, default=None
+    )  # Threshold to consider a GO term as predicted when evaluating a specific go term (should match best tau found during validation)
+    parser.add_argument(
         "--captum_method",
         type=str,
         default="IntegratedGradients",
@@ -437,7 +445,14 @@ def main():
     for batch in loader:
         exporter = ExplanationExporter(args.model_path, dataset, go_mapper)
         process_batch(
-            batch, model, device, exporter, generator, go_mapper, args.go_terms
+            batch,
+            model,
+            device,
+            exporter,
+            generator,
+            go_mapper,
+            args.go_terms,
+            threshold=args.threshold,
         )
 
     logger.info(

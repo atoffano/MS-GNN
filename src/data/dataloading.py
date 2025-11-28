@@ -128,8 +128,7 @@ class SwissProtDataset:
                     f"{len(missing)} proteins not found in available protein feature set for split '{split}'."
                 )
 
-        # Remove proteins from val/test if they are also in train
-        # This should only happen if training on the full SwissProt release.
+        # Remove proteins from val/test if training on the full SwissProt release.
         if config["data"]["train_on_swissprot"]:
             for split in ["val", "test"]:
                 splits["train"] = splits["train"] - splits[split]
