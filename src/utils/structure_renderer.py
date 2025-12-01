@@ -72,17 +72,17 @@ def _render_structures(
                 if dataset.uses_entryid
                 else uniprot_id
             )
-            pdb_path = ensure_structure(pdb_id, context.root_dir)
+            pdb_path = ensure_structure(pdb_id, context.seed_dir)
             if structure_cache is not None:
                 structure_cache[uniprot_id] = pdb_path
 
-        # Resolve output path
-        is_root = local_idx == 0
-        base_dir = context.root_dir if is_root else context.neighbor_dir
+        # Resolve output path - Neighbor or seed protein ?
+        is_seed = local_idx == 0
+        base_dir = context.seed_dir if is_seed else context.neighbor_dir
         prefix = (
-            context.root_label
-            if is_root
-            else f"{context.root_label}_{context.labels[local_idx]}"
+            context.seed_label
+            if is_seed
+            else f"{context.seed_label}_{context.labels[local_idx]}"
         )
 
         if go_term:

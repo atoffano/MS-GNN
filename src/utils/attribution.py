@@ -21,9 +21,12 @@ from src.utils.visualize import (
     plot_protein_attention,
     plot_protein_attention_msa,
     plot_attn_seed_vs_neighbor_scatter,
+    plot_merged_systemic_attention,
+    plot_merged_protein_attention,
     ensure_structure,
     analyze_attention_captum_correlation,
     build_plot_context,
+    perform_msa_from_batch,
 )
 from src.utils.structure_renderer import export_captum_3d, export_layer_attention_3d
 from src.utils.helpers import timeit
@@ -205,6 +208,12 @@ class ExplanationExporter:
         self.dataset = dataset
         self.go_mapper = go_mapper
         self.structure_cache: Dict[str, str] = {}
+        self.aligned_seqs = None
+
+    def _ensure_msa(self, batch):
+        """Ensure MSA is computed for the current batch."""
+        if self.aligned_seqs is None:
+            self.aligned_seqs = perform_msa_from_batch(batch)
 
     def _ensure_cache(self, batch):
         """Lazy-load structure cache when first needed."""
@@ -231,12 +240,17 @@ class ExplanationExporter:
     def export_global(self, batch, hetero_explanation, attentions=None):
         """Export global model explanations."""
         self._ensure_cache(batch)
+        self._ensure_msa(batch)
         logger.info("Plotting global explanations...")
 
         plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
         plot_protein_explanation(self.output_dir, hetero_explanation, self.dataset)
         plot_protein_explanation_msa(
-            self.output_dir, hetero_explanation, self.dataset, batch
+            self.output_dir,
+            hetero_explanation,
+            self.dataset,
+            batch,
+            aligned_seqs=self.aligned_seqs,
         )
         export_captum_3d(
             self.output_dir,
@@ -255,6 +269,7 @@ class ExplanationExporter:
     def export_go_term(self, batch, hetero_explanation, go_term: str, attentions=None):
         """Export GO term-specific explanation."""
         self._ensure_cache(batch)
+        self._ensure_msa(batch)
         logger.info(f"Plotting explanations for {go_term}...")
         go_name = self.go_mapper.get_name(go_term)
         title_suffix = f"GO: {go_name}"
@@ -280,6 +295,7 @@ class ExplanationExporter:
             batch,
             title_suffix=title_suffix,
             go_term=go_term,
+            aligned_seqs=self.aligned_seqs,
         )
         export_captum_3d(
             self.output_dir,
@@ -308,10 +324,22 @@ class ExplanationExporter:
                 self.output_dir, layer_attention, self.dataset, batch, idx, go_term
             )
             plot_protein_attention_msa(
-                self.output_dir, layer_attention, self.dataset, batch, idx, go_term
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                go_term,
+                aligned_seqs=self.aligned_seqs,
             )
             plot_attn_seed_vs_neighbor_scatter(
-                self.output_dir, layer_attention, self.dataset, batch, idx, go_term
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                go_term,
+                aligned_seqs=self.aligned_seqs,
             )
             export_layer_attention_3d(
                 self.output_dir,
@@ -322,6 +350,19 @@ class ExplanationExporter:
                 structure_cache=self.structure_cache,
                 go_term=go_term,
             )
+
+        # Export merged attention plots
+        plot_merged_systemic_attention(
+            self.output_dir, attentions, self.dataset, batch, go_term
+        )
+        plot_merged_protein_attention(
+            self.output_dir,
+            attentions,
+            self.dataset,
+            batch,
+            go_term,
+            aligned_seqs=self.aligned_seqs,
+        )
 
 
 def create_data_loader(dataset, config, protein_names: list[str]) -> NeighborLoader:

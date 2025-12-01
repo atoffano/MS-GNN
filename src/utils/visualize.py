@@ -8,8 +8,14 @@ from typing import Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import colorsys
+
+import matplotlib.pyplot as plt
+
+import seaborn as sns
 import networkx as nx
 import numpy as np
+import pandas as pd
 import torch
 
 from src.utils.constants import RANDOM_SEED
@@ -31,9 +37,9 @@ logger = logging.getLogger(__name__)
 class ProteinPlotContext:
     """Context for protein visualization."""
 
-    root_label: str
-    root_global: int
-    root_dir: str
+    seed_label: str
+    seed_global: int
+    seed_dir: str
     neighbor_dir: str
     protein_ids: list[int]
     labels: dict[int, str]
@@ -42,21 +48,21 @@ class ProteinPlotContext:
 def build_plot_context(base_path: str, dataset, batch) -> ProteinPlotContext:
     """Build plotting context from batch."""
     protein_ids = batch["protein"].n_id.detach().cpu().tolist()
-    root_global = int(protein_ids[0])
+    seed_global = int(protein_ids[0])
     labels = {
         idx: dataset.idx_to_protein.get(global_id, str(global_id))
         for idx, global_id in enumerate(protein_ids)
     }
-    root_label = labels[0]
-    root_dir = os.path.join(base_path, "explanations", root_label)
-    neighbor_dir = os.path.join(root_dir, "neighbors")
-    os.makedirs(root_dir, exist_ok=True)
+    seed_label = labels[0]
+    seed_dir = os.path.join(base_path, "explanations", seed_label)
+    neighbor_dir = os.path.join(seed_dir, "neighbors")
+    os.makedirs(seed_dir, exist_ok=True)
     os.makedirs(neighbor_dir, exist_ok=True)
 
     return ProteinPlotContext(
-        root_label=root_label,
-        root_global=root_global,
-        root_dir=root_dir,
+        seed_label=seed_label,
+        seed_global=seed_global,
+        seed_dir=seed_dir,
         neighbor_dir=neighbor_dir,
         protein_ids=protein_ids,
         labels=labels,
@@ -102,6 +108,67 @@ def ensure_structure(uniprot_id: str, out_dir: str) -> str:
     raise FileNotFoundError(f"No structure available for {uniprot_id}")
 
 
+def adjust_colormap(cmap, luminance_factor=1.0, saturation_factor=1.0, n_colors=256):
+    """
+    Adjust the luminance and saturation of a colormap.
+
+    Parameters:
+    -----------
+    cmap : matplotlib.colors.Colormap
+        The input colormap to adjust.
+    luminance_factor : float
+        Factor to scale the luminance (value) of the colors.
+    saturation_factor : float
+        Factor to scale the saturation of the colors.
+    n_colors : int
+        Number of colors in the adjusted colormap.
+
+    Returns:
+    --------
+    new_cmap : matplotlib.colors.LinearSegmentedColormap
+        The adjusted colormap.
+    """
+    # Sample the colormap
+    colors = [cmap(i / (n_colors - 1)) for i in range(n_colors)]
+
+    # Convert RGBA to RGB and adjust luminance and saturation
+    adjusted_colors = []
+    for color in colors:
+        r, g, b = color[:3]  # Ignore alpha channel
+        h, s, v = colorsys.rgb_to_hsv(r, g, b)
+        s = min(1.0, s * saturation_factor)  # Scale saturation
+        v = min(1.0, v * luminance_factor)  # Scale luminance
+        adjusted_colors.append(colorsys.hsv_to_rgb(h, s, v))
+
+    # Create a new colormap
+    new_cmap = mcolors.LinearSegmentedColormap.from_list(
+        "adjusted_cmap", adjusted_colors, N=n_colors
+    )
+    return new_cmap
+
+
+def apply_spectrum(pymol_cmd, selection, data, cmap, n_colors=256):
+    """
+    Generates a custom color ramp based 'jet' cmap and applies it to a PyMOL selection.
+    """
+    cmap = adjust_colormap(cmap, luminance_factor=1, saturation_factor=4)
+    sampled_colors = [cmap(i / (n_colors - 1))[:3] for i in range(n_colors)]
+
+    # Convert to RGB tuples and hex names
+    rgb_colors = [tuple(color) for color in sampled_colors]
+    names = [mcolors.to_hex(color) for color in sampled_colors]
+
+    for name, color in zip(names, rgb_colors):
+        pymol_cmd.set_color(name, list(color))
+    pymol_cmd.spectrum(
+        "b",
+        " ".join(names),
+        selection,
+        minimum=float(np.min(data)),
+        maximum=float(np.max(data)),
+    )
+
+
 def render_structure_colormap(
     pdb_path: str,
     residue_scores: Sequence[Tuple[int, float]],
@@ -110,8 +177,6 @@ def render_structure_colormap(
     title: str | None = None,
 ) -> None:
     """Color a structure by residue scores via PyMOL."""
-    if pymol2 is None:
-        raise RuntimeError("pymol2 not installed")
 
     if not residue_scores:
         logger.warning(f"No residue scores for {pdb_path}, skipping")
@@ -127,23 +192,33 @@ def render_structure_colormap(
     with pymol2.PyMOL() as pymol:
         cmd = pymol.cmd
         cmd.reinitialize()
-        cmd.set("fetch_path", os.path.dirname(pdb_path))
-        cmd.load(pdb_path, "prot")
         cmd.alter("prot", "b=0.0")
-        for idx, value in zip(res_idx, scores):
-            cmd.alter(f"prot and resi {int(idx)}", f"b={float(value)}")
-        cmd.rebuild()
-        cmd.spectrum("b", "blue_white_red", "prot")
+        apply_spectrum(cmd, "prot", scores, cmap=plt.cm.Spectral_r)
+        cmd.load(pdb_path, "prot")
+        cmd.select("alpha_carbon", "prot and name CA")
+        ca_ids = [atom.id for atom in cmd.get_model("prot and name CA").atom]
+
+        if len(ca_ids) != len(scores):
+            logger.warning(
+                f"Number of scores ({len(scores)}) does not match the number of CA atoms ({len(ca_ids)}). Only assigning up to the shorter list."
+            )
+        num_assignments = min(len(ca_ids), len(scores))
+        for i in range(num_assignments):
+            atom_id = ca_ids[i]
+            score = scores[i]
+            cmd.alter(f"prot and name CA and id {atom_id}", f"b={score}")
+        cmd.spectrum("b", selection="prot and name CA")
+
         if title:
             cmd.set_title("title", state=0, text=title)
+        cmd.set("spec_reflect", 0)
+        cmd.set("ray_shadows", 0)
         cmd.set("ray_opaque_background", 0)
         cmd.bg_color("black")
         cmd.orient("prot")
         cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
-        cmd.save(
-            image_path.replace(".png", "_scene.pse")
-        )  # Saves the entire session as a .pse file
-    logger.info(f"Saved structure rendering to {image_path}")
+        cmd.save(image_path.replace(".png", "_scene.pse"))
+        logger.info(f"Saved structure rendering to {image_path}")
 
 
 def _save_plot(
@@ -153,12 +228,12 @@ def _save_plot(
     go_term: Optional[str] = None,
 ):
     """Save current plot to appropriate directory."""
-    is_root = context.protein_ids[local_idx] == context.root_global
-    base_dir = context.root_dir if is_root else context.neighbor_dir
+    is_seed = context.protein_ids[local_idx] == context.seed_global
+    base_dir = context.seed_dir if is_seed else context.neighbor_dir
     prefix = (
-        context.root_label
-        if is_root
-        else f"{context.root_label}_{context.labels[local_idx]}"
+        context.seed_label
+        if is_seed
+        else f"{context.seed_label}_{context.labels[local_idx]}"
     )
 
     if go_term:
@@ -192,14 +267,10 @@ def _plot_protein_network(
     for i in range(edge_index.size(1)):
         G.add_edge(int(src[i]), int(dst[i]), color=float(weights[i].item()))
 
-    # 1. Remove isolated nodes
+    # Remove isolated nodes & associated labels
     G.remove_nodes_from(list(nx.isolates(G)))
-
-    # 2. Filter labels to only include nodes remaining in the graph
-    # This is the fix for the traceback error.
-    active_nodes = set(G.nodes())
     filtered_labels = {
-        idx: label for idx, label in context.labels.items() if idx in active_nodes
+        idx: label for idx, label in context.labels.items() if idx in set(G.nodes())
     }
 
     pos = nx.spring_layout(G, seed=RANDOM_SEED)
@@ -208,33 +279,20 @@ def _plot_protein_network(
     edges = None
     if G.number_of_edges():
         edge_colors = [data for (_, _, data) in G.edges(data="color")]
-
         if uniform_baseline is not None:
-            # Use diverging colormap centered at uniform_baseline
             vals = np.array(edge_colors)
-            max_deviation = max(
-                abs(vals.max() - uniform_baseline), abs(vals.min() - uniform_baseline)
-            )
-            # Enforce minimum scale to avoid noise amplification
-            scale = max(max_deviation, 0.01)
-
-            vmin = uniform_baseline - scale
-            vmax = uniform_baseline + scale
-
             edges = nx.draw_networkx_edges(
                 G,
                 pos,
                 edge_color=edge_colors,
-                edge_cmap=plt.cm.coolwarm,
-                edge_vmin=vmin,
-                edge_vmax=vmax,
+                edge_cmap=plt.cm.Spectral_r,
+                edge_vmin=vals.min(),
+                edge_vmax=vals.max(),
             )
         else:
             edges = nx.draw_networkx_edges(
-                G, pos, edge_color=edge_colors, edge_cmap=plt.cm.coolwarm
+                G, pos, edge_color=edge_colors, edge_cmap=plt.cm.Spectral_r
             )
-
-    # 3. Use the filtered labels for plotting
     nx.draw_networkx_labels(G, pos, labels=filtered_labels, font_size=9)
     plt.title(title)
 
@@ -285,7 +343,7 @@ def _plot_aa_to_protein_scatter(
             x_positions.numpy(),
             values_sorted.numpy(),
             c=values_sorted.numpy(),
-            cmap=plt.cm.coolwarm,
+            cmap=plt.cm.Spectral_r,
         )
         plt.colorbar(scatter, label=ylabel)
         plt.xlabel("Residue")
@@ -339,7 +397,7 @@ def _plot_aa_to_protein_msa(
 
     for idx, (dst_val, aa_to_score) in enumerate(protein_data.items()):
         target_label = context.labels[int(dst_val)]
-        is_seed = context.protein_ids[int(dst_val)] == context.root_global
+        is_seed = context.protein_ids[int(dst_val)] == context.seed_global
         aligned_seq = aligned_seqs[int(dst_val)]
         offset = offsets[int(dst_val)]
 
@@ -431,7 +489,7 @@ def _plot_attn_seed_vs_neighbor_scatter(
     # Identify seed
     seed_local_idx = None
     for idx, global_id in enumerate(context.protein_ids):
-        if global_id == context.root_global:
+        if global_id == context.seed_global:
             seed_local_idx = idx
             break
 
@@ -518,7 +576,7 @@ def _plot_attn_seed_vs_neighbor_scatter(
         plt.close()
         return
 
-    plt.xlabel(f"Seed Attention ({context.root_label})")
+    plt.xlabel(f"Seed Attention ({context.seed_label})")
     plt.ylabel("Neighbor Attention")
     plt.title(title)
     plt.legend(
@@ -530,7 +588,104 @@ def _plot_attn_seed_vs_neighbor_scatter(
     _save_plot(context, filename_suffix, go_term=go_term)
 
 
-def _perform_msa_from_batch(batch) -> Optional[list[str]]:
+def _plot_msa_alignment_violin(
+    context: ProteinPlotContext,
+    edge_index: torch.Tensor,
+    edge_values: torch.Tensor,
+    aligned_seqs: list[str],
+    title: str,
+    filename_suffix: str,
+    go_term: Optional[str] = None,
+):
+    """Violin plot comparing attention of residues aligned to seed vs not aligned."""
+    src_local, dst_local = edge_index[0], edge_index[1]
+
+    # Map protein index -> (aa_index -> score)
+    protein_data = {}
+    for dst_val in torch.unique(dst_local, sorted=True).tolist():
+        mask = dst_local == dst_val
+        if not torch.any(mask):
+            continue
+        aa_indices = src_local[mask].numpy()
+        values = edge_values[mask].view(-1).numpy()
+        protein_data[dst_val] = dict(zip(map(int, aa_indices), map(float, values)))
+
+    if not protein_data or not aligned_seqs:
+        return
+
+    # Identify seed index
+    seed_local_idx = None
+    for idx, global_id in enumerate(context.protein_ids):
+        if global_id == context.seed_global:
+            seed_local_idx = idx
+            break
+
+    if seed_local_idx is None:
+        return
+
+    seed_seq = aligned_seqs[seed_local_idx]
+
+    # Calculate AA offsets
+    offsets = {}
+    cumulative = 0
+    for i, seq in enumerate(aligned_seqs):
+        offsets[i] = cumulative
+        cumulative += sum(1 for c in seq if c != "-")
+
+    data_records = []
+
+    for idx, (dst_val, aa_to_score) in enumerate(protein_data.items()):
+        aligned_seq = aligned_seqs[int(dst_val)]
+        offset = offsets[int(dst_val)]
+
+        # Calculate uniform baseline
+        seq_len = sum(1 for c in aligned_seq if c != "-")
+        baseline = 1.0 / seq_len if seq_len > 0 else 0.0
+
+        residue_idx = 0
+        for msa_pos, char in enumerate(aligned_seq):
+            if char != "-":
+                global_aa_idx = offset + residue_idx
+                if global_aa_idx in aa_to_score:
+                    score = aa_to_score[global_aa_idx] - baseline
+
+                    # Check alignment with seed
+                    is_aligned = seed_seq[msa_pos] != "-"
+
+                    condition = "Aligned to Seed" if is_aligned else "Not Aligned"
+                    data_records.append(
+                        {
+                            "Normalized Attention": score,
+                            "Condition": condition,
+                        }
+                    )
+                residue_idx += 1
+
+    if not data_records:
+        return
+
+    df = pd.DataFrame(data_records)
+
+    if df.empty:
+        return
+
+    plt.figure(figsize=(6, 6))
+    sns.violinplot(
+        data=df,
+        x="Condition",
+        y="Normalized Attention",
+        hue="Condition",
+        inner="quartile",
+        palette="muted",
+        legend=False,
+    )
+    plt.title(title)
+    plt.axhline(y=0, color="black", linestyle="--", linewidth=1, alpha=0.5)
+    plt.tight_layout()
+    _save_plot(context, filename_suffix, go_term=go_term)
+
+
+def perform_msa_from_batch(batch) -> Optional[list[str]]:
     """Perform MSA on batch sequences, returning None on failure."""
     from src.utils.structure_renderer import _perform_msa
 
@@ -557,16 +712,18 @@ def plot_protein_explanation_msa(
     batch,
     title_suffix: Optional[str] = None,
     go_term: Optional[str] = None,
+    aligned_seqs: Optional[list[str]] = None,
 ):
     """Plot amino acid to protein explanation aligned by MSA."""
-    aligned_seqs = _perform_msa_from_batch(batch)
+    if aligned_seqs is None:
+        aligned_seqs = perform_msa_from_batch(batch)
     if aligned_seqs is None:
         return
 
     context = build_plot_context(path, dataset, hetero_explanation.batch)
     key = ("aa", "belongs_to", "protein")
 
-    title = f"AA-Protein Explanation (MSA-aligned): {context.root_label}"
+    title = f"AA-Protein Explanation (MSA-aligned): {context.seed_label}"
     if title_suffix:
         title += f" ({title_suffix})"
 
@@ -589,9 +746,11 @@ def plot_protein_attention_msa(
     batch,
     layer_idx: int,
     go_term: Optional[str] = None,
+    aligned_seqs: Optional[list[str]] = None,
 ):
     """Plot amino acid to protein attention weights aligned by MSA."""
-    aligned_seqs = _perform_msa_from_batch(batch)
+    if aligned_seqs is None:
+        aligned_seqs = perform_msa_from_batch(batch)
     if aligned_seqs is None:
         return
 
@@ -602,17 +761,29 @@ def plot_protein_attention_msa(
         return
 
     edge_index, attn_weights = layer_attention[key]
+    mean_attn = _mean_attention(attn_weights.detach().cpu())
+    edge_index_cpu = edge_index.detach().cpu()
 
     _plot_aa_to_protein_msa(
         context,
-        edge_index.detach().cpu(),
-        _mean_attention(attn_weights.detach().cpu()),
+        edge_index_cpu,
+        mean_attn,
         aligned_seqs,
-        f"AA-Protein Attention (Layer {layer_idx}, MSA-aligned): {context.root_label}",
+        f"AA-Protein Attention (Layer {layer_idx}, MSA-aligned): {context.seed_label}",
         "Normalized Attention Weight",
         f"aa_attention_layer{layer_idx}_msa",
         go_term,
         center_on_uniform=True,
+    )
+
+    _plot_msa_alignment_violin(
+        context,
+        edge_index_cpu,
+        mean_attn,
+        aligned_seqs,
+        f"Aligned vs Unaligned Attention (Layer {layer_idx}): {context.seed_label}",
+        f"aa_attention_layer{layer_idx}_msa_violin",
+        go_term,
     )
 
 
@@ -624,9 +795,11 @@ def plot_attn_seed_vs_neighbor_scatter(
     batch,
     layer_idx: int,
     go_term: Optional[str] = None,
+    aligned_seqs: Optional[list[str]] = None,
 ):
     """Plot scatter of seed vs neighbor attention for aligned residues."""
-    aligned_seqs = _perform_msa_from_batch(batch)
+    if aligned_seqs is None:
+        aligned_seqs = perform_msa_from_batch(batch)
     if aligned_seqs is None:
         return
 
@@ -643,7 +816,7 @@ def plot_attn_seed_vs_neighbor_scatter(
         edge_index.detach().cpu(),
         _mean_attention(attn_weights.detach().cpu()),
         aligned_seqs,
-        f"Seed vs Neighbor Normalized Attention (Layer {layer_idx}): {context.root_label}",
+        f"Seed vs Neighbor Normalized Attention (Layer {layer_idx}): {context.seed_label}",
         f"attn_seed_vs_neighbor_layer{layer_idx}",
         go_term,
     )
@@ -673,7 +846,7 @@ def plot_systemic_explanation(
             edge_index = expl_data.edge_index.detach().cpu()
             edge_mask = expl_data.edge_mask.detach().cpu().view(-1)
 
-            title = f"Protein-Protein Explanation ({rel}): {context.root_label}"
+            title = f"Protein-Protein Explanation ({rel}): {context.seed_label}"
             if title_suffix:
                 title += f" ({title_suffix})"
 
@@ -714,15 +887,17 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
 
             # Filter out self-loops for non-seed proteins (seed is at index 0 when batch_size = 1)
             src_idx, dst_idx = edge_index[0], edge_index[1]
-            uniform_baseline = 1.0 / len(dst_idx.unique())
             mask = ~((src_idx == dst_idx) & (src_idx != 0))
             edge_index = edge_index[:, mask]
             attn_values = attn_values[mask]
 
+            # Baseline: uniform attention
+            uniform_baseline = 1.0 / len(edge_index[1].unique())
+
             if edge_index.numel() == 0:
                 continue
 
-            title = f"Protein-Protein Attention (Layer {layer_idx}, {rel}): {context.root_label}"
+            title = f"Protein-Protein Attention (Layer {layer_idx}, {rel}): {context.seed_label}"
             _plot_protein_network(
                 context,
                 edge_index,
@@ -787,6 +962,154 @@ def plot_protein_attention(
     )
 
 
+@timeit
+def plot_merged_systemic_attention(
+    path: str,
+    attentions: list,
+    dataset,
+    batch,
+    go_term: Optional[str] = None,
+):
+    """Plot merged protein-protein attention graph across all layers."""
+    context = build_plot_context(path, dataset, batch)
+
+    if not attentions:
+        return
+
+    merged_weights = {}  # (src, rel, dst) -> tensor of weights
+    edge_indices = {}  # (src, rel, dst) -> edge_index
+    counts = {}  # (src, rel, dst) -> count
+
+    for layer_attn in attentions:
+        if layer_attn is None:
+            continue
+
+        for edge_type, (edge_index, attn_weights) in layer_attn.items():
+            if not isinstance(edge_type, tuple) or len(edge_type) != 3:
+                continue
+
+            src, rel, dst = edge_type
+            if src == "protein" and dst == "protein":
+                edge_index = edge_index.detach().cpu()
+                weights = _mean_attention(attn_weights).detach().cpu()
+
+                if edge_type not in merged_weights:
+                    merged_weights[edge_type] = weights
+                    edge_indices[edge_type] = edge_index
+                    counts[edge_type] = 1
+                else:
+                    if edge_index.shape == edge_indices[edge_type].shape:
+                        merged_weights[edge_type] += weights
+                        counts[edge_type] += 1
+
+    plotted = False
+    for edge_type, total_weights in merged_weights.items():
+        src, rel, dst = edge_type
+        avg_weights = total_weights / counts[edge_type]
+        edge_index = edge_indices[edge_type]
+
+        # Filter out self-loops for non-seed proteins
+        src_idx, dst_idx = edge_index[0], edge_index[1]
+        mask = ~((src_idx == dst_idx) & (src_idx != 0))
+        edge_index = edge_index[:, mask]
+        avg_weights = avg_weights[mask]
+
+        uniform_baseline = (
+            1.0 / len(edge_index[1].unique())
+            if len(edge_index[1].unique()) > 0
+            else None
+        )
+
+        if edge_index.numel() == 0:
+            continue
+
+        title = f"Merged Protein-Protein Attention ({rel}): {context.seed_label}"
+        _plot_protein_network(
+            context,
+            edge_index,
+            avg_weights,
+            title,
+            "Avg Normalized Attention",
+            f"system_attention_merged_{rel}",
+            go_term,
+            uniform_baseline=uniform_baseline,
+        )
+        plotted = True
+
+    if not plotted:
+        logger.info("No systemic attention found to merge.")
+
+
+@timeit
+def plot_merged_protein_attention(
+    path: str,
+    attentions: list,
+    dataset,
+    batch,
+    go_term: Optional[str] = None,
+    aligned_seqs: Optional[list[str]] = None,
+):
+    """Plot merged amino acid to protein attention weights across all layers."""
+    context = build_plot_context(path, dataset, batch)
+    key = ("aa", "belongs_to", "protein")
+
+    if not attentions:
+        return
+
+    total_weights = None
+    edge_index_ref = None
+    count = 0
+
+    for layer_attn in attentions:
+        if layer_attn is None or key not in layer_attn:
+            continue
+
+        edge_index, attn_weights = layer_attn[key]
+        weights = _mean_attention(attn_weights.detach().cpu())
+        edge_index = edge_index.detach().cpu()
+
+        if total_weights is None:
+            total_weights = weights
+            edge_index_ref = edge_index
+            count = 1
+        else:
+            if weights.shape == total_weights.shape:
+                total_weights += weights
+                count += 1
+
+    if total_weights is None:
+        return
+
+    avg_weights = total_weights / count
+
+    # Scatter plot
+    _plot_aa_to_protein_scatter(
+        context,
+        edge_index_ref,
+        avg_weights,
+        f"Merged AA-Protein Attention: {{protein}}",
+        "Avg Attention weight",
+        "aa_attention_merged",
+        go_term,
+    )
+
+    # MSA plot
+    if aligned_seqs is None:
+        aligned_seqs = perform_msa_from_batch(batch)
+    if aligned_seqs:
+        _plot_aa_to_protein_msa(
+            context,
+            edge_index_ref,
+            avg_weights,
+            aligned_seqs,
+            f"Merged AA-Protein Attention (MSA-aligned): {context.seed_label}",
+            "Avg Normalized Attention",
+            "aa_attention_merged_msa",
+            go_term,
+            center_on_uniform=True,
+        )
+
+
 def analyze_attention_captum_correlation(
     output_dir: str,
     dataset,
@@ -803,7 +1126,7 @@ def analyze_attention_captum_correlation(
     captum_edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
     captum_scores = hetero_explanation[key]["edge_mask"].detach().cpu()
 
-    # Analyze only root protein edges
+    # Analyze only seed protein edges
     seed_mask = captum_edge_index[1] == 0
     captum_edge_index = captum_edge_index[:, seed_mask]
     captum_scores = captum_scores[seed_mask]
@@ -862,8 +1185,8 @@ def analyze_attention_captum_correlation(
     # Plot scatter
     attn_arr, captum_arr = scatter_data
     plot_path = os.path.join(
-        context.root_dir,
-        f"{context.root_label}_attn_layer{layer_to_plot}_captum_scatter.png",
+        context.seed_dir,
+        f"{context.seed_label}_attn_layer{layer_to_plot}_captum_scatter.png",
     )
 
     plt.figure(figsize=(6, 5))
@@ -872,7 +1195,7 @@ def analyze_attention_captum_correlation(
     plt.plot(attn_arr, m * attn_arr + b, color="red")
     plt.xlabel(f"Attention Layer {layer_to_plot}")
     plt.ylabel("Captum Score")
-    plt.title(f"Attention vs Captum (Layer {layer_to_plot}) – {context.root_label}")
+    plt.title(f"Attention vs Captum (Layer {layer_to_plot}) – {context.seed_label}")
     plt.tight_layout()
     plt.savefig(plot_path)
     plt.close()
