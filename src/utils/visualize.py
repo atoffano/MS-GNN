@@ -96,14 +96,14 @@ def ensure_structure(uniprot_id: str, out_dir: str) -> str:
             shutil.copy2(cache_path, pdb_path)
             return pdb_path
 
-    # Download from remote sources
-    if download_pdb(uniprot_id, pdb_path):
-        logger.info(f"Downloaded PDB structure for {uniprot_id} from RCSB")
-        return pdb_path
+    # # Download from remote sources
+    # if download_pdb(uniprot_id, pdb_path):
+    #     logger.info(f"Downloaded PDB structure for {uniprot_id} from RCSB")
+    #     return pdb_path
 
-    if download_alphafold(uniprot_id, pdb_path):
-        logger.info(f"Downloaded PDB structure for {uniprot_id} from AlphaFold")
-        return pdb_path
+    # if download_alphafold(uniprot_id, pdb_path):
+    #     logger.info(f"Downloaded PDB structure for {uniprot_id} from AlphaFold")
+    #     return pdb_path
 
     raise FileNotFoundError(f"No structure available for {uniprot_id}")
 
@@ -576,7 +576,7 @@ def _plot_attn_seed_vs_neighbor_scatter(
         plt.close()
         return
 
-    plt.xlabel(f"Seed Attention ({context.seed_label})")
+    plt.xlabel(f"Protein Attention ({context.seed_label})")
     plt.ylabel("Neighbor Attention")
     plt.title(title)
     plt.legend(
@@ -652,7 +652,9 @@ def _plot_msa_alignment_violin(
                     # Check alignment with seed
                     is_aligned = seed_seq[msa_pos] != "-"
 
-                    condition = "Aligned to Seed" if is_aligned else "Not Aligned"
+                    condition = (
+                        "Aligned to Protein in MSA" if is_aligned else "Not Aligned"
+                    )
                     data_records.append(
                         {
                             "Normalized Attention": score,
@@ -704,7 +706,6 @@ def perform_msa_from_batch(batch) -> Optional[list[str]]:
     return aligned_seqs
 
 
-@timeit
 def plot_protein_explanation_msa(
     path: str,
     hetero_explanation,
@@ -787,7 +788,6 @@ def plot_protein_attention_msa(
     )
 
 
-@timeit
 def plot_attn_seed_vs_neighbor_scatter(
     path: str,
     layer_attention,
@@ -822,7 +822,88 @@ def plot_attn_seed_vs_neighbor_scatter(
     )
 
 
-@timeit
+def plot_attn_stringdb_vs_aligned_scatter(
+    path: str,
+    layer_attention,
+    dataset,
+    batch,
+    layer_idx: int,
+    go_term: Optional[str] = None,
+):
+    """Plot scatter of StringDB vs Aligned attention for common neighbors."""
+    context = build_plot_context(path, dataset, batch)
+
+    # Identify keys
+    stringdb_key = None
+    aligned_key = None
+
+    if layer_attention is None:
+        return
+
+    for key in layer_attention.keys():
+        if not isinstance(key, tuple) or len(key) != 3:
+            continue
+        src, rel, dst = key
+        if src == "protein" and dst == "protein":
+            if "stringdb" in rel:
+                stringdb_key = key
+            elif "aligned" in rel:
+                aligned_key = key
+
+    if not stringdb_key or not aligned_key:
+        return
+
+    # Helper to extract weights for edges pointing to seed (index 0)
+    def get_weights(key):
+        edge_index, weights = layer_attention[key]
+        weights = _mean_attention(weights.detach().cpu())
+        edge_index = edge_index.detach().cpu()
+
+        # Assuming seed is at index 0
+        mask = edge_index[1] == 0
+        neighbors = edge_index[0][mask]
+        w = weights[mask]
+        return {int(n): float(v) for n, v in zip(neighbors, w)}
+
+    w_stringdb = get_weights(stringdb_key)
+    w_aligned = get_weights(aligned_key)
+
+    common = sorted(list(set(w_stringdb.keys()) & set(w_aligned.keys())))
+    if len(common) < 2:
+        return
+
+    x_vals = [w_stringdb[n] for n in common]
+    y_vals = [w_aligned[n] for n in common]
+
+    # Correlation
+    if np.std(x_vals) > 1e-9 and np.std(y_vals) > 1e-9:
+        corr = np.corrcoef(x_vals, y_vals)[0, 1]
+    else:
+        corr = 0.0
+
+    plt.figure(figsize=(6, 6))
+    plt.scatter(x_vals, y_vals, alpha=0.7, c="blue", edgecolors="k")
+
+    # Add trendline
+    if len(x_vals) > 1:
+        try:
+            z = np.polyfit(x_vals, y_vals, 1)
+            p = np.poly1d(z)
+            x_range = np.linspace(min(x_vals), max(x_vals), 100)
+            plt.plot(x_range, p(x_range), "r--", alpha=0.5)
+        except Exception:
+            pass
+
+    plt.xlabel(f"Attention ({stringdb_key[1]})")
+    plt.ylabel(f"Attention ({aligned_key[1]})")
+    plt.title(f"Layer {layer_idx} Attention Correlation\n{context.seed_label}")
+    plt.legend([f"Pearson R = {corr:.3f}"], loc="upper left")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    _save_plot(context, f"attn_stringdb_vs_aligned_layer{layer_idx}", go_term=go_term)
+
+
 def plot_systemic_explanation(
     path, hetero_explanation, dataset, title_suffix=None, go_term=None
 ):
@@ -913,7 +994,6 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
         logger.info(f"No systemic attention found for layer {layer_idx}.")
 
 
-@timeit
 def plot_protein_explanation(
     path: str,
     hetero_explanation,
@@ -962,7 +1042,6 @@ def plot_protein_attention(
     )
 
 
-@timeit
 def plot_merged_systemic_attention(
     path: str,
     attentions: list,
@@ -978,7 +1057,6 @@ def plot_merged_systemic_attention(
 
     merged_weights = {}  # (src, rel, dst) -> tensor of weights
     edge_indices = {}  # (src, rel, dst) -> edge_index
-    counts = {}  # (src, rel, dst) -> count
 
     for layer_attn in attentions:
         if layer_attn is None:
@@ -996,23 +1074,19 @@ def plot_merged_systemic_attention(
                 if edge_type not in merged_weights:
                     merged_weights[edge_type] = weights
                     edge_indices[edge_type] = edge_index
-                    counts[edge_type] = 1
                 else:
                     if edge_index.shape == edge_indices[edge_type].shape:
                         merged_weights[edge_type] += weights
-                        counts[edge_type] += 1
 
     plotted = False
-    for edge_type, total_weights in merged_weights.items():
+    for edge_type, _ in merged_weights.items():
         src, rel, dst = edge_type
-        avg_weights = total_weights / counts[edge_type]
         edge_index = edge_indices[edge_type]
 
         # Filter out self-loops for non-seed proteins
         src_idx, dst_idx = edge_index[0], edge_index[1]
         mask = ~((src_idx == dst_idx) & (src_idx != 0))
         edge_index = edge_index[:, mask]
-        avg_weights = avg_weights[mask]
 
         uniform_baseline = (
             1.0 / len(edge_index[1].unique())
@@ -1027,7 +1101,7 @@ def plot_merged_systemic_attention(
         _plot_protein_network(
             context,
             edge_index,
-            avg_weights,
+            merged_weights[edge_type][mask],
             title,
             "Avg Normalized Attention",
             f"system_attention_merged_{rel}",
@@ -1040,7 +1114,6 @@ def plot_merged_systemic_attention(
         logger.info("No systemic attention found to merge.")
 
 
-@timeit
 def plot_merged_protein_attention(
     path: str,
     attentions: list,

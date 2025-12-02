@@ -21,6 +21,7 @@ from src.utils.visualize import (
     plot_protein_attention,
     plot_protein_attention_msa,
     plot_attn_seed_vs_neighbor_scatter,
+    plot_attn_stringdb_vs_aligned_scatter,
     plot_merged_systemic_attention,
     plot_merged_protein_attention,
     ensure_structure,
@@ -223,7 +224,7 @@ class ExplanationExporter:
         logger.info("Loading protein structures...")
         protein_ids = batch["protein"].n_id.detach().cpu().tolist()
 
-        for protein_id in protein_ids:
+        for protein_id in tqdm.tqdm(protein_ids, desc="Loading structures"):
             uniprot_id = self.dataset.idx_to_protein[protein_id]
             pdb_id = (
                 self.dataset.pid_mapping.get(uniprot_id, uniprot_id)
@@ -340,6 +341,14 @@ class ExplanationExporter:
                 idx,
                 go_term,
                 aligned_seqs=self.aligned_seqs,
+            )
+            plot_attn_stringdb_vs_aligned_scatter(
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                go_term,
             )
             export_layer_attention_3d(
                 self.output_dir,

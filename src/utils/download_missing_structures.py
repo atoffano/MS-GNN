@@ -60,9 +60,8 @@ def resolve_protein_names(dataset, protein_names: list[str]) -> list[str]:
     return proteins
 
 
-def get_neighborhood_proteins(dataset, protein_names: list[str]) -> set[str]:
+def get_neighborhood_proteins(config, dataset, protein_names: list[str]) -> set[str]:
     """Get all proteins in the neighborhood of specified proteins."""
-    # Resolve protein names
     proteins = resolve_protein_names(dataset, protein_names)
 
     # Get protein indices
@@ -81,9 +80,14 @@ def get_neighborhood_proteins(dataset, protein_names: list[str]) -> set[str]:
     mask[protein_ids] = True
 
     # Create neighbor loader to get all proteins in subgraph
+    num_neighbors = {}
+    for edge_type_str, num_samples in config["model"]["sampled_edges"].items():
+        edge_type_tuple = tuple(edge_type_str.split("__"))
+        num_neighbors[edge_type_tuple] = [num_samples]
+
     loader = NeighborLoader(
         dataset.data,
-        num_neighbors={("protein", "aligned_with", "protein"): [-1]},
+        num_neighbors=num_neighbors,
         batch_size=len(protein_ids),
         input_nodes=("protein", mask),
         shuffle=False,
@@ -174,7 +178,7 @@ def main():
 
     # Get all proteins in neighborhood
     logger.info(f"Analyzing neighborhood for {len(args.proteins)} protein(s)...")
-    all_proteins = get_neighborhood_proteins(dataset, args.proteins)
+    all_proteins = get_neighborhood_proteins(config, dataset, args.proteins)
     logger.info(f"Found {len(all_proteins)} total proteins in neighborhood")
 
     # Check which structures are missing

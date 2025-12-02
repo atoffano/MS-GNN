@@ -252,7 +252,6 @@ def evaluate(
             logger.warning(f"CAFA evaluation skipped (cafaeval not installed): {e}")
         except Exception as e:
             logger.error(f"CAFA evaluation failed: {e}")
-            # Don't raise - allow BEPROF to complete even if CAFA fails
 
     logger.info(f"Evaluation completed for {subontology} on {split} split")
 

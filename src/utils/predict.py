@@ -21,7 +21,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def predict_from_directory(results_dir, splits=["test"], device_name="cuda"):
+def predict_from_directory(
+    results_dir, splits=["test"], device_name="cuda", checkpoint_path=None
+):
     """
     Loads model and config from results_dir and generates predictions.
 
@@ -29,8 +31,8 @@ def predict_from_directory(results_dir, splits=["test"], device_name="cuda"):
         results_dir (str): Path to the directory containing cfg.yaml and model checkpoints.
         splits (list or str): Dataset split(s) to predict on ('val', 'test', or both).
         device_name (str): Device to use ('cuda' or 'cpu').
+        checkpoint_path (str, optional): Path to a specific model checkpoint to use.
     """
-    # 1. Load Config
     config_path = os.path.join(results_dir, "cfg.yaml")
     if not os.path.exists(config_path):
         logger.error(f"Config file not found at {config_path}")
@@ -40,51 +42,46 @@ def predict_from_directory(results_dir, splits=["test"], device_name="cuda"):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    # Override results_dir in config to match the input directory
-    # This ensures predictions are saved in the correct place
     config["run"]["results_dir"] = results_dir
 
-    # 2. Setup Device
     device = torch.device(device_name if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    # 3. Load Dataset
     logger.info("Loading dataset...")
-    # The dataset initialization might take some time
     dataset = SwissProtDataset(config)
 
-    # 4. Create Loaders
     logger.info("Creating data loaders...")
     _, val_loader, test_loader = define_loaders(config, dataset)
 
-    # Normalize splits to list
     if isinstance(splits, str):
         splits = [splits]
 
-    # 5. Iterate over subontologies defined in config
     subontologies = config["data"]["subontology"]
     if isinstance(subontologies, str):
         subontologies = [subontologies]
 
     for subontology in subontologies:
         logger.info(f"Processing subontology: {subontology}")
-
-        # Update dataset subontology context
-        # This is crucial for save_predictions to use the correct vocabulary and filename
         dataset.subontology = subontology
 
-        # 6. Initialize Model
-        # We re-initialize or re-load for each subontology to ensure correct state
         model = ProteinGNN(config, dataset)
         model = model.to(device)
 
-        # 7. Load Best Model Weights
-        # Priority: best_model_{subontology}.pth -> best_model.pth -> model.pth
-        model_files = [f"best_model_{subontology}.pth", "best_model.pth", "model.pth"]
+        # If checkpoint_path is specified, use it directly
+        if checkpoint_path is not None:
+            model_files = [checkpoint_path]
+        else:
+            model_files = [
+                f"best_model.pth",
+            ]
 
         checkpoint_loaded = False
         for model_file in model_files:
-            model_path = os.path.join(results_dir, model_file)
+            model_path = (
+                model_file
+                if checkpoint_path is not None
+                else os.path.join(results_dir, model_file)
+            )
             if os.path.exists(model_path):
                 logger.info(f"Loading model from {model_path}")
                 try:
@@ -107,7 +104,6 @@ def predict_from_directory(results_dir, splits=["test"], device_name="cuda"):
             )
             continue
 
-        # 8. Make Predictions for each requested split
         for split in splits:
             if split == "val":
                 loader = val_loader
@@ -150,7 +146,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--device", type=str, default="cuda", help="Device to use (cuda or cpu)."
     )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to a specific model checkpoint to use (optional, default is best model).",
+    )
 
     args = parser.parse_args()
 
-    predict_from_directory(args.input_dir, args.split, args.device)
+    predict_from_directory(args.input_dir, args.split, args.device, args.checkpoint)
