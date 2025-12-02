@@ -146,7 +146,7 @@ class GOTermMapper:
                 target.sum().item(),
             )
         except ValueError as e:
-            logger.error("Failed to create target for %s: %s", leaf_term_id, e)
+            logger.error("Failed to create target for %s: %s", leaf_term_id, str(e))
 
         return target
 

@@ -242,7 +242,7 @@ def render_structure_colormap(
     scores = np.asarray(scores, dtype=np.float32)
 
     os.makedirs(os.path.dirname(image_path), exist_ok=True)
-    logger.debug(f"Rendering structure from {pdb_path}")
+    logger.debug("Rendering structure from %s", pdb_path)
 
     with pymol2.PyMOL() as pymol:
         cmd = pymol.cmd
@@ -255,7 +255,9 @@ def render_structure_colormap(
 
         if len(ca_ids) != len(scores):
             logger.warning(
-                f"Score count ({len(scores)}) != CA atom count ({len(ca_ids)}), using shorter list"
+                "Score count (%d) != CA atom count (%d), using shorter list",
+                len(scores),
+                len(ca_ids),
             )
         num_assignments = min(len(ca_ids), len(scores))
         for i in range(num_assignments):
@@ -273,7 +275,7 @@ def render_structure_colormap(
         cmd.orient("prot")
         cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
         cmd.save(image_path.replace(".png", "_scene.pse"))
-        logger.debug(f"Saved structure rendering to {image_path}")
+        logger.debug("Saved structure rendering to %s", image_path)
 
 
 def _save_plot(

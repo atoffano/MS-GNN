@@ -162,10 +162,14 @@ def _perform_msa(sequences: List[str], labels: List[str]):
         return aligned_seqs
 
     except subprocess.CalledProcessError as e:
-        logger.error("MUSCLE failed (exit code %d): %s", e.returncode, e.stderr)
+        logger.error(
+            "MUSCLE failed (exit code %d): %s",
+            e.returncode,
+            e.stderr or "No error output",
+        )
         return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
     except Exception as e:
-        logger.error("MSA failed: %s (falling back to unaligned sequences)", e)
+        logger.error("MSA failed: %s (falling back to unaligned sequences)", str(e))
         return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
 
     finally:
@@ -219,7 +223,10 @@ def export_captum_3d(
     structure_cache: Optional[Dict[str, str]] = None,
 ) -> None:
     """Export Captum explanations to 3D structure renderings."""
-    logger.debug("Rendering Captum 3D structures%s", f" for {go_term}" if go_term else "")
+    if go_term:
+        logger.debug("Rendering Captum 3D structures for %s", go_term)
+    else:
+        logger.debug("Rendering Captum 3D structures")
     key = ("aa", "belongs_to", "protein")
 
     edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
