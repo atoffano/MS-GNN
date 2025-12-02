@@ -5,6 +5,9 @@ import os
 import shutil
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
+import subprocess
+import tempfile
+
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -16,9 +19,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from src.utils.constants import RANDOM_SEED
+from src.utils.constants import RANDOM_SEED, MUSCLE_EXECUTABLE
 from src.utils.api import download_alphafold, download_pdb
-from src.utils.helpers import timeit
 
 try:
     import pymol2
@@ -29,11 +31,6 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# Common Data Extraction Utilities
-# =============================================================================
 
 
 def build_protein_score_map(
@@ -63,6 +60,80 @@ def build_protein_score_map(
         protein_data[dst_val] = dict(zip(aa_indices, values))
 
     return protein_data
+
+
+def perform_msa(sequences: List[str], labels: List[str]):
+    """Perform multiple sequence alignment using MUSCLE via subprocess.
+
+    Returns:
+        aligned_seqs: List of aligned sequences with gaps
+        alignment_mappings: List of dicts mapping original_aa_idx -> aligned_position for each protein
+    """
+    if len(sequences) < 2:
+        # No alignment needed for single sequence
+        return [sequences[0]], [{i: i for i in range(len(sequences[0]))}]
+
+    logger.info(f"Performing MSA with MUSCLE for {len(sequences)} sequences...")
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".fasta", delete=False
+    ) as input_fasta:
+        input_path = input_fasta.name
+        for label, seq in zip(labels, sequences):
+            input_fasta.write(f">{label}\n{seq}\n")
+
+    output_path = input_path.replace(".fasta", "_aligned.fasta")
+
+    try:
+        cmd = [str(MUSCLE_EXECUTABLE), "-align", input_path, "-output", output_path]
+
+        logger.info(f"Running MUSCLE: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        if result.stderr:
+            logger.debug(f"MUSCLE stderr: {result.stderr}")
+
+        # Parse the alignment manually
+        aligned_seqs = []
+        current_seq = ""
+        current_label = None
+
+        with open(output_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(">"):
+                    if current_label is not None and current_seq:
+                        aligned_seqs.append(current_seq)
+                    current_label = line[1:]
+                    current_seq = ""
+                else:
+                    current_seq += line
+
+            # Add the last sequence
+            if current_label is not None and current_seq:
+                aligned_seqs.append(current_seq)
+
+        if len(aligned_seqs) != len(sequences):
+            raise ValueError(
+                f"Expected {len(sequences)} aligned sequences, got {len(aligned_seqs)}"
+            )
+
+        return aligned_seqs
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"MUSCLE failed with return code {e.returncode}: {e.stderr}")
+        return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
+    except Exception as e:
+        logger.error(f"MSA failed: {e}. Falling back to unaligned sequences.")
+        return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
+
+    finally:
+        try:
+            os.unlink(input_path)
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+        except:
+            pass
 
 
 def calculate_msa_offsets(aligned_seqs: List[str]) -> Dict[int, int]:
@@ -314,7 +385,6 @@ def _plot_protein_network(
     colorbar_label: str,
     filename_suffix: str,
     go_term: Optional[str] = None,
-    uniform_baseline: Optional[float] = None,
 ):
     """Create and save protein network graph."""
     G = nx.Graph()
@@ -337,17 +407,6 @@ def _plot_protein_network(
     edges = None
     if G.number_of_edges():
         edge_colors = [data for (_, _, data) in G.edges(data="color")]
-        # if uniform_baseline is not None:
-        #     vals = np.array(edge_colors)
-        #     edges = nx.draw_networkx_edges(
-        #         G,
-        #         pos,
-        #         edge_color=edge_colors,
-        #         edge_cmap=plt.cm.Spectral_r,
-        #         edge_vmin=vals.min(),
-        #         edge_vmax=vals.max(),
-        #     )
-        # else:
         edges = nx.draw_networkx_edges(
             G, pos, edge_color=edge_colors, edge_cmap=plt.cm.Spectral_r
         )
@@ -378,11 +437,18 @@ def _plot_aa_to_protein_scatter(
     ylabel: str,
     filename_suffix: str,
     go_term: Optional[str] = None,
+    plot_neighbors: bool = True,
 ):
     """Unified scatter plot for AA→protein edges (attention or attribution)."""
     src_local, dst_local = edge_index[0], edge_index[1]
 
     for dst_val in torch.unique(dst_local, sorted=True).tolist():
+        target_idx = int(dst_val)
+        is_seed = context.protein_ids[target_idx] == context.seed_global
+
+        if not plot_neighbors and not is_seed:
+            continue
+
         mask = dst_local == dst_val
         if not torch.any(mask):
             continue
@@ -439,6 +505,7 @@ def _plot_aa_to_protein_msa(
     for idx, (dst_val, aa_to_score) in enumerate(protein_data.items()):
         target_label = context.labels[int(dst_val)]
         is_seed = context.protein_ids[int(dst_val)] == context.seed_global
+
         aligned_seq = aligned_seqs[int(dst_val)]
         offset = offsets[int(dst_val)]
 
@@ -565,8 +632,6 @@ def _plot_attn_seed_vs_neighbor_scatter(
 
         if xs:
             color = cmap(idx % 10)
-
-            # Add linear regression line
             label_suffix = ""
             if len(xs) > 1:
                 try:
@@ -697,7 +762,6 @@ def _plot_msa_alignment_violin(
 
 def perform_msa_from_batch(batch) -> Optional[List[str]]:
     """Perform MSA on batch sequences, returning None on failure."""
-    from src.utils.structure_renderer import _perform_msa
 
     sequences = batch["protein"].sequences
     labels = batch["protein"].protein_ids
@@ -706,7 +770,7 @@ def perform_msa_from_batch(batch) -> Optional[List[str]]:
         logger.warning("Not enough sequences for MSA alignment")
         return None
 
-    aligned_seqs = _perform_msa(sequences, labels)
+    aligned_seqs = perform_msa(sequences, labels)
     if len(aligned_seqs) != len(sequences):
         logger.error("MSA failed")
         return None
@@ -742,7 +806,7 @@ def plot_protein_explanation_msa(
         hetero_explanation[key]["edge_mask"].detach().cpu(),
         aligned_seqs,
         title,
-        "Edge Importance",
+        "Normalized Edge Importance",
         "aa_explanation_msa",
         go_term,
     )
@@ -980,9 +1044,6 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
             edge_index = edge_index[:, mask]
             attn_values = attn_values[mask]
 
-            # Baseline: uniform attention
-            uniform_baseline = 1.0 / len(edge_index[1].unique())
-
             if edge_index.numel() == 0:
                 continue
 
@@ -992,9 +1053,8 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
                 edge_index,
                 attn_values,
                 title,
-                "Normalized Attention Weight",
+                "Attention Weight",
                 f"system_attention_layer{layer_idx}_{rel}",
-                uniform_baseline=uniform_baseline,
             )
             plotted = True
 
@@ -1008,6 +1068,7 @@ def plot_protein_explanation(
     dataset,
     title_suffix: Optional[str] = None,
     go_term: Optional[str] = None,
+    plot_neighbors: bool = True,
 ):
     """Plot amino acid to protein explanation."""
     context = build_plot_context(path, dataset, hetero_explanation.batch)
@@ -1025,11 +1086,18 @@ def plot_protein_explanation(
         "Edge Importance",
         "aa_explanation",
         go_term,
+        plot_neighbors=plot_neighbors,
     )
 
 
 def plot_protein_attention(
-    path, layer_attention, dataset, batch, layer_idx, go_term=None
+    path: str,
+    layer_attention,
+    dataset,
+    batch,
+    layer_idx: int,
+    go_term: Optional[str] = None,
+    plot_neighbors: bool = True,
 ):
     """Plot amino acid to protein attention weights."""
     context = build_plot_context(path, dataset, batch)
@@ -1047,6 +1115,7 @@ def plot_protein_attention(
         "Attention weight",
         f"aa_attention_layer{layer_idx}",
         go_term,
+        plot_neighbors=plot_neighbors,
     )
 
 
@@ -1099,12 +1168,6 @@ def plot_merged_systemic_attention(
         mask = ~((src_idx == dst_idx) & (src_idx != 0))
         edge_index = edge_index[:, mask]
 
-        uniform_baseline = (
-            1.0 / len(edge_index[1].unique())
-            if len(edge_index[1].unique()) > 0
-            else None
-        )
-
         if edge_index.numel() == 0:
             continue
 
@@ -1117,7 +1180,6 @@ def plot_merged_systemic_attention(
             "Avg Normalized Attention",
             f"system_attention_merged_{rel}",
             go_term,
-            uniform_baseline=uniform_baseline,
         )
         plotted = True
 
@@ -1132,6 +1194,7 @@ def plot_merged_protein_attention(
     batch,
     go_term: Optional[str] = None,
     aligned_seqs: Optional[List[str]] = None,
+    plot_neighbors: bool = True,
 ):
     """Plot merged amino acid to protein attention weights across all layers."""
     context = build_plot_context(path, dataset, batch)
@@ -1175,6 +1238,7 @@ def plot_merged_protein_attention(
         "Avg Attention weight",
         "aa_attention_merged",
         go_term,
+        plot_neighbors=plot_neighbors,
     )
 
     # MSA plot
@@ -1187,7 +1251,7 @@ def plot_merged_protein_attention(
             avg_weights,
             aligned_seqs,
             f"Merged AA-Protein Attention (MSA-aligned): {context.seed_label}",
-            "Avg Normalized Attention",
+            "Layer-Averaged Normalized Attention",
             "aa_attention_merged_msa",
             go_term,
             center_on_uniform=True,
@@ -1256,30 +1320,27 @@ def analyze_attention_captum_correlation(
         else:
             corr_val = float(np.corrcoef(attn_arr, captum_arr)[0, 1])
 
-        logger.info(
-            f"Pearson correlation (layer {layer_idx} vs Captum): {corr_val:.4f}"
-        )
-
         if layer_idx == layer_to_plot:
-            scatter_data = (attn_arr, captum_arr)
+            scatter_data = (attn_arr, captum_arr, corr_val)
 
     if scatter_data is None:
         return
 
     # Plot scatter
-    attn_arr, captum_arr = scatter_data
+    attn_arr, captum_arr, corr_val = scatter_data
     plot_path = os.path.join(
         context.seed_dir,
         f"{context.seed_label}_attn_layer{layer_to_plot}_captum_scatter.png",
     )
 
     plt.figure(figsize=(6, 5))
-    plt.scatter(attn_arr, captum_arr, alpha=0.6)
+    plt.scatter(attn_arr, captum_arr, alpha=0.6, label=f"Pearson R = {corr_val:.3f}")
     m, b = np.polyfit(attn_arr, captum_arr, 1)
     plt.plot(attn_arr, m * attn_arr + b, color="red")
     plt.xlabel(f"Attention Layer {layer_to_plot}")
     plt.ylabel("Captum Score")
     plt.title(f"Attention vs Captum (Layer {layer_to_plot}) – {context.seed_label}")
+    plt.legend()
     plt.tight_layout()
     plt.savefig(plot_path)
     plt.close()

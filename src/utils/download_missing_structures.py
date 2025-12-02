@@ -128,14 +128,14 @@ def download_structure(uniprot_id: str, output_path: str) -> bool:
     """Download structure from RCSB PDB or AlphaFold."""
     logger.info(f"Downloading structure for {uniprot_id}...")
 
-    # Try RCSB PDB first
-    if download_pdb(uniprot_id, output_path):
-        logger.info(f"✓ Downloaded from RCSB PDB: {uniprot_id}")
-        return True
-
     # Try AlphaFold
     if download_alphafold(uniprot_id, output_path):
         logger.info(f"✓ Downloaded from AlphaFold: {uniprot_id}")
+        return True
+
+    # Try RCSB PDB
+    if download_pdb(uniprot_id, output_path):
+        logger.info(f"✓ Downloaded from RCSB PDB: {uniprot_id}")
         return True
 
     logger.error(f"✗ Failed to download structure for {uniprot_id}")

@@ -26,7 +26,6 @@ from src.utils.visualize import (
     plot_merged_protein_attention,
     ensure_structure,
     analyze_attention_captum_correlation,
-    build_plot_context,
     perform_msa_from_batch,
 )
 from src.utils.structure_renderer import export_captum_3d, export_layer_attention_3d
@@ -204,10 +203,17 @@ class ExplanationGenerator:
 class ExplanationExporter:
     """Exports explanations to various formats."""
 
-    def __init__(self, output_dir: str, dataset, go_mapper: GOTermMapper):
+    def __init__(
+        self,
+        output_dir: str,
+        dataset,
+        go_mapper: GOTermMapper,
+        plot_neighbors: bool = False,
+    ):
         self.output_dir = output_dir
         self.dataset = dataset
         self.go_mapper = go_mapper
+        self.plot_neighbors = plot_neighbors
         self.structure_cache: Dict[str, str] = {}
         self.aligned_seqs = None
 
@@ -245,7 +251,12 @@ class ExplanationExporter:
         logger.info("Plotting global explanations...")
 
         plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
-        plot_protein_explanation(self.output_dir, hetero_explanation, self.dataset)
+        plot_protein_explanation(
+            self.output_dir,
+            hetero_explanation,
+            self.dataset,
+            plot_neighbors=self.plot_neighbors,
+        )
         plot_protein_explanation_msa(
             self.output_dir,
             hetero_explanation,
@@ -259,6 +270,7 @@ class ExplanationExporter:
             batch,
             hetero_explanation,
             structure_cache=self.structure_cache,
+            plot_neighbors=self.plot_neighbors,
         )
 
         if attentions:
@@ -288,6 +300,7 @@ class ExplanationExporter:
             self.dataset,
             title_suffix=title_suffix,
             go_term=go_term,
+            plot_neighbors=self.plot_neighbors,
         )
         plot_protein_explanation_msa(
             self.output_dir,
@@ -305,6 +318,7 @@ class ExplanationExporter:
             hetero_explanation,
             go_term=go_term,
             structure_cache=self.structure_cache,
+            plot_neighbors=self.plot_neighbors,
         )
 
         if attentions:
@@ -322,7 +336,13 @@ class ExplanationExporter:
                 )
 
             plot_protein_attention(
-                self.output_dir, layer_attention, self.dataset, batch, idx, go_term
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                go_term,
+                plot_neighbors=self.plot_neighbors,
             )
             plot_protein_attention_msa(
                 self.output_dir,
@@ -333,23 +353,26 @@ class ExplanationExporter:
                 go_term,
                 aligned_seqs=self.aligned_seqs,
             )
-            plot_attn_seed_vs_neighbor_scatter(
-                self.output_dir,
-                layer_attention,
-                self.dataset,
-                batch,
-                idx,
-                go_term,
-                aligned_seqs=self.aligned_seqs,
-            )
-            plot_attn_stringdb_vs_aligned_scatter(
-                self.output_dir,
-                layer_attention,
-                self.dataset,
-                batch,
-                idx,
-                go_term,
-            )
+
+            if self.plot_neighbors:
+                plot_attn_seed_vs_neighbor_scatter(
+                    self.output_dir,
+                    layer_attention,
+                    self.dataset,
+                    batch,
+                    idx,
+                    go_term,
+                    aligned_seqs=self.aligned_seqs,
+                )
+                plot_attn_stringdb_vs_aligned_scatter(
+                    self.output_dir,
+                    layer_attention,
+                    self.dataset,
+                    batch,
+                    idx,
+                    go_term,
+                )
+
             export_layer_attention_3d(
                 self.output_dir,
                 self.dataset,
@@ -358,6 +381,7 @@ class ExplanationExporter:
                 layer_attention,
                 structure_cache=self.structure_cache,
                 go_term=go_term,
+                plot_neighbors=self.plot_neighbors,
             )
 
         # Export merged attention plots
@@ -371,6 +395,7 @@ class ExplanationExporter:
             batch,
             go_term,
             aligned_seqs=self.aligned_seqs,
+            plot_neighbors=self.plot_neighbors,
         )
 
 
@@ -478,6 +503,11 @@ def main():
         default="IntegratedGradients",
         choices=SUPPORTED_CAPTUM_METHODS,
     )
+    parser.add_argument(
+        "--plot_neighbors",
+        action="store_true",
+        help="Generate plots for neighbor proteins",
+    )
 
     args = parser.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -493,7 +523,9 @@ def main():
 
     # Process each batch
     for batch in loader:
-        exporter = ExplanationExporter(args.model_path, dataset, go_mapper)
+        exporter = ExplanationExporter(
+            args.model_path, dataset, go_mapper, plot_neighbors=args.plot_neighbors
+        )
         process_batch(
             batch,
             model,

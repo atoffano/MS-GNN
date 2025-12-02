@@ -3,11 +3,7 @@
 import logging
 import os
 from typing import Dict, List, Optional, Tuple
-import subprocess
-import tempfile
-
 import torch
-from src.utils.constants import MUSCLE_EXECUTABLE
 from src.utils.visualize import (
     build_plot_context,
     build_protein_score_map,
@@ -19,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _protein_scores_to_residue_list(
-    protein_score_map: Dict[int, Dict[int, float]]
+    protein_score_map: Dict[int, Dict[int, float]],
 ) -> Dict[int, List[Tuple[int, float]]]:
     """Convert protein score map to sorted residue lists with 1-based indexing.
 
@@ -35,7 +31,9 @@ def _protein_scores_to_residue_list(
             continue
         # Sort by AA index and convert to 1-based
         sorted_items = sorted(aa_to_score.items(), key=lambda x: x[0])
-        residue_dict[protein_idx] = [(aa_idx + 1, score) for aa_idx, score in sorted_items]
+        residue_dict[protein_idx] = [
+            (aa_idx + 1, score) for aa_idx, score in sorted_items
+        ]
     return residue_dict
 
 
@@ -60,10 +58,16 @@ def _render_structures(
     title_prefix: str,
     structure_cache: Optional[Dict[str, str]] = None,
     go_term: Optional[str] = None,
+    plot_neighbors: bool = True,
 ):
     """Render residue structures with optional caching."""
     for local_idx, residues in residue_scores.items():
         if not residues:
+            continue
+
+        # Check if seed
+        is_seed = context.protein_ids[local_idx] == context.seed_global
+        if not plot_neighbors and not is_seed:
             continue
 
         uniprot_id = dataset.idx_to_protein[protein_ids[local_idx]]
@@ -102,80 +106,6 @@ def _render_structures(
         )
 
 
-def _perform_msa(sequences: List[str], labels: List[str]):
-    """Perform multiple sequence alignment using MUSCLE via subprocess.
-
-    Returns:
-        aligned_seqs: List of aligned sequences with gaps
-        alignment_mappings: List of dicts mapping original_aa_idx -> aligned_position for each protein
-    """
-    if len(sequences) < 2:
-        # No alignment needed for single sequence
-        return [sequences[0]], [{i: i for i in range(len(sequences[0]))}]
-
-    logger.info(f"Performing MSA with MUSCLE for {len(sequences)} sequences...")
-
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".fasta", delete=False
-    ) as input_fasta:
-        input_path = input_fasta.name
-        for label, seq in zip(labels, sequences):
-            input_fasta.write(f">{label}\n{seq}\n")
-
-    output_path = input_path.replace(".fasta", "_aligned.fasta")
-
-    try:
-        cmd = [str(MUSCLE_EXECUTABLE), "-align", input_path, "-output", output_path]
-
-        logger.info(f"Running MUSCLE: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-
-        if result.stderr:
-            logger.debug(f"MUSCLE stderr: {result.stderr}")
-
-        # Parse the alignment manually
-        aligned_seqs = []
-        current_seq = ""
-        current_label = None
-
-        with open(output_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith(">"):
-                    if current_label is not None and current_seq:
-                        aligned_seqs.append(current_seq)
-                    current_label = line[1:]
-                    current_seq = ""
-                else:
-                    current_seq += line
-
-            # Add the last sequence
-            if current_label is not None and current_seq:
-                aligned_seqs.append(current_seq)
-
-        if len(aligned_seqs) != len(sequences):
-            raise ValueError(
-                f"Expected {len(sequences)} aligned sequences, got {len(aligned_seqs)}"
-            )
-
-        return aligned_seqs
-
-    except subprocess.CalledProcessError as e:
-        logger.error(f"MUSCLE failed with return code {e.returncode}: {e.stderr}")
-        return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
-    except Exception as e:
-        logger.error(f"MSA failed: {e}. Falling back to unaligned sequences.")
-        return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
-
-    finally:
-        try:
-            os.unlink(input_path)
-            if os.path.exists(output_path):
-                os.unlink(output_path)
-        except:
-            pass
-
-
 def export_layer_attention_3d(
     output_dir: str,
     dataset,
@@ -184,6 +114,7 @@ def export_layer_attention_3d(
     layer_attention,
     structure_cache: Optional[Dict[str, str]] = None,
     go_term: Optional[str] = None,
+    plot_neighbors: bool = True,
 ) -> None:
     """Export layer attention to 3D structure renderings."""
     key = ("aa", "belongs_to", "protein")
@@ -206,6 +137,7 @@ def export_layer_attention_3d(
         title_prefix=f"Attention L{layer_idx}",
         structure_cache=structure_cache,
         go_term=go_term,
+        plot_neighbors=plot_neighbors,
     )
 
 
@@ -216,6 +148,7 @@ def export_captum_3d(
     hetero_explanation,
     go_term: Optional[str] = None,
     structure_cache: Optional[Dict[str, str]] = None,
+    plot_neighbors: bool = True,
 ) -> None:
     """Export Captum explanations to 3D structure renderings."""
     logger.info("Exporting Captum explanations to 3D renderings...")
@@ -224,9 +157,7 @@ def export_captum_3d(
     edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
     edge_scores = hetero_explanation[key]["edge_mask"].detach().cpu()
 
-    residue_scores = _edge_scores_to_residues(
-        edge_index, edge_scores
-    )
+    residue_scores = _edge_scores_to_residues(edge_index, edge_scores)
 
     context = build_plot_context(output_dir, dataset, batch)
     suffix = f"captum_{go_term.replace(':', '_')}" if go_term else "captum"
@@ -241,4 +172,5 @@ def export_captum_3d(
         title_prefix=title_prefix,
         structure_cache=structure_cache,
         go_term=go_term,
+        plot_neighbors=plot_neighbors,
     )
