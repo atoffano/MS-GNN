@@ -470,7 +470,7 @@ def main():
     parser.add_argument("--proteins", nargs="*", default=None)
     parser.add_argument("--go_terms", nargs="*", default=None)
     parser.add_argument(
-        "--threshold", type=float, default=None
+        "--threshold", type=float, default=0.5
     )  # Threshold to consider a GO term as predicted when evaluating a specific go term (should match best tau found during validation)
     parser.add_argument(
         "--captum_method",

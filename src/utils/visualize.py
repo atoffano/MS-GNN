@@ -279,20 +279,20 @@ def _plot_protein_network(
     edges = None
     if G.number_of_edges():
         edge_colors = [data for (_, _, data) in G.edges(data="color")]
-        if uniform_baseline is not None:
-            vals = np.array(edge_colors)
-            edges = nx.draw_networkx_edges(
-                G,
-                pos,
-                edge_color=edge_colors,
-                edge_cmap=plt.cm.Spectral_r,
-                edge_vmin=vals.min(),
-                edge_vmax=vals.max(),
-            )
-        else:
-            edges = nx.draw_networkx_edges(
-                G, pos, edge_color=edge_colors, edge_cmap=plt.cm.Spectral_r
-            )
+        # if uniform_baseline is not None:
+        #     vals = np.array(edge_colors)
+        #     edges = nx.draw_networkx_edges(
+        #         G,
+        #         pos,
+        #         edge_color=edge_colors,
+        #         edge_cmap=plt.cm.Spectral_r,
+        #         edge_vmin=vals.min(),
+        #         edge_vmax=vals.max(),
+        #     )
+        # else:
+        edges = nx.draw_networkx_edges(
+            G, pos, edge_color=edge_colors, edge_cmap=plt.cm.Spectral_r
+        )
     nx.draw_networkx_labels(G, pos, labels=filtered_labels, font_size=9)
     plt.title(title)
 
@@ -1077,6 +1077,9 @@ def plot_merged_systemic_attention(
                 else:
                     if edge_index.shape == edge_indices[edge_type].shape:
                         merged_weights[edge_type] += weights
+    # Average weights
+    for edge_type in merged_weights.keys():
+        merged_weights[edge_type] /= len(attentions)
 
     plotted = False
     for edge_type, _ in merged_weights.items():
@@ -1097,7 +1100,7 @@ def plot_merged_systemic_attention(
         if edge_index.numel() == 0:
             continue
 
-        title = f"Merged Protein-Protein Attention ({rel}): {context.seed_label}"
+        title = f"Protein-Protein Attention (Merged, {rel}): {context.seed_label}"
         _plot_protein_network(
             context,
             edge_index,
