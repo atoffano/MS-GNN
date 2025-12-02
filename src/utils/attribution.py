@@ -32,21 +32,17 @@ from src.utils.visualize import (
 from src.utils.structure_renderer import export_captum_3d, export_layer_attention_3d
 from src.utils.helpers import timeit
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
 def load_model_and_config(model_path: str, device: torch.device):
     """Load pretrained model, config, and dataset."""
+    logger.info("Loading model and configuration from %s", model_path)
     with open(f"{model_path}/cfg.yaml", "r") as f:
         config = yaml.safe_load(f)
 
-    logger.info("Loading dataset...")
     dataset = SwissProtDataset(config)
 
-    logger.info("Loading model...")
     model = ProteinGNN(config, dataset)
     state_dict = torch.load(
         f"{model_path}/best_model.pth", map_location=device, weights_only=False
@@ -55,7 +51,7 @@ def load_model_and_config(model_path: str, device: torch.device):
     model.load_state_dict(state_dict)
     model = model.to(device).eval()
 
-    logger.info(f"Model loaded and moved to {device}")
+    logger.info("Model loaded successfully on %s", device)
     return config, model, dataset
 
 
@@ -74,7 +70,7 @@ class GOTermMapper:
         go_term_mapping = {}
         for vocab_info in dataset.go_vocab_info.values():
             go_term_mapping.update(vocab_info["go_to_idx"])
-        logger.info(f"Built GO term mapping with {len(go_term_mapping)} terms")
+        logger.debug("Built GO term mapping with %d terms", len(go_term_mapping))
         return go_term_mapping
 
     def get_index(self, go_term: str) -> Optional[int]:
@@ -104,7 +100,6 @@ class GOTermMapper:
     ) -> list[tuple[str, int]]:
         """Get leaf GO terms from model predictions above threshold."""
         predicted_indices = (predictions > threshold).nonzero(as_tuple=True)[0]
-        logger.info(f"Found {len(predicted_indices)} predicted terms above {threshold}")
 
         predicted_terms = [
             self.idx_to_go[idx.item()]
@@ -121,7 +116,12 @@ class GOTermMapper:
             except ValueError:
                 pass
 
-        logger.info(f"Identified {len(leaf_terms)} leaf terms from predictions")
+        logger.debug(
+            "Found %d predicted terms (threshold=%.2f), %d are leaf terms",
+            len(predicted_indices),
+            threshold,
+            len(leaf_terms),
+        )
         return leaf_terms
 
     def get_term_with_ancestors_target(
@@ -139,13 +139,14 @@ class GOTermMapper:
                 if idx is not None:
                     target[idx] = 1
 
-            num_active = target.sum().item()
-            logger.info(
-                f"Created target for {leaf_term_id} ({term.name}): "
-                f"{num_active} active terms"
+            logger.debug(
+                "Target for %s (%s): %d active terms",
+                leaf_term_id,
+                term.name,
+                target.sum().item(),
             )
         except ValueError as e:
-            logger.error(f"Error creating target for {leaf_term_id}: {e}")
+            logger.error("Failed to create target for %s: %s", leaf_term_id, e)
 
         return target
 
@@ -181,17 +182,20 @@ class ExplanationGenerator:
             ),
         )
 
-        logger.info(
-            f"Generating {explanation_type} explanations with {self.captum_method}..."
-        )
-
         kwargs = {"batch": batch}
         if explanation_type == "phenomenon":
             if target is None:
                 raise ValueError("target required for phenomenon explanations")
             kwargs.update({"target": target, "index": None})
-            logger.info(
-                f"Computing attributions with {target.sum().item()} active terms"
+            logger.debug(
+                "Computing %s explanations (%s) with %d active terms",
+                explanation_type,
+                self.captum_method,
+                target.sum().item(),
+            )
+        else:
+            logger.debug(
+                "Computing %s explanations (%s)", explanation_type, self.captum_method
             )
 
         attributions = explainer(batch.x_dict, batch.edge_index_dict, **kwargs)
@@ -221,8 +225,8 @@ class ExplanationExporter:
         if self.structure_cache:
             return
 
-        logger.info("Loading protein structures...")
         protein_ids = batch["protein"].n_id.detach().cpu().tolist()
+        logger.info("Loading %d protein structures...", len(protein_ids))
 
         for protein_id in tqdm.tqdm(protein_ids, desc="Loading structures"):
             uniprot_id = self.dataset.idx_to_protein[protein_id]
@@ -236,13 +240,13 @@ class ExplanationExporter:
                     pdb_id, self.output_dir
                 )
             except FileNotFoundError as e:
-                logger.warning(f"Could not load structure for {uniprot_id}: {e}")
+                logger.warning("Structure not found for %s: %s", uniprot_id, e)
 
     def export_global(self, batch, hetero_explanation, attentions=None):
         """Export global model explanations."""
         self._ensure_cache(batch)
         self._ensure_msa(batch)
-        logger.info("Plotting global explanations...")
+        logger.info("Exporting global explanations...")
 
         plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
         plot_protein_explanation(self.output_dir, hetero_explanation, self.dataset)
@@ -271,8 +275,8 @@ class ExplanationExporter:
         """Export GO term-specific explanation."""
         self._ensure_cache(batch)
         self._ensure_msa(batch)
-        logger.info(f"Plotting explanations for {go_term}...")
         go_name = self.go_mapper.get_name(go_term)
+        logger.info("Exporting explanations for %s (%s)...", go_term, go_name)
         title_suffix = f"GO: {go_name}"
 
         plot_systemic_explanation(
@@ -425,9 +429,7 @@ def process_batch(
     )
 
     # Global explanations
-    logger.info("=" * 60)
-    logger.info("Generating global model explanations...")
-    logger.info("=" * 60)
+    logger.info("Generating global model explanations")
     global_explanation = generator.generate(batch, "model")
     exporter.export_global(batch, global_explanation, attn)
 
@@ -435,24 +437,21 @@ def process_batch(
     if not go_terms:
         return
 
-    logger.info("=" * 60)
-    logger.info("Generating GO term-specific explanations...")
-    logger.info("=" * 60)
+    logger.info("Generating GO term-specific explanations")
 
     # Determine leaf terms
     if go_terms == ["predicted"]:
         leaf_terms = go_mapper.get_leaf_terms_from_predictions(preds[0], threshold)
         if not leaf_terms:
-            logger.warning("No leaf terms found in predictions")
+            logger.warning("No leaf terms found in predictions above threshold %.2f", threshold)
             return
     else:
         leaf_terms = go_mapper.validate_terms(go_terms)
 
-    # Generate per-term explanations
-    for leaf_term_id, _ in tqdm.tqdm(leaf_terms, desc="Attribution per GO leaf term"):
-        go_name = go_mapper.get_name(leaf_term_id)
-        logger.info(f"\n--- Explaining: {leaf_term_id} ({go_name}) and ancestors ---")
+    logger.info("Processing %d GO terms", len(leaf_terms))
 
+    # Generate per-term explanations
+    for leaf_term_id, _ in tqdm.tqdm(leaf_terms, desc="GO term attribution"):
         target = go_mapper.get_term_with_ancestors_target(
             leaf_term_id, preds.size(1)
         ).to(device)
@@ -481,7 +480,7 @@ def main():
 
     args = parser.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
+    logger.info("Starting attribution pipeline on %s", device)
 
     # Load model and dataset
     config, model, dataset = load_model_and_config(args.model_path, device)
@@ -505,9 +504,7 @@ def main():
             threshold=args.threshold,
         )
 
-    logger.info(
-        f"Explanation generation completed! Results saved to: {args.model_path}"
-    )
+    logger.info("Attribution pipeline completed. Results saved to: %s", args.model_path)
 
 
 if __name__ == "__main__":

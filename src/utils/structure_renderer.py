@@ -113,7 +113,7 @@ def _perform_msa(sequences: List[str], labels: List[str]):
         # No alignment needed for single sequence
         return [sequences[0]], [{i: i for i in range(len(sequences[0]))}]
 
-    logger.info(f"Performing MSA with MUSCLE for {len(sequences)} sequences...")
+    logger.info("Performing MSA alignment for %d sequences", len(sequences))
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".fasta", delete=False
@@ -127,11 +127,11 @@ def _perform_msa(sequences: List[str], labels: List[str]):
     try:
         cmd = [str(MUSCLE_EXECUTABLE), "-align", input_path, "-output", output_path]
 
-        logger.info(f"Running MUSCLE: {' '.join(cmd)}")
+        logger.debug("Running MUSCLE: %s", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 
         if result.stderr:
-            logger.debug(f"MUSCLE stderr: {result.stderr}")
+            logger.debug("MUSCLE stderr: %s", result.stderr)
 
         # Parse the alignment manually
         aligned_seqs = []
@@ -158,13 +158,14 @@ def _perform_msa(sequences: List[str], labels: List[str]):
                 f"Expected {len(sequences)} aligned sequences, got {len(aligned_seqs)}"
             )
 
+        logger.debug("MSA completed successfully")
         return aligned_seqs
 
     except subprocess.CalledProcessError as e:
-        logger.error(f"MUSCLE failed with return code {e.returncode}: {e.stderr}")
+        logger.error("MUSCLE failed (exit code %d): %s", e.returncode, e.stderr)
         return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
     except Exception as e:
-        logger.error(f"MSA failed: {e}. Falling back to unaligned sequences.")
+        logger.error("MSA failed: %s (falling back to unaligned sequences)", e)
         return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
 
     finally:
@@ -218,7 +219,7 @@ def export_captum_3d(
     structure_cache: Optional[Dict[str, str]] = None,
 ) -> None:
     """Export Captum explanations to 3D structure renderings."""
-    logger.info("Exporting Captum explanations to 3D renderings...")
+    logger.debug("Rendering Captum 3D structures%s", f" for {go_term}" if go_term else "")
     key = ("aa", "belongs_to", "protein")
 
     edge_index = hetero_explanation[key]["edge_index"].detach().cpu()

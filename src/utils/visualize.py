@@ -25,9 +25,6 @@ try:
 except ImportError:
     pymol2 = None
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
@@ -245,7 +242,7 @@ def render_structure_colormap(
     scores = np.asarray(scores, dtype=np.float32)
 
     os.makedirs(os.path.dirname(image_path), exist_ok=True)
-    logger.info(f"Rendering structure {pdb_path}")
+    logger.debug(f"Rendering structure from {pdb_path}")
 
     with pymol2.PyMOL() as pymol:
         cmd = pymol.cmd
@@ -258,7 +255,7 @@ def render_structure_colormap(
 
         if len(ca_ids) != len(scores):
             logger.warning(
-                f"Number of scores ({len(scores)}) does not match the number of CA atoms ({len(ca_ids)}). Only assigning up to the shorter list."
+                f"Score count ({len(scores)}) != CA atom count ({len(ca_ids)}), using shorter list"
             )
         num_assignments = min(len(ca_ids), len(scores))
         for i in range(num_assignments):
@@ -276,7 +273,7 @@ def render_structure_colormap(
         cmd.orient("prot")
         cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
         cmd.save(image_path.replace(".png", "_scene.pse"))
-        logger.info(f"Saved structure rendering to {image_path}")
+        logger.debug(f"Saved structure rendering to {image_path}")
 
 
 def _save_plot(
@@ -703,12 +700,16 @@ def perform_msa_from_batch(batch) -> Optional[List[str]]:
     labels = batch["protein"].protein_ids
 
     if len(sequences) < 2:
-        logger.warning("Not enough sequences for MSA alignment")
+        logger.debug("Skipping MSA: only %d sequence(s) in batch", len(sequences))
         return None
 
     aligned_seqs = _perform_msa(sequences, labels)
     if len(aligned_seqs) != len(sequences):
-        logger.error("MSA failed")
+        logger.error(
+            "MSA alignment failed: expected %d sequences, got %d",
+            len(sequences),
+            len(aligned_seqs),
+        )
         return None
 
     return aligned_seqs
@@ -951,7 +952,7 @@ def plot_systemic_explanation(
             plotted = True
 
     if not plotted:
-        logger.info("No systemic edges found to plot.")
+        logger.debug("No systemic edges found to plot")
 
 
 def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
@@ -999,7 +1000,7 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
             plotted = True
 
     if not plotted:
-        logger.info(f"No systemic attention found for layer {layer_idx}.")
+        logger.debug("No systemic attention found for layer %d", layer_idx)
 
 
 def plot_protein_explanation(
@@ -1122,7 +1123,7 @@ def plot_merged_systemic_attention(
         plotted = True
 
     if not plotted:
-        logger.info("No systemic attention found to merge.")
+        logger.debug("No systemic attention found to merge")
 
 
 def plot_merged_protein_attention(
@@ -1256,8 +1257,8 @@ def analyze_attention_captum_correlation(
         else:
             corr_val = float(np.corrcoef(attn_arr, captum_arr)[0, 1])
 
-        logger.info(
-            f"Pearson correlation (layer {layer_idx} vs Captum): {corr_val:.4f}"
+        logger.debug(
+            "Attention-Captum correlation (layer %d): R=%.4f", layer_idx, corr_val
         )
 
         if layer_idx == layer_to_plot:
