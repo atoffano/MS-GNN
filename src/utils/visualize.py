@@ -99,8 +99,8 @@ class ProteinPlotContext:
     seed_global: int
     seed_dir: str
     neighbor_dir: str
-    protein_ids: list[int]
-    labels: dict[int, str]
+    protein_ids: List[int]
+    labels: Dict[int, str]
 
 
 def build_plot_context(base_path: str, dataset, batch) -> ProteinPlotContext:
