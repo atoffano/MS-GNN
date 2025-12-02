@@ -58,9 +58,9 @@ def build_protein_score_map(
         mask = dst_local == dst_val
         if not torch.any(mask):
             continue
-        aa_indices = src_local[mask].numpy()
-        values = flat_values[mask].numpy()
-        protein_data[dst_val] = dict(zip(map(int, aa_indices), map(float, values)))
+        aa_indices = src_local[mask].tolist()
+        values = flat_values[mask].tolist()
+        protein_data[dst_val] = dict(zip(aa_indices, values))
 
     return protein_data
 

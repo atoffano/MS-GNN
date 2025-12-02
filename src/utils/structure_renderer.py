@@ -40,7 +40,7 @@ def _protein_scores_to_residue_list(
 
 
 def _edge_scores_to_residues(
-    edge_index: torch.Tensor, scores: torch.Tensor, target_nodes: int
+    edge_index: torch.Tensor, scores: torch.Tensor
 ) -> Dict[int, List[Tuple[int, float]]]:
     """Convert AA→protein edge scores into per-residue lists.
 
@@ -194,7 +194,6 @@ def export_layer_attention_3d(
     residue_scores = _edge_scores_to_residues(
         edge_index.detach().cpu(),
         attn_weights.detach().cpu(),
-        batch["protein"].batch_size,
     )
 
     context = build_plot_context(output_dir, dataset, batch)
@@ -226,7 +225,7 @@ def export_captum_3d(
     edge_scores = hetero_explanation[key]["edge_mask"].detach().cpu()
 
     residue_scores = _edge_scores_to_residues(
-        edge_index, edge_scores, batch["protein"].batch_size
+        edge_index, edge_scores
     )
 
     context = build_plot_context(output_dir, dataset, batch)
