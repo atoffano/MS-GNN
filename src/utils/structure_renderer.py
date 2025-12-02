@@ -10,6 +10,7 @@ import torch
 from src.utils.constants import MUSCLE_EXECUTABLE
 from src.utils.visualize import (
     build_plot_context,
+    build_protein_score_map,
     render_structure_colormap,
     ensure_structure,
 )
@@ -17,33 +18,37 @@ from src.utils.visualize import (
 logger = logging.getLogger(__name__)
 
 
+def _protein_scores_to_residue_list(
+    protein_score_map: Dict[int, Dict[int, float]]
+) -> Dict[int, List[Tuple[int, float]]]:
+    """Convert protein score map to sorted residue lists with 1-based indexing.
+
+    Args:
+        protein_score_map: Dict mapping protein_idx to {aa_idx: score}.
+
+    Returns:
+        Dict mapping protein_idx to [(residue_1_based, score), ...] sorted by residue.
+    """
+    residue_dict = {}
+    for protein_idx, aa_to_score in protein_score_map.items():
+        if not aa_to_score:
+            continue
+        # Sort by AA index and convert to 1-based
+        sorted_items = sorted(aa_to_score.items(), key=lambda x: x[0])
+        residue_dict[protein_idx] = [(aa_idx + 1, score) for aa_idx, score in sorted_items]
+    return residue_dict
+
+
 def _edge_scores_to_residues(
-    edge_index: torch.Tensor, scores: torch.Tensor, target_nodes: int
+    edge_index: torch.Tensor, scores: torch.Tensor
 ) -> Dict[int, List[Tuple[int, float]]]:
     """Convert AA→protein edge scores into per-residue lists.
 
     Returns:
         Dict mapping protein_local_idx to [(residue_1_based, score), ...]
     """
-    residue_dict = {}
-    aa_idx, prot_idx = edge_index[0], edge_index[1]
-    flat_scores = scores.view(-1)
-
-    for protein_local in range(target_nodes):
-        mask = prot_idx == protein_local
-        if not torch.any(mask):
-            continue
-
-        aa_local = aa_idx[mask]
-        vals = flat_scores[mask]
-
-        # Sort by residue index
-        order = torch.argsort(aa_local)
-        residue_dict[protein_local] = list(
-            zip((aa_local[order] + 1).tolist(), vals[order].tolist())
-        )
-
-    return residue_dict
+    protein_score_map = build_protein_score_map(edge_index, scores)
+    return _protein_scores_to_residue_list(protein_score_map)
 
 
 def _render_structures(
@@ -97,7 +102,7 @@ def _render_structures(
         )
 
 
-def _perform_msa(sequences: list[str], labels: list[str]):
+def _perform_msa(sequences: List[str], labels: List[str]):
     """Perform multiple sequence alignment using MUSCLE via subprocess.
 
     Returns:
@@ -189,7 +194,6 @@ def export_layer_attention_3d(
     residue_scores = _edge_scores_to_residues(
         edge_index.detach().cpu(),
         attn_weights.detach().cpu(),
-        batch["protein"].batch_size,
     )
 
     context = build_plot_context(output_dir, dataset, batch)
@@ -221,7 +225,7 @@ def export_captum_3d(
     edge_scores = hetero_explanation[key]["edge_mask"].detach().cpu()
 
     residue_scores = _edge_scores_to_residues(
-        edge_index, edge_scores, batch["protein"].batch_size
+        edge_index, edge_scores
     )
 
     context = build_plot_context(output_dir, dataset, batch)

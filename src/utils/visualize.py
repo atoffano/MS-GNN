@@ -4,13 +4,11 @@ import logging
 import os
 import shutil
 from dataclasses import dataclass
-from typing import Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import colorsys
-
-import matplotlib.pyplot as plt
 
 import seaborn as sns
 import networkx as nx
@@ -33,6 +31,66 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# Common Data Extraction Utilities
+# =============================================================================
+
+
+def build_protein_score_map(
+    edge_index: torch.Tensor, edge_values: torch.Tensor
+) -> Dict[int, Dict[int, float]]:
+    """Convert edge scores to per-protein residue score maps.
+
+    Args:
+        edge_index: Edge index tensor of shape [2, num_edges] where
+                   edge_index[0] are source (AA) indices and
+                   edge_index[1] are destination (protein) indices.
+        edge_values: Score tensor of shape [num_edges] or [num_edges, 1].
+
+    Returns:
+        Dict mapping protein_local_idx to {aa_local_idx: score}.
+    """
+    src_local, dst_local = edge_index[0], edge_index[1]
+    flat_values = edge_values.view(-1)
+
+    protein_data = {}
+    for dst_val in torch.unique(dst_local, sorted=True).tolist():
+        mask = dst_local == dst_val
+        if not torch.any(mask):
+            continue
+        aa_indices = src_local[mask].tolist()
+        values = flat_values[mask].tolist()
+        protein_data[dst_val] = dict(zip(aa_indices, values))
+
+    return protein_data
+
+
+def calculate_msa_offsets(aligned_seqs: List[str]) -> Dict[int, int]:
+    """Calculate cumulative AA offsets for each protein in an MSA.
+
+    The offset for protein i is the total number of non-gap characters
+    in all sequences before it. This maps global AA indices back to
+    their original protein.
+
+    Args:
+        aligned_seqs: List of aligned sequences (may contain gaps '-').
+
+    Returns:
+        Dict mapping protein index to its cumulative offset.
+    """
+    offsets = {}
+    cumulative = 0
+    for i, seq in enumerate(aligned_seqs):
+        offsets[i] = cumulative
+        cumulative += sum(1 for c in seq if c != "-")
+    return offsets
+
+
+def get_sequence_length(aligned_seq: str) -> int:
+    """Get the number of non-gap characters in an aligned sequence."""
+    return sum(1 for c in aligned_seq if c != "-")
+
+
 @dataclass
 class ProteinPlotContext:
     """Context for protein visualization."""
@@ -41,8 +99,8 @@ class ProteinPlotContext:
     seed_global: int
     seed_dir: str
     neighbor_dir: str
-    protein_ids: list[int]
-    labels: dict[int, str]
+    protein_ids: List[int]
+    labels: Dict[int, str]
 
 
 def build_plot_context(base_path: str, dataset, batch) -> ProteinPlotContext:
@@ -357,7 +415,7 @@ def _plot_aa_to_protein_msa(
     context: ProteinPlotContext,
     edge_index: torch.Tensor,
     edge_values: torch.Tensor,
-    aligned_seqs: list[str],
+    aligned_seqs: List[str],
     title: str,
     ylabel: str,
     filename_suffix: str,
@@ -366,29 +424,12 @@ def _plot_aa_to_protein_msa(
     center_on_uniform: bool = False,
 ):
     """Plot AA→protein scores aligned by MSA."""
-    src_local, dst_local = edge_index[0], edge_index[1]
-
-    # Map protein index -> (aa_index -> score)
-    protein_data = {}
-    for dst_val in torch.unique(dst_local, sorted=True).tolist():
-        mask = dst_local == dst_val
-        if not torch.any(mask):
-            continue
-        aa_indices = src_local[mask].numpy()
-        values = edge_values[mask].view(-1).numpy()
-        protein_data[dst_val] = dict(zip(map(int, aa_indices), map(float, values)))
-
+    protein_data = build_protein_score_map(edge_index, edge_values)
     if not protein_data or not aligned_seqs:
         return
 
-    # Calculate AA offsets per protein
-    offsets = {}
-    cumulative = 0
-    for i, seq in enumerate(aligned_seqs):
-        offsets[i] = cumulative
-        cumulative += sum(1 for c in seq if c != "-")
+    offsets = calculate_msa_offsets(aligned_seqs)
 
-    # Plot
     plt.figure(figsize=(14, 6))
     cmap = plt.cm.get_cmap("tab10")
 
@@ -404,7 +445,7 @@ def _plot_aa_to_protein_msa(
         # Calculate uniform baseline for this sequence if requested
         baseline = 0.0
         if center_on_uniform:
-            seq_len = sum(1 for c in aligned_seq if c != "-")
+            seq_len = get_sequence_length(aligned_seq)
             if seq_len > 0:
                 baseline = 1.0 / seq_len
 
@@ -458,33 +499,17 @@ def _plot_attn_seed_vs_neighbor_scatter(
     context: ProteinPlotContext,
     edge_index: torch.Tensor,
     edge_values: torch.Tensor,
-    aligned_seqs: list[str],
+    aligned_seqs: List[str],
     title: str,
     filename_suffix: str,
     go_term: Optional[str] = None,
 ):
     """Scatter plot of Seed Attention vs Neighbor Attention for aligned residues."""
-    src_local, dst_local = edge_index[0], edge_index[1]
-
-    # Map protein index -> (aa_index -> score)
-    protein_data = {}
-    for dst_val in torch.unique(dst_local, sorted=True).tolist():
-        mask = dst_local == dst_val
-        if not torch.any(mask):
-            continue
-        aa_indices = src_local[mask].numpy()
-        values = edge_values[mask].view(-1).numpy()
-        protein_data[dst_val] = dict(zip(map(int, aa_indices), map(float, values)))
-
+    protein_data = build_protein_score_map(edge_index, edge_values)
     if not protein_data or not aligned_seqs:
         return
 
-    # Calculate AA offsets per protein (global index of first AA in sequence)
-    offsets = {}
-    cumulative = 0
-    for i, seq in enumerate(aligned_seqs):
-        offsets[i] = cumulative
-        cumulative += sum(1 for c in seq if c != "-")
+    offsets = calculate_msa_offsets(aligned_seqs)
 
     # Identify seed
     seed_local_idx = None
@@ -592,24 +617,13 @@ def _plot_msa_alignment_violin(
     context: ProteinPlotContext,
     edge_index: torch.Tensor,
     edge_values: torch.Tensor,
-    aligned_seqs: list[str],
+    aligned_seqs: List[str],
     title: str,
     filename_suffix: str,
     go_term: Optional[str] = None,
 ):
     """Violin plot comparing attention of residues aligned to seed vs not aligned."""
-    src_local, dst_local = edge_index[0], edge_index[1]
-
-    # Map protein index -> (aa_index -> score)
-    protein_data = {}
-    for dst_val in torch.unique(dst_local, sorted=True).tolist():
-        mask = dst_local == dst_val
-        if not torch.any(mask):
-            continue
-        aa_indices = src_local[mask].numpy()
-        values = edge_values[mask].view(-1).numpy()
-        protein_data[dst_val] = dict(zip(map(int, aa_indices), map(float, values)))
-
+    protein_data = build_protein_score_map(edge_index, edge_values)
     if not protein_data or not aligned_seqs:
         return
 
@@ -624,13 +638,7 @@ def _plot_msa_alignment_violin(
         return
 
     seed_seq = aligned_seqs[seed_local_idx]
-
-    # Calculate AA offsets
-    offsets = {}
-    cumulative = 0
-    for i, seq in enumerate(aligned_seqs):
-        offsets[i] = cumulative
-        cumulative += sum(1 for c in seq if c != "-")
+    offsets = calculate_msa_offsets(aligned_seqs)
 
     data_records = []
 
@@ -639,7 +647,7 @@ def _plot_msa_alignment_violin(
         offset = offsets[int(dst_val)]
 
         # Calculate uniform baseline
-        seq_len = sum(1 for c in aligned_seq if c != "-")
+        seq_len = get_sequence_length(aligned_seq)
         baseline = 1.0 / seq_len if seq_len > 0 else 0.0
 
         residue_idx = 0
@@ -687,7 +695,7 @@ def _plot_msa_alignment_violin(
     _save_plot(context, filename_suffix, go_term=go_term)
 
 
-def perform_msa_from_batch(batch) -> Optional[list[str]]:
+def perform_msa_from_batch(batch) -> Optional[List[str]]:
     """Perform MSA on batch sequences, returning None on failure."""
     from src.utils.structure_renderer import _perform_msa
 
@@ -713,7 +721,7 @@ def plot_protein_explanation_msa(
     batch,
     title_suffix: Optional[str] = None,
     go_term: Optional[str] = None,
-    aligned_seqs: Optional[list[str]] = None,
+    aligned_seqs: Optional[List[str]] = None,
 ):
     """Plot amino acid to protein explanation aligned by MSA."""
     if aligned_seqs is None:
@@ -747,7 +755,7 @@ def plot_protein_attention_msa(
     batch,
     layer_idx: int,
     go_term: Optional[str] = None,
-    aligned_seqs: Optional[list[str]] = None,
+    aligned_seqs: Optional[List[str]] = None,
 ):
     """Plot amino acid to protein attention weights aligned by MSA."""
     if aligned_seqs is None:
@@ -795,7 +803,7 @@ def plot_attn_seed_vs_neighbor_scatter(
     batch,
     layer_idx: int,
     go_term: Optional[str] = None,
-    aligned_seqs: Optional[list[str]] = None,
+    aligned_seqs: Optional[List[str]] = None,
 ):
     """Plot scatter of seed vs neighbor attention for aligned residues."""
     if aligned_seqs is None:
@@ -1123,7 +1131,7 @@ def plot_merged_protein_attention(
     dataset,
     batch,
     go_term: Optional[str] = None,
-    aligned_seqs: Optional[list[str]] = None,
+    aligned_seqs: Optional[List[str]] = None,
 ):
     """Plot merged amino acid to protein attention weights across all layers."""
     context = build_plot_context(path, dataset, batch)
