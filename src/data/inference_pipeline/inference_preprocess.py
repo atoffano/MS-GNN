@@ -572,7 +572,7 @@ def process_protein(
     # Step 2: Predict structure with ESMFold
     logger.info(f"[{protein_id}] Step 2/5: Predicting structure with ESMFold...")
     pdb_path = output_dir / f"{protein_id}.pdb"
-    
+
     if not args.pdb:
         # Try to get from PDB
         if download_pdb(protein_id, pdb_path):
