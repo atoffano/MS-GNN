@@ -7,34 +7,34 @@ import torch
 from src.utils.visualize import (
     build_plot_context,
     build_protein_score_map,
-    render_structure_colormap,
+    render_scene,
     ensure_structure,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _protein_scores_to_residue_list(
-    protein_score_map: Dict[int, Dict[int, float]],
-) -> Dict[int, List[Tuple[int, float]]]:
-    """Convert protein score map to sorted residue lists with 1-based indexing.
+# def _protein_scores_to_residue_list(
+#     protein_score_map: Dict[int, Dict[int, float]],
+# ) -> Dict[int, List[Tuple[int, float]]]:
+#     """Convert protein score map to sorted residue lists with 1-based indexing.
 
-    Args:
-        protein_score_map: Dict mapping protein_idx to {aa_idx: score}.
+#     Args:
+#         protein_score_map: Dict mapping protein_idx to {aa_idx: score}.
 
-    Returns:
-        Dict mapping protein_idx to [(residue_1_based, score), ...] sorted by residue.
-    """
-    residue_dict = {}
-    for protein_idx, aa_to_score in protein_score_map.items():
-        if not aa_to_score:
-            continue
-        # Sort by AA index and convert to 1-based
-        sorted_items = sorted(aa_to_score.items(), key=lambda x: x[0])
-        residue_dict[protein_idx] = [
-            (aa_idx + 1, score) for aa_idx, score in sorted_items
-        ]
-    return residue_dict
+#     Returns:
+#         Dict mapping protein_idx to [(residue_1_based, score), ...] sorted by residue.
+#     """
+#     residue_dict = {}
+#     for protein_idx, aa_to_score in protein_score_map.items():
+#         if not aa_to_score:
+#             continue
+#         # Sort by AA index and convert to 1-based
+#         sorted_items = sorted(aa_to_score.items(), key=lambda x: x[0])
+#         residue_dict[protein_idx] = [
+#             (aa_idx + 1, score) for aa_idx, score in sorted_items
+#         ]
+#     return residue_dict
 
 
 def _edge_scores_to_residues(
@@ -46,7 +46,13 @@ def _edge_scores_to_residues(
         Dict mapping protein_local_idx to [(residue_1_based, score), ...]
     """
     protein_score_map = build_protein_score_map(edge_index, scores)
-    return _protein_scores_to_residue_list(protein_score_map)
+    residue_dict = {}
+    for protein_idx, aa_to_score in protein_score_map.items():
+        # Convert to 1-based indexing
+        residue_dict[protein_idx] = [
+            (aa_idx + 1, score) for aa_idx, score in aa_to_score.items()
+        ]
+    return residue_dict
 
 
 def _render_structures(
@@ -65,7 +71,7 @@ def _render_structures(
         if not residues:
             continue
 
-        # Check if seed
+        # seed protein or neighbor ?
         is_seed = context.protein_ids[local_idx] == context.seed_global
         if not plot_neighbors and not is_seed:
             continue
@@ -101,7 +107,7 @@ def _render_structures(
             out_dir = base_dir
 
         image_path = f"{out_dir}/{prefix}_{suffix}.png"
-        render_structure_colormap(
+        render_scene(
             pdb_path, residues, image_path, title=f"{uniprot_id} – {title_prefix}"
         )
 

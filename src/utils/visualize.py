@@ -298,7 +298,7 @@ def apply_spectrum(pymol_cmd, selection, data, cmap, n_colors=256):
     )
 
 
-def render_structure_colormap(
+def render_scene(
     pdb_path: str,
     residue_scores: Sequence[Tuple[int, float]],
     image_path: str,
@@ -324,18 +324,17 @@ def render_structure_colormap(
         cmd.alter("prot", "b=0.0")
         apply_spectrum(cmd, "prot", scores, cmap=plt.cm.Spectral_r)
         cmd.load(pdb_path, "prot")
-        cmd.select("alpha_carbon", "prot and name CA")
-        ca_ids = [atom.id for atom in cmd.get_model("prot and name CA").atom]
+        ca_resi = [int(atom.resi) for atom in cmd.get_model("prot and name CA").atom]
 
-        if len(ca_ids) != len(scores):
+        if len(ca_resi) != len(scores):
             logger.warning(
                 f"Number of scores ({len(scores)}) does not match the number of CA atoms ({len(ca_ids)}). Only assigning up to the shorter list."
             )
-        num_assignments = min(len(ca_ids), len(scores))
+        num_assignments = min(len(ca_resi), len(scores))
         for i in range(num_assignments):
-            atom_id = ca_ids[i]
+            atom_id = ca_resi[i]
             score = scores[i]
-            cmd.alter(f"prot and name CA and id {atom_id}", f"b={score}")
+            cmd.alter(f"prot and name CA and resi {atom_id}", f"b={score}")
         cmd.spectrum("b", selection="prot and name CA")
 
         if title:
@@ -420,15 +419,6 @@ def _plot_protein_network(
     _save_plot(context, filename_suffix, go_term=go_term)
 
 
-def _mean_attention(attention_weights: torch.Tensor) -> torch.Tensor:
-    """Average attention weights over all heads."""
-    return (
-        attention_weights.mean(dim=-1)
-        if attention_weights.dim() > 1
-        else attention_weights.view(-1)
-    )
-
-
 def _plot_aa_to_protein_scatter(
     context: ProteinPlotContext,
     edge_index: torch.Tensor,
@@ -439,7 +429,7 @@ def _plot_aa_to_protein_scatter(
     go_term: Optional[str] = None,
     plot_neighbors: bool = True,
 ):
-    """Unified scatter plot for AA→protein edges (attention or attribution)."""
+    """Per-protein scatter plot for AA→protein edges (attention or attribution)."""
     src_local, dst_local = edge_index[0], edge_index[1]
 
     for dst_val in torch.unique(dst_local, sorted=True).tolist():
@@ -453,6 +443,7 @@ def _plot_aa_to_protein_scatter(
         if not torch.any(mask):
             continue
 
+        # Select the right residue nodes and edge values for the currently targeted protein
         aa_indices = src_local[mask]
         values = edge_values[mask].view(-1)
         sort_idx = torch.argsort(aa_indices)
@@ -462,10 +453,10 @@ def _plot_aa_to_protein_scatter(
         target_label = context.labels[target_idx]
 
         plt.figure(figsize=(8, 4))
-        x_positions = torch.arange(len(values_sorted), dtype=torch.float32)
+        x_positions = torch.arange(len(values), dtype=torch.float32)
         scatter = plt.scatter(
             x_positions.numpy(),
-            values_sorted.numpy(),
+            values.numpy(),
             c=values_sorted.numpy(),
             cmap=plt.cm.Spectral_r,
         )
@@ -834,7 +825,7 @@ def plot_protein_attention_msa(
         return
 
     edge_index, attn_weights = layer_attention[key]
-    mean_attn = _mean_attention(attn_weights.detach().cpu())
+    mean_attn = attn_weights.mean(dim=-1).detach().cpu()
     edge_index_cpu = edge_index.detach().cpu()
 
     _plot_aa_to_protein_msa(
@@ -886,7 +877,7 @@ def plot_attn_seed_vs_neighbor_scatter(
     _plot_attn_seed_vs_neighbor_scatter(
         context,
         edge_index.detach().cpu(),
-        _mean_attention(attn_weights.detach().cpu()),
+        attn_weights.mean(dim=-1).detach().cpu(),
         aligned_seqs,
         f"Seed vs Neighbor Normalized Attention (Layer {layer_idx}): {context.seed_label}",
         f"attn_seed_vs_neighbor_layer{layer_idx}",
@@ -928,7 +919,7 @@ def plot_attn_stringdb_vs_aligned_scatter(
     # Helper to extract weights for edges pointing to seed (index 0)
     def get_weights(key):
         edge_index, weights = layer_attention[key]
-        weights = _mean_attention(weights.detach().cpu())
+        weights = weights.mean(dim=-1).detach().cpu()
         edge_index = edge_index.detach().cpu()
 
         # Assuming seed is at index 0
@@ -1036,7 +1027,7 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
             if edge_index.numel() == 0:
                 continue
 
-            attn_values = _mean_attention(attn_weights).detach().cpu()
+            attn_values = attn_weights.mean(dim=-1).detach().cpu()
 
             # Filter out self-loops for non-seed proteins (seed is at index 0 when batch_size = 1)
             src_idx, dst_idx = edge_index[0], edge_index[1]
@@ -1110,7 +1101,7 @@ def plot_protein_attention(
     _plot_aa_to_protein_scatter(
         context,
         edge_index.detach().cpu(),
-        _mean_attention(attn_weights.detach().cpu()),
+        attn_weights.mean(dim=-1).detach().cpu(),
         f"AA-Protein Attention (Layer {layer_idx}): {{protein}}",
         "Attention weight",
         f"aa_attention_layer{layer_idx}",
@@ -1146,7 +1137,7 @@ def plot_merged_systemic_attention(
             src, rel, dst = edge_type
             if src == "protein" and dst == "protein":
                 edge_index = edge_index.detach().cpu()
-                weights = _mean_attention(attn_weights).detach().cpu()
+                weights = attn_weights.mean(dim=-1).detach().cpu()
 
                 if edge_type not in merged_weights:
                     merged_weights[edge_type] = weights
@@ -1212,7 +1203,7 @@ def plot_merged_protein_attention(
             continue
 
         edge_index, attn_weights = layer_attn[key]
-        weights = _mean_attention(attn_weights.detach().cpu())
+        weights = attn_weights.mean(dim=-1).detach().cpu()
         edge_index = edge_index.detach().cpu()
 
         if total_weights is None:
@@ -1293,7 +1284,7 @@ def analyze_attention_captum_correlation(
 
         edge_index, attn_weights = layer_attention[key]
         edge_index = edge_index.detach().cpu()[:, seed_mask]
-        attn_vals = _mean_attention(attn_weights.detach().cpu())[seed_mask]
+        attn_vals = attn_weights.mean(dim=-1).detach().cpu()[seed_mask]
 
         # Match edges
         shared_attn, shared_captum = [], []

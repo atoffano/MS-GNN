@@ -13,7 +13,6 @@ It supports:
 import sys
 import os
 import argparse
-import tempfile
 import shutil
 import logging
 import pandas as pd
@@ -277,16 +276,18 @@ def run_cafa_evaluation(
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
 
-    # Create temp directory for converted files
-    temp_dir = tempfile.mkdtemp(prefix="cafa_eval_")
-    logger.info(f"Using temporary directory: {temp_dir}")
+    # Create intermediate directory for converted files within output_dir
+    # This avoids using system /tmp which might be small
+    cafa_input_dir = os.path.join(output_dir, "cafa_inputs")
+    os.makedirs(cafa_input_dir, exist_ok=True)
+    logger.info(f"Using intermediate directory: {cafa_input_dir}")
 
     try:
         # Convert predictions to CAFA format
-        pred_dir = convert_predictions_to_cafa_format(predictions_file, temp_dir)
+        pred_dir = convert_predictions_to_cafa_format(predictions_file, cafa_input_dir)
 
         # Convert ground truth to CAFA format
-        gt_converted = os.path.join(temp_dir, "ground_truth.tsv")
+        gt_converted = os.path.join(cafa_input_dir, "ground_truth.tsv")
         convert_ground_truth_to_cafa_format(gt_file, gt_converted)
 
         # Run CAFA evaluation
@@ -327,10 +328,10 @@ def run_cafa_evaluation(
         return df, dfs_best
 
     finally:
-        # Clean up temp directory
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-            logger.info(f"Cleaned up temporary directory: {temp_dir}")
+        # Clean up intermediate directory
+        if os.path.exists(cafa_input_dir):
+            shutil.rmtree(cafa_input_dir)
+            logger.info(f"Cleaned up intermediate directory: {cafa_input_dir}")
 
 
 def derive_output_dir_from_predictions(predictions_file, subontology=None, split=None):
