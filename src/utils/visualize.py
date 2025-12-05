@@ -276,26 +276,33 @@ def adjust_colormap(cmap, luminance_factor=1.0, saturation_factor=1.0, n_colors=
     return new_cmap
 
 
-def apply_spectrum(pymol_cmd, selection, data, cmap, n_colors=256):
+def apply_spectrum(cmd, cmap, scores, ca_resi, n_colors=256):
     """
-    Generates a custom color ramp based 'jet' cmap and applies it to a PyMOL selection.
+    Generates a custom cmap and applies it to a PyMOL scene.
     """
     cmap = adjust_colormap(cmap, luminance_factor=1, saturation_factor=4)
     sampled_colors = [cmap(i / (n_colors - 1))[:3] for i in range(n_colors)]
-
-    # Convert to RGB tuples and hex names
     rgb_colors = [tuple(color) for color in sampled_colors]
     names = [mcolors.to_hex(color) for color in sampled_colors]
 
     for name, color in zip(names, rgb_colors):
-        pymol_cmd.set_color(name, list(color))
-    pymol_cmd.spectrum(
-        "b",
-        " ".join(names),
-        selection,
-        minimum=float(np.min(data)),
-        maximum=float(np.max(data)),
+        cmd.set_color(name, list(color))
+    # Apply spectrum to CA atoms based on scores
+    cmd.spectrum(
+        expression="b",
+        palette=" ".join(names),
+        selection=f"resi {'+'.join(str(r) for r in ca_resi)}",
+        minimum=float(np.min(scores)),
+        maximum=float(np.max(scores)),
     )
+    # Color everything else gray, including resi lacking scores
+    # cmd.spectrum(
+    #     expression="b",
+    #     palette="gray70 gray70",
+    #     selection=f"not resi {'+'.join(str(r) for r in ca_resi)}",
+    #     minimum=0,
+    #     maximum=0,
+    # )
 
 
 def render_scene(
@@ -321,21 +328,24 @@ def render_scene(
     with pymol2.PyMOL() as pymol:
         cmd = pymol.cmd
         cmd.reinitialize()
-        cmd.alter("prot", "b=0.0")
-        apply_spectrum(cmd, "prot", scores, cmap=plt.cm.Spectral_r)
         cmd.load(pdb_path, "prot")
+        cmd.alter("prot", "b=0.0")
         ca_resi = [int(atom.resi) for atom in cmd.get_model("prot and name CA").atom]
-
         if len(ca_resi) != len(scores):
             logger.warning(
-                f"Number of scores ({len(scores)}) does not match the number of CA atoms ({len(ca_ids)}). Only assigning up to the shorter list."
+                f"Number of scores ({len(scores)}) does not match the number of CA atoms ({len(ca_resi)}). Only assigning up to the shorter list."
             )
-        num_assignments = min(len(ca_resi), len(scores))
-        for i in range(num_assignments):
-            atom_id = ca_resi[i]
-            score = scores[i]
-            cmd.alter(f"prot and name CA and resi {atom_id}", f"b={score}")
-        cmd.spectrum("b", selection="prot and name CA")
+        for resi_nb in ca_resi:
+            try:
+                cmd.alter(f"prot and resi {resi_nb}", f"b={scores[resi_nb - 1]}")
+            except:
+                continue
+        apply_spectrum(cmd, plt.cm.Spectral_r, scores, ca_resi)
+        cmd.color(
+            "gray70",
+            selection=f"not resi {'+'.join(str(resi_nb) for resi_nb in ca_resi if resi_nb <= len(scores))}",
+        )
+        cmd.color("gray70", selection=f"HETATM")
 
         if title:
             cmd.set_title("title", state=0, text=title)

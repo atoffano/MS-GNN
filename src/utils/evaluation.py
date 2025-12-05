@@ -131,6 +131,7 @@ def evaluate(
     split,
     run_cafa_eval=True,
     run_beprof_eval=True,
+    ia_file=None,
 ):
     """
     Evaluate the predictions using both CAFA and BeProf evaluation methods.
@@ -144,6 +145,11 @@ def evaluate(
         run_cafa_eval: Whether to run CAFA evaluation (default: True)
         run_beprof_eval: Whether to run BEPROF evaluation (default: True)
     """
+    go_obo_file = "./data/go.obo"
+    gt_tsv = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.tsv"
+    pred_file = f"{output_dir}/predictions/predictions_{split}_{subontology}.tsv"
+    logger.info(f"Starting evaluation for {subontology} on {split} split")
+
     # Run BEPROF evaluation
     if run_beprof_eval:
         background_pkl = f"./data/{dataset}/background_{dataset}_{split}.pkl"
@@ -184,11 +190,9 @@ def evaluate(
             except subprocess.CalledProcessError as e:
                 logger.error(f"Failed to create background file: {e.stderr}")
                 raise e
-        go_obo_file = "./data/go.obo"
 
         # BEPROF requires ground truth in pkl format
         gt_pkl = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.pkl"
-        gt_tsv = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.tsv"
         if not os.path.exists(gt_pkl):
             if os.path.exists(gt_tsv):
                 logger.info(f"Converting Ground Truth TSV {gt_tsv} to pkl format")
@@ -200,7 +204,6 @@ def evaluate(
                 )
 
         # Evaluate predictions
-        pred_file = f"{output_dir}/predictions/predictions_{split}_{subontology}.tsv"
         pred_pkl = f"{output_dir}/predictions/predictions_{split}_{subontology}.pkl"
 
         if not os.path.exists(pred_file):
@@ -244,6 +247,7 @@ def evaluate(
                 gt_file=gt_tsv,
                 ontology_file=go_obo_file,
                 output_dir=cafa_output_dir,
+                ia_file=ia_file,
             )
             logger.info(
                 f"CAFA evaluation completed. Results saved to: {cafa_output_dir}"
@@ -319,6 +323,12 @@ if __name__ == "__main__":
         help="Skip CAFA evaluation",
     )
     parser.add_argument(
+        "--cafa_ia_file",
+        help="CAFA evaluation IA file path",
+        default=None,
+    )
+
+    parser.add_argument(
         "--no-beprof",
         action="store_true",
         help="Skip BEPROF evaluation",
@@ -333,4 +343,5 @@ if __name__ == "__main__":
         args.split,
         run_cafa_eval=not args.no_cafa,
         run_beprof_eval=not args.no_beprof,
+        ia_file=args.cafa_ia_file,
     )

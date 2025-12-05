@@ -267,23 +267,20 @@ def run_cafa_evaluation(
         Tuple of (evaluation_df, best_scores_dict)
     """
     try:
-        from cafaeval.evaluation import cafa_eval, write_results
+        # from cafaeval.evaluation import cafa_eval, write_results
+        from src.utils.perprotein_cafaeval import cafa_eval, write_results
     except ImportError:
         raise ImportError(
             "CAFA-evaluator is not installed. Install it with: pip install cafaeval"
         )
 
-    # Create output directory
     os.makedirs(output_dir, exist_ok=True)
-
-    # Create intermediate directory for converted files within output_dir
-    # This avoids using system /tmp which might be small
     cafa_input_dir = os.path.join(output_dir, "cafa_inputs")
     os.makedirs(cafa_input_dir, exist_ok=True)
     logger.info(f"Using intermediate directory: {cafa_input_dir}")
 
     try:
-        # Convert predictions to CAFA format
+        # Convert predictions & gt to CAFA format
         pred_dir = convert_predictions_to_cafa_format(predictions_file, cafa_input_dir)
 
         # Convert ground truth to CAFA format
