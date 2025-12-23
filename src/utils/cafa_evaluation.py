@@ -114,6 +114,12 @@ def parse_args(argv):
         help="Number of parallel threads. Default: 1",
     )
 
+    parser.add_argument(
+        "--per_protein",
+        action="store_true",
+        help="Compute per-protein metrics (precision, recall, F-score) at the best tau threshold.",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -247,6 +253,7 @@ def run_cafa_evaluation(
     no_orphans=False,
     max_terms=None,
     n_threads=1,
+    compute_pp=False,
 ):
     """Run CAFA evaluation on predictions.
 
@@ -262,6 +269,7 @@ def run_cafa_evaluation(
         no_orphans: Whether to exclude orphan nodes
         max_terms: Maximum number of terms per protein
         n_threads: Number of threads for parallel processing
+        compute_pp: Whether to compute per-protein metrics
 
     Returns:
         Tuple of (evaluation_df, best_scores_dict)
@@ -295,7 +303,7 @@ def run_cafa_evaluation(
         if ia_file:
             logger.info(f"  IA File: {ia_file}")
 
-        df, dfs_best = cafa_eval(
+        df, dfs_best, df_per_protein = cafa_eval(
             obo_file=ontology_file,
             pred_dir=pred_dir,
             gt_file=gt_converted,
@@ -306,11 +314,18 @@ def run_cafa_evaluation(
             max_terms=max_terms,
             th_step=th_step,
             n_cpu=n_threads,
+            compute_pp=compute_pp,
         )
 
         # Write results
         logger.info(f"Writing results to {output_dir}")
-        write_results(df, dfs_best, out_dir=output_dir, th_step=th_step)
+        write_results(
+            df,
+            dfs_best,
+            df_per_protein=df_per_protein,
+            out_dir=output_dir,
+            th_step=th_step,
+        )
 
         logger.info("\n" + "=" * 60)
         logger.info("CAFA Evaluation Summary")
@@ -432,6 +447,7 @@ def main(argv=None):
             no_orphans=args.no_orphans,
             max_terms=args.max_terms,
             n_threads=args.threads,
+            compute_pp=args.per_protein,
         )
         logger.info("CAFA evaluation completed successfully!")
     except Exception as e:

@@ -154,6 +154,7 @@ def plot_multi_pred_gt(
     gt_terms,
     subgraph,
     protein_name,
+    args,
     truth_only=False,
 ):
     """
@@ -283,9 +284,20 @@ def plot_multi_pred_gt(
     for n in nodes_to_plot:
         x, y = pos[n]
         # Center subnodes horizontally under the node
-        for i, (pred, cmap, name) in enumerate(zip(pred_dicts, pred_cmaps, pred_names)):
+        for i, (pred, cmap, name, thresh) in enumerate(
+            zip(
+                pred_dicts,
+                pred_cmaps,
+                pred_names,
+                [float(p[1]) for p in args.pred] if hasattr(args, "pred") else [],
+            )
+        ):
             if n in pred:
                 score = pred[n]
+                # Skip if score is below threshold and show_below_tau is False
+                if score < thresh and not args.show_below_tau:
+                    continue
+
                 color = cmap(mpl.colors.Normalize(vmin=0, vmax=1)(score))
 
                 # Center the dots: shift left/right based on index relative to center
@@ -395,6 +407,11 @@ def main():
         action="store_true",
         help="Only display nodes present in ground truth",
     )
+    parser.add_argument(
+        "--show_below_tau",
+        action="store_true",
+        help="Show prediction subnodes even if score is below threshold",
+    )
     args = parser.parse_args()
 
     print("Loading ontology with go3...")
@@ -445,6 +462,7 @@ def main():
         gt_terms,
         subgraph,
         args.protein,
+        args,
         truth_only=args.truth_only,
     )
 

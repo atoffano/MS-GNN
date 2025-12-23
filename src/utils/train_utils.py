@@ -1,6 +1,8 @@
 import os
 import torch
 import logging
+import glob
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,18 +37,17 @@ def save_checkpoint(
     if best_val_aupr is not None:
         checkpoint["best_val_aupr"] = best_val_aupr
 
+    # Save epoch-specific checkpoint first if configured (safer for recovery)
+    epoch_path = os.path.join(
+        checkpoint_dir, f"checkpoint_epoch_{epoch}_{subontology}.pth"
+    )
+    torch.save(checkpoint, epoch_path)
+    logger.info(f"Saved epoch checkpoint to {epoch_path}")
+
     # Save latest checkpoint
     latest_path = os.path.join(checkpoint_dir, f"checkpoint_latest_{subontology}.pth")
     torch.save(checkpoint, latest_path)
     logger.info(f"Saved checkpoint to {latest_path}")
-
-    # Save epoch-specific checkpoint if configured
-    if config["run"].get("save_epoch_checkpoints", False):
-        epoch_path = os.path.join(
-            checkpoint_dir, f"checkpoint_epoch_{epoch}_{subontology}.pth"
-        )
-        torch.save(checkpoint, epoch_path)
-        logger.info(f"Saved epoch checkpoint to {epoch_path}")
 
 
 def load_checkpoint(checkpoint_path, model, optimizer, scheduler, device):
@@ -64,6 +65,37 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, device):
     """
     logger.info(f"Loading checkpoint from {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    # Check for newer checkpoints in the same directory
+    # This handles cases where checkpoint_latest is stale compared to epoch checkpoints
+    if "subontology" in checkpoint:
+        subontology = checkpoint["subontology"]
+        checkpoint_dir = os.path.dirname(checkpoint_path)
+
+        # Find all epoch checkpoints for this subontology
+        pattern = os.path.join(checkpoint_dir, f"checkpoint_epoch_*_{subontology}.pth")
+        epoch_files = glob.glob(pattern)
+
+        current_epoch = checkpoint["epoch"]
+        newer_checkpoint_path = None
+
+        for path in epoch_files:
+            filename = os.path.basename(path)
+            # Extract epoch number from filename
+            match = re.search(
+                rf"checkpoint_epoch_(\d+)_{re.escape(subontology)}\.pth", filename
+            )
+            if match:
+                epoch_num = int(match.group(1))
+                if epoch_num > current_epoch:
+                    current_epoch = epoch_num
+                    newer_checkpoint_path = path
+
+        if newer_checkpoint_path:
+            logger.info(
+                f"Found newer checkpoint: {newer_checkpoint_path} (epoch {current_epoch}). Reloading."
+            )
+            checkpoint = torch.load(newer_checkpoint_path, map_location=device)
 
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])

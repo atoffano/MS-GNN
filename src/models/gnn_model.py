@@ -201,14 +201,16 @@ class ProteinGNN(torch.nn.Module):
         x_gnn2 = {k: self.norm_gnn2(self.prelu_gnn2(v)) for k, v in x_gnn2.items()}
         # log_gpu_memory(batch["protein"].go.device, prefix="forward")
         # SkipCat: concatenate transformed input features and GNN output
-        x_prot = torch.cat(
-            [
-                x_in["protein"][: batch["protein"].batch_size],
-                x_gnn2["protein"][: batch["protein"].batch_size],
-            ],
-            dim=1,
-        )
-        x_prot = self.prelu_prot(x_prot)
+        # x_prot = torch.cat(
+        #     [
+        #         x_in["protein"][: batch["protein"].batch_size],
+        #         x_gnn2["protein"][: batch["protein"].batch_size],
+        #     ],
+        #     dim=1,
+        # )
+        # x_prot = self.prelu_prot(x_prot)
+        x_prot = self.prelu_prot(x_gnn2["protein"])
+
         x_prot = self.norm_prot(x_prot)
         # log_gpu_memory(batch["protein"].go.device, prefix="forward")
 
