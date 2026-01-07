@@ -68,6 +68,22 @@ class SwissProtDataset:
         # Load GO annotations to determine train/val/test splits
         self._load_split_masks(config)
 
+        # Load external annotations if provided
+        self.external_annotations = None
+        if config["data"].get("train_annots"):
+            annot_path = config["data"]["train_annots"]
+            if Path(annot_path).exists():
+                logger.info(f"Loading external annotations from {annot_path}")
+                annot_df = pd.read_csv(annot_path, sep="\t")
+                self.external_annotations = {}
+                for _, row in annot_df.iterrows():
+                    pid = row["EntryID"]
+                    if self.uses_entryid:
+                        pid = self.rev_pid_mapping.get(pid, pid)
+                    self.external_annotations[pid] = row["term"].split("; ")
+            else:
+                logger.warning(f"External annotations file not found at {annot_path}")
+
         # Create the protein-protein heterograph
         self.data = self._create_protein_graph(config)
         self.transform = T.Compose(
@@ -93,7 +109,7 @@ class SwissProtDataset:
 
         if config["data"]["train_on_swissprot"]:
             exp_suffix = "exp_" if config["data"].get("exp_only", True) else ""
-            train_path = f"./data/swissprot/2024_01/swissprot_2024_01_{subontology}_{exp_suffix}annotations.tsv"
+            train_path = f"./data/swissprot/{config['data']['swissprot_release']}/swissprot_{config['data']['swissprot_release']}_{subontology}_{exp_suffix}annotations.tsv"
         else:
             # Stick to original dataset's train set
             train_path = f"./data/{config['data']['dataset']}/{config['data']['dataset']}_{subontology}_train_annotations.tsv"
@@ -117,6 +133,8 @@ class SwissProtDataset:
         dataset_name = config["data"]["dataset"]
         for split_name in ["val", "test"]:
             split_path = f"./data/{dataset_name}/{dataset_name}_{subontology}_{split_name}_annotations.tsv"
+            if config["data"]["swissprot_release"]:
+                split_path = f"./data/{dataset_name}/{config['data']['swissprot_release']}/{dataset_name}_{config['data']['swissprot_release']}_{subontology}_{split_name}_{exp_suffix}annotations.tsv"
             if Path(split_path).exists():
                 split_df = pd.read_csv(split_path, sep="\t")
                 splits[split_name] = set(split_df["EntryID"].tolist())
@@ -165,7 +183,7 @@ class SwissProtDataset:
 
     @timeit
     def _compute_pos_weights(self):
-        """Compute positive weights for each GO term to handle class imbalance."""
+        """LEGACY | Compute positive weights for each GO term to handle class imbalance."""
         go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
         term_counts = torch.zeros(len(go_to_idx), dtype=torch.float32)
 
@@ -382,29 +400,30 @@ class SwissProtDataset:
             logger.warning(f"Graph not found for protein {protein_id}")
             return None
 
+    def _terms_to_onehot(self, terms):
+        """Helper to convert a list of GO terms to one-hot encoding."""
+        go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
+        onehot = torch.zeros(self.go_vocab_size, dtype=torch.float32)
+        for term in terms:
+            if term in go_to_idx:
+                onehot[go_to_idx[term]] = 1.0
+        return onehot
+
     def convert_go_terms_to_onehot(self, go_terms_dict):
         """Convert GO terms to one-hot encoding based on config."""
-        go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
-        onehot = torch.zeros(
-            self.go_vocab_info[self.subontology]["vocab_size"], dtype=torch.float32
-        )
         if self.config["data"]["exp_only"]:
             terms = go_terms_dict.get("experimental", [])
         else:
             terms = go_terms_dict.get("curated", [])
-
-        for term in terms:
-            if term in go_to_idx:
-                onehot[go_to_idx[term]] = 1.0
-
-        return onehot
+        return self._terms_to_onehot(terms)
 
     def get_batch_features(self, batch, return_sequences=False):
         """Load individual protein features and amino acid data for the sampled batch."""
         with torch.no_grad():
-            sampled_protein_ids = [
+            raw_protein_ids = [
                 self.idx_to_protein[idx.item()] for idx in batch["protein"].n_id
             ]
+            sampled_protein_ids = raw_protein_ids
             if self.uses_entryid:
                 sampled_protein_ids = [
                     self.pid_mapping.get(pid, pid) for pid in sampled_protein_ids
@@ -427,6 +446,7 @@ class SwissProtDataset:
 
             for local_idx, protein_id in enumerate(sampled_protein_ids):
                 protein_graph = self.load_protein_graph(protein_id)
+                raw_pid = raw_protein_ids[local_idx]
 
                 if protein_graph is None:
                     logger.warning(
@@ -454,9 +474,21 @@ class SwissProtDataset:
                         sampled_sequences.append(protein_graph["protein"].sequence)
                     interpro_feat = protein_graph["protein"].interpro.squeeze(0)
                     aa_feat = protein_graph["aa"].x
-                    go_feat = self.convert_go_terms_to_onehot(
-                        protein_graph["protein"][f"go_terms_{self.subontology}"]
-                    )
+
+                    if self.external_annotations is not None:
+                        if raw_pid in self.external_annotations:
+                            go_feat = self._terms_to_onehot(
+                                self.external_annotations[raw_pid]
+                            )
+                        else:
+                            go_feat = torch.zeros(
+                                self.go_vocab_size, dtype=torch.float32
+                            )
+                    else:
+                        go_feat = self.convert_go_terms_to_onehot(
+                            protein_graph["protein"][f"go_terms_{self.subontology}"]
+                        )
+
                     if use_contact:
                         if ("aa", "close_to", "aa") in protein_graph.edge_types:
                             contact_data = protein_graph["aa", "close_to", "aa"]
@@ -544,10 +576,13 @@ class SwissProtDataset:
             # ).float()
 
             # Set protein node features as concatenation of InterPro and GO one hots.
-            batch["protein"].x = torch.cat(
-                [batch["protein"].interpro, batch["protein"].go],
-                dim=1,
-            )
+            # batch["protein"].x = torch.cat(
+            #     [batch["protein"].interpro, batch["protein"].go],
+            #     dim=1,
+            # )
+
+            # IPR Ablation: only GO terms as features
+            batch["protein"].x = batch["protein"].go
 
             # Add amino acid nodes and features
             batch["aa"].x = torch.cat(batch_aa_features, dim=0).float()
@@ -627,9 +662,9 @@ def define_loaders(config, dataset):
         num_workers=config["trainer"]["num_workers"],
     )
 
-    # Some datasets, like H30, do not have a validation set
+    # Some datasets, do not have a validation set
     # This is (dirtily) handled by using the test set as val too.
-    if config["data"]["dataset"] != "H30":
+    if config["data"]["dataset"] not in ["H30", "swissprot"]:
         val_loader = NeighborLoader(
             dataset.data,
             num_neighbors=num_neighbors,

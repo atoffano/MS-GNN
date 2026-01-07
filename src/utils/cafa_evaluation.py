@@ -1,13 +1,12 @@
-"""CAFA evaluation script using the CAFA-evaluator library.
+"""CAFA evaluation script.
 
-This module provides functionality for evaluating protein function predictions
-using the CAFA-evaluator (https://github.com/BioComputingUP/CAFA-evaluator).
+This module provides functionality for evaluating protein function predictions using CAFA-evaluator.
 
 It supports:
 - Reading predictions from TSV files (target_ID, term_ID, score)
 - Converting ground truth annotations for CAFA-evaluator
 - Computing IA (Information Accretion) weights
-- Running full CAFA evaluation with metrics like F-max, S-min, AUPR
+- Running full CAFA evaluation with metrics, e.g. F-max, S-min, AUPR
 """
 
 import sys
@@ -16,6 +15,7 @@ import argparse
 import shutil
 import logging
 import pandas as pd
+from src.utils.perprotein_cafaeval import cafa_eval, write_results
 
 # Configure logging
 logging.basicConfig(
@@ -274,13 +274,6 @@ def run_cafa_evaluation(
     Returns:
         Tuple of (evaluation_df, best_scores_dict)
     """
-    try:
-        # from cafaeval.evaluation import cafa_eval, write_results
-        from src.utils.perprotein_cafaeval import cafa_eval, write_results
-    except ImportError:
-        raise ImportError(
-            "CAFA-evaluator is not installed. Install it with: pip install cafaeval"
-        )
 
     os.makedirs(output_dir, exist_ok=True)
     cafa_input_dir = os.path.join(output_dir, "cafa_inputs")

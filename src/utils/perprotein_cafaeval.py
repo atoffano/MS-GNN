@@ -1,3 +1,10 @@
+"""CAFA-evaluator script.
+
+This module provides functionality for evaluating protein function predictions
+using the CAFA-evaluator (https://github.com/BioComputingUP/CAFA-evaluator).
+The script was slightly modified to include per protein metrics.
+"""
+
 import os
 import numpy as np
 import pandas as pd

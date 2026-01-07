@@ -288,6 +288,10 @@ def main():
 
         time_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         dataset_name = config["data"]["dataset"]
+        if config["data"].get("train_on_swissprot", True):
+            config["run"][
+                "qualifier"
+            ] = f"{config['data']['swissprot_release']}_{config['run']['qualifier']}"
         run_id = f"{time_str}_{dataset_name}_{config['run']['qualifier']}"
 
         # Create results directory

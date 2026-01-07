@@ -1,7 +1,7 @@
 model:
   hidden_channels: 256
   batch_size: 32
-  edge_attrs: false
+  edge_attrs: false 
   edge_types:
     - ["aa", "close_to", "aa"]
     - ["aa", "belongs_to", "protein"]
@@ -14,9 +14,9 @@ model:
     # protein__stringdb__protein: 30
 
 trainer:
-  epochs: 8
+  epochs: 1
   device: cuda
-  compile: true  # Whether to use torch.compile
+  compile: false  # Whether to use torch.compile
   num_workers: 4
 
 optimizer:
@@ -29,16 +29,17 @@ scheduler:
   gamma: 0.5
 
 data:
-  dataset: 'D1'
+  dataset: 'swissprot'
   subontology: ['MFO']  # One or more from ['CCO', 'MFO', 'BPO']
-  train_on_swissprot: false  # Whether to train on SwissProt or original train dataset
-  exp_only: true  # If training on SwissProt, whether to use only experimental annotations
+  train_on_swissprot: true  # Whether to train on SwissProt or original train dataset
+  swissprot_release: '2024_01'  # SwissProt release to use during training
+  exp_only: false  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
   stringdb_path: ./data/swissprot/2024_01/swissprot_stringdb.tsv
 
 run:
-  qualifier: 2layerGNN  # Additional string to append to run_id for uniqueness
+  qualifier: NOIPR  # Additional string to append to run_id for uniqueness
   logging:
     status: true
     gpu_memory_freq: 1  # Batches  
@@ -49,3 +50,4 @@ run:
   save_model: true
   save_epoch_checkpoints: true  # Whether to save checkpoint for each epoch (in addition to latest)
   project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
+  project_path: "/home/atoffano/PFP_layer"
