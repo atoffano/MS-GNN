@@ -7,14 +7,12 @@ This module provides functions for evaluating protein function predictions, incl
 - Integration with BEPROF and CAFA evaluation frameworks
 """
 
-import pandas as pd
 import os
 import sys
 import subprocess
 import pickle
 import tqdm
 import argparse
-import logging
 import torch
 from src.utils.helpers import timeit
 import matplotlib.pyplot as plt
@@ -77,7 +75,7 @@ def plot_aupr(precision, recall, aupr=None):
 
 
 @timeit
-def save_predictions(config, model, loader, device, dataset, split=None):
+def save_predictions(config, model, loader, device, dataset, split=None, tau=False):
     """Save model predictions to a TSV file.
 
     Args:
@@ -105,13 +103,15 @@ def save_predictions(config, model, loader, device, dataset, split=None):
             out = model(batch.x_dict, batch.edge_index_dict, batch)
             batch_size = batch["protein"].batch_size
             protein_ids = batch["protein"].protein_ids[:batch_size]
-            if dataset.uses_entryid:
-                protein_ids = [dataset.rev_pid_mapping[idx] for idx in protein_ids]
+            # if dataset.uses_entryid:
+            #     protein_ids = [dataset.rev_pid_mapping[idx] for idx in protein_ids]
             scores = out[:batch_size].cpu().numpy()
             for i, pid in enumerate(protein_ids):
                 for j, score in enumerate(scores[i]):
-                    if score > 0:
-                        term_id = go_idx_to_term[j]
+                    term_id = go_idx_to_term[j]
+                    if tau and score > tau:
+                        batch_buffer.append(f"{pid}\t{term_id}\n")
+                    elif not tau and score > 0:
                         batch_buffer.append(f"{pid}\t{term_id}\t{float(score)}\n")
             if batch_count % 50 == 0:
                 with open(pred_path, "a") as f:

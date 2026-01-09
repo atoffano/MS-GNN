@@ -35,9 +35,7 @@ class SwissProtDataset:
         self.go_vocab_sizes = {
             onto: info["vocab_size"] for onto, info in go_info.items()
         }
-        self.subontology = (
-            config["data"]["subontology"][0] if config["data"]["subontology"] else "BPO"
-        )
+        self.subontology = config["data"]["subontology"]
         self.go_vocab_size = self.go_vocab_sizes[self.subontology]
 
         # Protein IDs are in the Accession Number format (e.g. P12345) or in the EntryID format (e.g. INS_HUMAN), depending on the dataset
@@ -106,10 +104,11 @@ class SwissProtDataset:
         """Load train/val/test splits based on GO annotations."""
         splits = {"train": set(), "val": set(), "test": set()}
         subontology = self.subontology
+        release = config["data"].get("swissprot_release", None)
 
         if config["data"]["train_on_swissprot"]:
             exp_suffix = "exp_" if config["data"].get("exp_only", True) else ""
-            train_path = f"./data/swissprot/{config['data']['swissprot_release']}/swissprot_{config['data']['swissprot_release']}_{subontology}_{exp_suffix}annotations.tsv"
+            train_path = f"./data/swissprot/{release}/swissprot_{release}_{subontology}_{exp_suffix}annotations.tsv"
         else:
             # Stick to original dataset's train set
             train_path = f"./data/{config['data']['dataset']}/{config['data']['dataset']}_{subontology}_train_annotations.tsv"
@@ -133,8 +132,11 @@ class SwissProtDataset:
         dataset_name = config["data"]["dataset"]
         for split_name in ["val", "test"]:
             split_path = f"./data/{dataset_name}/{dataset_name}_{subontology}_{split_name}_annotations.tsv"
-            if config["data"]["swissprot_release"]:
-                split_path = f"./data/{dataset_name}/{config['data']['swissprot_release']}/{dataset_name}_{config['data']['swissprot_release']}_{subontology}_{split_name}_{exp_suffix}annotations.tsv"
+            if release:
+                test_exp_suffix = (
+                    "exp_" if config["data"].get("exp_only", True) else "cur_"
+                )
+                split_path = f"./data/{dataset_name}/{release}/{dataset_name}_{release}_{subontology}_{split_name}_{test_exp_suffix}annotations.tsv"
             if Path(split_path).exists():
                 split_df = pd.read_csv(split_path, sep="\t")
                 splits[split_name] = set(split_df["EntryID"].tolist())

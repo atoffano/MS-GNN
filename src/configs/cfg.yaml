@@ -50,4 +50,4 @@ run:
   save_model: true
   save_epoch_checkpoints: true  # Whether to save checkpoint for each epoch (in addition to latest)
   project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
-  project_path: "/home/atoffano/PFP_layer"
+  # project_path: "/home/atoffano/PFP_layer"

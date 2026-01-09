@@ -10,8 +10,6 @@ from torch_geometric.nn import (
     HeteroDictLinear,
     LayerNorm,
 )
-from src.utils.helpers import timeit
-from src.utils.helpers import log_gpu_memory
 
 
 class HeteroGATConv(torch.nn.Module):
@@ -168,7 +166,6 @@ class ProteinGNN(torch.nn.Module):
             torch.Tensor: Predicted GO term scores (or probabilities during inference)
             tuple: If return_attention_weights=True, returns (predictions, attentions)
         """
-        # log_gpu_memory(batch["protein"].go.device, prefix="forward")
         edge_attr_dict = (
             {k: v for k, v in batch.edge_attr_dict.items()} if self.edge_attrs else None
         )
@@ -176,7 +173,6 @@ class ProteinGNN(torch.nn.Module):
         # Input linear
         x_in = self.lin_in(x_dict)
         x_in = {k: self.norm1[k](self.prelu1[k](v)) for k, v in x_in.items()}
-        # log_gpu_memory(batch["protein"].go.device, prefix="forward")
 
         # GNN layer 1
         x_gnn1, attn1 = self.conv1(
@@ -186,7 +182,6 @@ class ProteinGNN(torch.nn.Module):
             return_attention_weights=return_attention_weights,
         )
         x_gnn1 = {k: self.norm_gnn1(self.prelu_gnn1(v)) for k, v in x_gnn1.items()}
-        # log_gpu_memory(batch["protein"].go.device, prefix="forward")
         # Preserve 'aa' node features in case they are not updated (e.g. no aa-aa edges)
         if "aa" not in x_gnn1:
             x_gnn1["aa"] = x_in["aa"]
@@ -199,7 +194,6 @@ class ProteinGNN(torch.nn.Module):
             return_attention_weights=return_attention_weights,
         )
         x_gnn2 = {k: self.norm_gnn2(self.prelu_gnn2(v)) for k, v in x_gnn2.items()}
-        # log_gpu_memory(batch["protein"].go.device, prefix="forward")
         # SkipCat: concatenate transformed input features and GNN output
         x_prot = torch.cat(
             [
@@ -211,17 +205,14 @@ class ProteinGNN(torch.nn.Module):
         x_prot = self.prelu_prot(x_prot)
 
         x_prot = self.norm_prot(x_prot)
-        # # log_gpu_memory(batch["protein"].go.device, prefix="forward")
 
-        # # Post-process lin layers
+        # Post-process lin layers
         x_prot = self.lin_post(x_prot)
         x_prot = self.prelu_post(x_prot)
-        x_prot = self.prelu_post(x_gnn2["protein"][: batch["protein"].batch_size])
 
         x_prot = self.norm_post(x_prot)
 
         x_prot = self.lin_out(x_prot)
-        # log_gpu_memory(batch["protein"].go.device, prefix="forward")
         if not self.training:
             x_prot = torch.sigmoid(x_prot)
 
@@ -229,5 +220,4 @@ class ProteinGNN(torch.nn.Module):
             attentions = (attn1, attn2)
             return x_prot, attentions
 
-        # log_gpu_memory(batch["protein"].go.device, prefix="forward")
         return x_prot
