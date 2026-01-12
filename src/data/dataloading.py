@@ -102,8 +102,8 @@ class SwissProtDataset:
         logger.info(f"Test proteins: {self.test_mask.sum().item()}")
 
     def _load_split_masks(self, config):
-        """Load train/val/test splits based on GO annotations. In case of a longitudinal setup,
-        ensure no leakage from future annotations by overriding default protein annotations
+        """Load train/val/test splits based on GO annotations.
+        In case of a longitudinal setup, ensure no leakage from future annotations by overriding default protein annotations.
         """
         splits = {"train": set(), "val": set(), "test": set()}
         subontology = self.subontology
@@ -143,11 +143,7 @@ class SwissProtDataset:
                 f"./data/{dataset}/{dataset}_{subontology}_{split_name}_annotations.tsv"
             )
             if release:
-                test_exp_suffix = (
-                    "exp_" if config["data"].get("exp_only", True) else "cur_"
-                )
-                split_path = f"./data/{dataset}/{release}/{dataset}_{release}_{subontology}_{split_name}_{test_exp_suffix}annotations.tsv"
-
+                split_path = f"./data/swissprot/2024_01/swissprot_2024_01_{subontology}_{split_name}_annotations.tsv"
             if Path(split_path).exists():
                 split_df = pd.read_csv(split_path, sep="\t")
                 splits[split_name] = set(split_df["EntryID"].tolist())

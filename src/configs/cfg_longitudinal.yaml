@@ -3,7 +3,7 @@ model:
   batch_size: 16
   edge_attrs: false 
   edge_types:
-    - ["aa", "close_to", "aa"]
+    #- ["aa", "close_to", "aa"]
     - ["aa", "belongs_to", "protein"]
     - ["protein", "aligned_with", "protein"]
     #- ["protein", "stringdb", "protein"]
@@ -31,10 +31,10 @@ scheduler:
 data:
   dataset: 'swissprot'
   subontology: 'MFO'
-  train_on_swissprot: true  # Override original train dataset (if not already SwissProt) to train on SwissProt instead.
-  swissprot_release: '2017_01'  # SwissProt release to use during training
+  train_on_swissprot: true  # Override original train dataset to train on SwissProt instead. Ignored if dataset is already SwissProt.
+  swissprot_release: '2017_01'  # SwissProt release used.
   exp_only: false  # If training on SwissProt, whether to use only experimental annotations
-  alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV
+  alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
   stringdb_path: ./data/swissprot/2024_01/swissprot_stringdb.tsv
 
@@ -45,5 +45,7 @@ run:
     test: true
   test_only: true  # Whether to run evaluation only on the test set (no validation)
   save_epoch_checkpoints: true  # Whether to save checkpoint for each epoch (in addition to latest)
+  run_beprof_eval: false
+  run_cafa_eval: true
   project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
   #project_path: "/home/atoffano/PFP_layer"

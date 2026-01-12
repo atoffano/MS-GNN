@@ -67,8 +67,22 @@ def predict_from_directory(
     if proteins:
         # Create a custom loader for specified proteins
         if len(proteins) == 1 and os.path.isfile(proteins[0]):
-            with open(proteins[0], "r") as f:
-                protein_list = [line.strip() for line in f if line.strip()]
+            if proteins[0].endswith(".tsv"):
+                protein_list = []
+                with open(proteins[0], "r") as f:
+                    header = f.readline().strip().split("\t")
+                    try:
+                        col_idx = header.index("EntryID")
+                    except ValueError:  # 'EntryID' not found; default to first column
+                        col_idx = 0
+                    for line in f:
+                        if line.strip():
+                            parts = line.strip().split("\t")
+                            if len(parts) > col_idx:
+                                protein_list.append(parts[col_idx])
+            else:
+                with open(proteins[0], "r") as f:
+                    protein_list = [line.strip() for line in f if line.strip()]
         else:
             protein_list = proteins
         if dataset.uses_entryid:
@@ -167,7 +181,7 @@ if __name__ == "__main__":
         "--proteins",
         nargs="+",
         default=None,
-        help="Path to a file with protein IDs (one per line) or a list of protein IDs.",
+        help="Protein IDs to predict on as either a list of protein IDs, a file with one protein per line, or a .tsv with a column named 'EntryID'.",
     )
     parser.add_argument(
         "--tau",

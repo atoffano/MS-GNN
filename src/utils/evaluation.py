@@ -100,8 +100,8 @@ def save_predictions(config, model, loader, device, dataset, split=None, tau=Fal
             out = model(batch.x_dict, batch.edge_index_dict, batch)
             batch_size = batch["protein"].batch_size
             protein_ids = batch["protein"].protein_ids[:batch_size]
-            # if dataset.uses_entryid:
-            #     protein_ids = [dataset.rev_pid_mapping[idx] for idx in protein_ids]
+            if dataset.uses_entryid:
+                protein_ids = [dataset.rev_pid_mapping[idx] for idx in protein_ids]
             scores = out[:batch_size].cpu().numpy()
             for i, pid in enumerate(protein_ids):
                 for j, score in enumerate(scores[i]):
@@ -140,8 +140,13 @@ def evaluate(
     run_beprof_eval = config["run"]["run_beprof_eval"]
     run_cafa_eval = config["run"]["run_cafa_eval"]
 
+    # Longitdudinal setup
+    if dataset == "swissprot" and config["data"]["gt"] is not None:
+        gt_tsv = config["data"]["gt"]
+    else:
+        gt_tsv = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.tsv"
+
     go_obo_file = "./data/go.obo"
-    gt_tsv = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.tsv"
     pred_file = f"{output_dir}/predictions/predictions_{split}_{subontology}.tsv"
     logger.info(f"Starting evaluation for {subontology} on {split} split")
 
@@ -310,7 +315,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--split",
         default="test",
-        help="Data split to evaluate on (train, val, test). Default: test",
+        help="Data split to evaluate on.",
+    )
+    parser.add_argument(
+        "--gt",
+        default=None,
+        help="Ground truth path to use during evaluation. Ignored unless config dataset is 'swissprot'",
     )
     parser.add_argument(
         "--no-cafa",
@@ -322,7 +332,6 @@ if __name__ == "__main__":
         help="CAFA evaluation IA file path",
         default=None,
     )
-
     parser.add_argument(
         "--no-beprof",
         action="store_true",
@@ -335,6 +344,7 @@ if __name__ == "__main__":
         "data": {
             "dataset": args.dataset,
             "subontology": args.subontology,
+            "gt": args.gt,
         },
         "run": {
             "results_dir": args.input_dir,

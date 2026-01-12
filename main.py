@@ -137,31 +137,37 @@ def train(
                 break
         scheduler.step()
 
-        # val_loss, val_aupr, val_fmax, val_pr_plot = run_intermediate_validation(
-        #     model, val_loader, criterion, device, num_batches=len(val_loader)
-        # )
-        # logger.info(
-        #     f"End of epoch: Validation Loss: {val_loss}, Validation AUPR: {val_aupr}, Val F-max: {val_fmax}"
-        # )
-        # test_loss, test_aupr, test_fmax, test_pr_plot = run_intermediate_validation(
-        #     model, test_loader, criterion, device, num_batches=len(test_loader)
-        # )
-        # logger.info(
-        #     f"End of epoch: Test Loss: {test_loss}, Test AUPR: {test_aupr}, Test F-max: {test_fmax}"
-        # )
-        # wandb.log(
-        #     {
-        #         "epoch": epoch,
-        #         "end_epoch_val_loss": val_loss,
-        #         "end_epoch_val_aupr": val_aupr,
-        #         "end_epoch_val_fmax": val_fmax,
-        #         "end_epoch_val_pr_curve": val_pr_plot,
-        #         "end_epoch_test_loss": test_loss,
-        #         "end_epoch_test_aupr": test_aupr,
-        #         "end_epoch_test_fmax": test_fmax,
-        #         "end_epoch_test_pr_curve": test_pr_plot,
-        #     }
-        # )
+        if len(val_loader) > 0:
+            val_loss, val_aupr, val_fmax, val_pr_plot = run_intermediate_validation(
+                model, val_loader, criterion, device, num_batches=len(val_loader)
+            )
+            logger.info(
+                f"End of epoch: Validation Loss: {val_loss}, Validation AUPR: {val_aupr}, Val F-max: {val_fmax}"
+            )
+            wandb.log(
+                {
+                    "end_epoch_val_loss": val_loss,
+                    "end_epoch_val_aupr": val_aupr,
+                    "end_epoch_val_fmax": val_fmax,
+                    "end_epoch_val_pr_curve": val_pr_plot,
+                }
+            )
+        if len(test_loader) > 0:
+            test_loss, test_aupr, test_fmax, test_pr_plot = run_intermediate_validation(
+                model, test_loader, criterion, device, num_batches=len(test_loader)
+            )
+            logger.info(
+                f"End of epoch: Test Loss: {test_loss}, Test AUPR: {test_aupr}, Test F-max: {test_fmax}"
+            )
+            wandb.log(
+                {
+                    "epoch": epoch,
+                    "end_epoch_test_loss": test_loss,
+                    "end_epoch_test_aupr": test_aupr,
+                    "end_epoch_test_fmax": test_fmax,
+                    "end_epoch_test_pr_curve": test_pr_plot,
+                }
+            )
 
         # Save checkpoint at end of each epoch
         save_checkpoint(
@@ -392,7 +398,6 @@ def main():
         evaluate(logger, config, split="val")
     if config["run"]["save_predictions"]["test"] or not config["run"]["test_only"]:
         evaluate(logger, config, split="test")
-    logger.info(f"Evaluation completed")
 
     wandb.finish()
     logger.removeHandler(file_handler)
