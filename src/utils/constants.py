@@ -15,11 +15,15 @@ DATA_ROOT = PROJECT_ROOT / "data"
 SRC_ROOT = PROJECT_ROOT / "src"
 
 # ============================================================================
-# SwissProt Data Paths
+# Data Constants
 # ============================================================================
+USES_ENTRYID = ["H30", "D1"]
 
+# SwissProt
 SWISSPROT_ROOT = DATA_ROOT / "swissprot" / "2024_01"
 SWISSPROT_FASTA = SWISSPROT_ROOT / "swissprot_2024_01.fasta"
+PID_MAPPING = SWISSPROT_ROOT / "swissprot_2024_01_annotations.tsv"
+DIAMOND_ALIGNMENT = SWISSPROT_ROOT / "diamond_swissprot_2024_01_alignment.tsv"
 
 # InterPro
 INTERPRO_TSV = SWISSPROT_ROOT / "swissprot_interpro_106_0.tsv"
@@ -46,7 +50,8 @@ STRUCTURE_MISSING_PATH = PROTEIN_GRAPHS_DIR / "structure_missing_rev.fasta"
 STRUCTURE_MISSING_FASTA = SWISSPROT_ROOT / "structure_missing.fasta"
 
 # StringDB
-STRINGDB_TSV = DATA_ROOT / "swissprot_stringdb.tsv"
+STRINGDB_PATH = SWISSPROT_ROOT / "swissprot_stringdb.tsv"
+STRINGDB_SWISSPROT_MAPPING = SWISSPROT_ROOT / "idmapping_swissprot_stringdb.tsv"
 
 # ============================================================================
 # Utilities Paths

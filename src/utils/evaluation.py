@@ -20,14 +20,11 @@ import numpy as np
 from sklearn.metrics import precision_recall_curve, auc
 import wandb
 
-# Import BEPROF evaluation functions
 from src.utils.beprof_eval import (
     run_beprof_evaluation as run_beprof,
     gt_convert,
     convert_predictions,
 )
-
-# Import CAFA evaluation functions
 from src.utils.cafa_evaluation import (
     run_cafa_evaluation as run_cafa,
 )

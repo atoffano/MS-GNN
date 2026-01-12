@@ -6,7 +6,7 @@ import pandas as pd
 import pickle
 from pathlib import Path
 import logging
-from src.utils.constants import CONTACT_CUTOFF
+from src.utils.constants import *
 from src.utils.helpers import timeit
 
 logger = logging.getLogger(__name__)
@@ -18,18 +18,17 @@ class SwissProtDataset:
     @timeit
     def __init__(self, config):
         self.config = config
-        if config["data"]["dataset"] in ["D1", "H30"]:
+        if config["data"]["dataset"] in USES_ENTRYID:
             self.uses_entryid = True
         else:
             self.uses_entryid = False
 
-        self.graphs_dir = Path(config["data"]["protein_graphs"])
+        self.graphs_dir = Path(PROTEIN_GRAPHS_DIR)
 
-        with open(f"{self.graphs_dir}/interpro_vocab.pkl", "rb") as f:
-            interpro_info = pickle.load(f)
-        self.ipr_vocab_size = interpro_info["vocab_size"]
+        with open(INTERPRO_VOCAB, "rb") as f:
+            self.ipr_vocab_size = pickle.load(f)["vocab_size"]
 
-        with open(f"{self.graphs_dir}/go_vocab.pkl", "rb") as f:
+        with open(GO_VOCAB, "rb") as f:
             go_info = pickle.load(f)
         self.go_vocab_info = go_info
         self.go_vocab_sizes = {
@@ -42,7 +41,7 @@ class SwissProtDataset:
         # Dict like ('INS_HUMAN', 'P01308')
         self.pid_mapping = (
             pd.read_csv(
-                f"./data/swissprot/2024_01/swissprot_2024_01_annotations.tsv",  # Most up to date mapping
+                PID_MAPPING,  # Most up to date mapping taken from 2024_01 raw annotations
                 sep="\t",
                 usecols=["EntryID", "Entry Name"],
             )
@@ -103,20 +102,24 @@ class SwissProtDataset:
         logger.info(f"Test proteins: {self.test_mask.sum().item()}")
 
     def _load_split_masks(self, config):
-        """Load train/val/test splits based on GO annotations."""
+        """Load train/val/test splits based on GO annotations. In case of a longitudinal setup,
+        ensure no leakage from future annotations by overriding default protein annotations
+        """
         splits = {"train": set(), "val": set(), "test": set()}
         subontology = self.subontology
         release = config["data"].get("swissprot_release", None)
-        dataset_name = config["data"]["dataset"]
+        dataset = config["data"]["dataset"]
 
-        if config["data"]["train_on_swissprot"] or dataset_name == "swissprot":
+        if config["data"]["train_on_swissprot"] or dataset == "swissprot":
             exp_suffix = "exp_" if config["data"].get("exp_only", True) else ""
             train_path = f"./data/swissprot/{release}/swissprot_{release}_{subontology}_{exp_suffix}annotations.tsv"
             self.train_annots_path = train_path
             logger.info(f"Training on SwissProt annotations from {train_path}")
         else:
             # Stick to original dataset's train set
-            train_path = f"./data/{config['data']['dataset']}/{config['data']['dataset']}_{subontology}_train_annotations.tsv"
+            train_path = (
+                f"./data/{dataset}/{dataset}_{subontology}_train_annotations.tsv"
+            )
             logger.info(f"Training on original dataset annotations from {train_path}")
 
         if Path(train_path).exists():
@@ -136,12 +139,14 @@ class SwissProtDataset:
 
         # Load val and test
         for split_name in ["val", "test"]:
-            split_path = f"./data/{dataset_name}/{dataset_name}_{subontology}_{split_name}_annotations.tsv"
+            split_path = (
+                f"./data/{dataset}/{dataset}_{subontology}_{split_name}_annotations.tsv"
+            )
             if release:
                 test_exp_suffix = (
                     "exp_" if config["data"].get("exp_only", True) else "cur_"
                 )
-                split_path = f"./data/{dataset_name}/{release}/{dataset_name}_{release}_{subontology}_{split_name}_{test_exp_suffix}annotations.tsv"
+                split_path = f"./data/{dataset}/{release}/{dataset}_{release}_{subontology}_{split_name}_{test_exp_suffix}annotations.tsv"
 
             if Path(split_path).exists():
                 split_df = pd.read_csv(split_path, sep="\t")
@@ -158,7 +163,7 @@ class SwissProtDataset:
                 )
 
         # Remove proteins from val/test if training on the full SwissProt release.
-        if config["data"]["train_on_swissprot"] or dataset_name == "swissprot":
+        if config["data"]["train_on_swissprot"] or dataset == "swissprot":
             for split in ["val", "test"]:
                 splits["train"] = splits["train"] - splits[split]
 
@@ -235,11 +240,8 @@ class SwissProtDataset:
 
         @timeit
         def alignment_edge_data():
-            alignment_path = (
-                f"{config['run']['project_path']}{config['data']['alignment_path'][1:]}"
-            )
             alignment_df = pd.read_csv(
-                alignment_path,
+                DIAMOND_ALIGNMENT,
                 sep="\t",
                 header=None,
                 names=[
@@ -303,7 +305,7 @@ class SwissProtDataset:
             # Q8Z7H7 -> 220341.gene:17585230
             stringdb_mapping = (
                 pd.read_csv(
-                    f"./data/swissprot/2024_01/idmapping_swissprot_stringdb.tsv",
+                    STRINGDB_SWISSPROT_MAPPING,
                     sep="\t",
                     usecols=["From", "To"],
                 )
@@ -312,9 +314,8 @@ class SwissProtDataset:
             )
             rev_stringdb_mapping = {v: k for k, v in stringdb_mapping.items()}
 
-            stringdb_path = config["data"]["stringdb_path"]
             stringdb_df = pd.read_csv(
-                stringdb_path,
+                STRINGDB_PATH,
                 sep="\t",
                 header=0,
                 names=[
@@ -675,7 +676,7 @@ def define_loaders(config, dataset):
 
     # Some datasets, do not have a validation set
     # This is (dirtily) handled by using the test set as val too.
-    if config["data"]["dataset"] not in ["H30", "swissprot"]:
+    if config["data"]["dataset"] not in USES_ENTRYID:
         val_loader = NeighborLoader(
             dataset.data,
             num_neighbors=num_neighbors,
