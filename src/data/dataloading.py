@@ -67,9 +67,8 @@ class SwissProtDataset:
         self._load_split_masks(config)
 
         # Load external annotations if provided
-        self.external_annotations = None
-        if config["data"].get("train_annots"):
-            annot_path = config["data"]["train_annots"]
+        if config["data"].get("dataset") == "swissprot":
+            annot_path = self.train_annots_path
             if Path(annot_path).exists():
                 logger.info(f"Loading external annotations from {annot_path}")
                 annot_df = pd.read_csv(annot_path, sep="\t")
@@ -79,6 +78,9 @@ class SwissProtDataset:
                     if self.uses_entryid:
                         pid = self.rev_pid_mapping.get(pid, pid)
                     self.external_annotations[pid] = row["term"].split("; ")
+                logger.info(
+                    f"Loaded external annotations for {len(self.external_annotations)} proteins"
+                )
             else:
                 logger.warning(f"External annotations file not found at {annot_path}")
 
@@ -105,13 +107,17 @@ class SwissProtDataset:
         splits = {"train": set(), "val": set(), "test": set()}
         subontology = self.subontology
         release = config["data"].get("swissprot_release", None)
+        dataset_name = config["data"]["dataset"]
 
-        if config["data"]["train_on_swissprot"]:
+        if config["data"]["train_on_swissprot"] or dataset_name == "swissprot":
             exp_suffix = "exp_" if config["data"].get("exp_only", True) else ""
             train_path = f"./data/swissprot/{release}/swissprot_{release}_{subontology}_{exp_suffix}annotations.tsv"
+            self.train_annots_path = train_path
+            logger.info(f"Training on SwissProt annotations from {train_path}")
         else:
             # Stick to original dataset's train set
             train_path = f"./data/{config['data']['dataset']}/{config['data']['dataset']}_{subontology}_train_annotations.tsv"
+            logger.info(f"Training on original dataset annotations from {train_path}")
 
         if Path(train_path).exists():
             train_df = pd.read_csv(train_path, sep="\t")
@@ -129,7 +135,6 @@ class SwissProtDataset:
         logger.info(f"Using {len(splits['train'])} train proteins from {train_path}")
 
         # Load val and test
-        dataset_name = config["data"]["dataset"]
         for split_name in ["val", "test"]:
             split_path = f"./data/{dataset_name}/{dataset_name}_{subontology}_{split_name}_annotations.tsv"
             if release:
@@ -137,9 +142,13 @@ class SwissProtDataset:
                     "exp_" if config["data"].get("exp_only", True) else "cur_"
                 )
                 split_path = f"./data/{dataset_name}/{release}/{dataset_name}_{release}_{subontology}_{split_name}_{test_exp_suffix}annotations.tsv"
+
             if Path(split_path).exists():
                 split_df = pd.read_csv(split_path, sep="\t")
                 splits[split_name] = set(split_df["EntryID"].tolist())
+            logger.info(
+                f"Using {len(splits[split_name])} {split_name} proteins from {split_path}"
+            )
 
         for split in splits:
             missing = list(splits[split] - set(self.proteins))
@@ -149,7 +158,7 @@ class SwissProtDataset:
                 )
 
         # Remove proteins from val/test if training on the full SwissProt release.
-        if config["data"]["train_on_swissprot"]:
+        if config["data"]["train_on_swissprot"] or dataset_name == "swissprot":
             for split in ["val", "test"]:
                 splits["train"] = splits["train"] - splits[split]
 

@@ -30,8 +30,8 @@ scheduler:
 
 data:
   dataset: 'swissprot'
-  subontology: ['MFO']  # One or more from ['CCO', 'MFO', 'BPO']
-  train_on_swissprot: true  # Whether to train on SwissProt or original train dataset
+  subontology: 'MFO'
+  train_on_swissprot: true  # Override original train dataset (if not already SwissProt) to train on SwissProt instead.
   swissprot_release: '2024_01'  # SwissProt release to use during training
   exp_only: false  # If training on SwissProt, whether to use only experimental annotations
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV
@@ -47,6 +47,8 @@ run:
     val: true
     test: true
   test_only: false  # Whether to run evaluation only on the test set (no validation)
+  run_beprof_eval: false
+  run_cafa_eval: true
   save_model: true
   save_epoch_checkpoints: true  # Whether to save checkpoint for each epoch (in addition to latest)
   project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"

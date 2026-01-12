@@ -125,26 +125,24 @@ def save_predictions(config, model, loader, device, dataset, split=None, tau=Fal
 @timeit
 def evaluate(
     logger,
-    dataset,
-    output_dir,
-    subontology,
+    config,
     split,
-    run_cafa_eval=True,
-    run_beprof_eval=True,
-    ia_file=None,
 ):
     """
     Evaluate the predictions using both CAFA and BeProf evaluation methods.
 
     Args:
         logger: Logger instance for output
-        dataset: Dataset name (e.g., "swissprot")
-        output_dir: Base output directory containing predictions
-        subontology: GO subontology (BPO, CCO, MFO)
         split: Data split (train, val, test)
         run_cafa_eval: Whether to run CAFA evaluation (default: True)
         run_beprof_eval: Whether to run BEPROF evaluation (default: True)
     """
+    dataset = config["data"]["dataset"]
+    output_dir = config["run"]["results_dir"]
+    subontology = config["data"]["subontology"]
+    run_beprof_eval = config["run"]["run_beprof_eval"]
+    run_cafa_eval = config["run"]["run_cafa_eval"]
+
     go_obo_file = "./data/go.obo"
     gt_tsv = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.tsv"
     pred_file = f"{output_dir}/predictions/predictions_{split}_{subontology}.tsv"
@@ -247,7 +245,7 @@ def evaluate(
                 gt_file=gt_tsv,
                 ontology_file=go_obo_file,
                 output_dir=cafa_output_dir,
-                ia_file=ia_file,
+                ia_file=config["run"].get("ia_file", None),
             )
             logger.info(
                 f"CAFA evaluation completed. Results saved to: {cafa_output_dir}"
@@ -335,13 +333,22 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     eval_logger = setup_logging(args.input_dir, args.subontology)
+
+    config = {
+        "data": {
+            "dataset": args.dataset,
+            "subontology": args.subontology,
+        },
+        "run": {
+            "results_dir": args.input_dir,
+            "run_beprof_eval": not args.no_beprof,
+            "run_cafa_eval": not args.no_cafa,
+            "ia_file": args.cafa_ia_file,
+        },
+    }
+
     evaluate(
         eval_logger,
-        args.dataset,
-        args.input_dir,
-        args.subontology,
+        config,
         args.split,
-        run_cafa_eval=not args.no_cafa,
-        run_beprof_eval=not args.no_beprof,
-        ia_file=args.cafa_ia_file,
     )

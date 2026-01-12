@@ -25,7 +25,6 @@ from src.data.dataloading import SwissProtDataset, define_loaders
 from src.models.gnn_model import ProteinGNN
 from src.utils.evaluation import save_predictions, evaluate, compute_metrics, plot_aupr
 from src.utils.train_utils import save_checkpoint, load_checkpoint
-from src.utils.helpers import log_gpu_memory
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -78,7 +77,6 @@ def train(
                 checkpoint_path, model, optimizer, scheduler, device
             )
 
-    # criterion = torch.nn.BCEWithLogitsLoss(pos_weight=dataset.pos_weights.to(device))
     criterion = torch.nn.BCEWithLogitsLoss()
 
     # Training loop
@@ -112,7 +110,6 @@ def train(
                 optimizer.step()
                 wandb.log({"train_loss": loss.item() / batch["protein"].batch_size})
                 train_loss_sum += loss.item() / batch["protein"].batch_size
-                # log_gpu_memory(device, batch_idx=i, prefix="trainloop")
 
                 optimizer.zero_grad(set_to_none=True)
             # Handle OOM errors gracefully
@@ -120,10 +117,6 @@ def train(
                 logger.error(
                     f"Error occurred {e}, Batch {i}. Total proteins in batch: {nb_prots}. Skipping batch."
                 )
-                # log_gpu_memory(device, batch_idx=i, prefix="train_oom")
-                # torch.cuda.memory._dump_snapshot(
-                #     f"{config["run"]["results_dir"]}/snapshot.pickle"
-                # )
                 continue
 
             if i % 50 == 0:
@@ -141,37 +134,34 @@ def train(
                     f"Epoch {epoch}, Batch {i}, Train Loss: {train_loss_sum / 50}, Intermediate Val Loss: {avg_val_loss}"
                 )
                 train_loss_sum = 0.0
-                # log_gpu_memory(device, batch_idx=i, prefix="train_after_cleanup")
-                # torch.cuda.memory._dump_snapshot(
-                #     f"{config["run"]["results_dir"]}/snapshot.pickle"
-                # )
-
+                break
         scheduler.step()
 
-        val_loss, val_aupr, val_fmax, val_pr_plot = run_intermediate_validation(
-            model, val_loader, criterion, device, num_batches=len(val_loader)
-        )
-        test_loss, test_aupr, test_fmax, test_pr_plot = run_intermediate_validation(
-            model, test_loader, criterion, device, num_batches=len(test_loader)
-        )
-        logger.info(
-            f"End of epoch: Validation Loss: {val_loss}, Test Loss: {test_loss}\n"
-            f"Validation AUPR: {val_aupr}, Val F-max: {val_fmax}\n"
-            f"Test AUPR: {test_aupr}, Test F-max: {test_fmax}"
-        )
-        wandb.log(
-            {
-                "epoch": epoch,
-                "end_epoch_val_loss": val_loss,
-                "end_epoch_val_aupr": val_aupr,
-                "end_epoch_val_fmax": val_fmax,
-                "end_epoch_val_pr_curve": val_pr_plot,
-                "end_epoch_test_loss": test_loss,
-                "end_epoch_test_aupr": test_aupr,
-                "end_epoch_test_fmax": test_fmax,
-                "end_epoch_test_pr_curve": test_pr_plot,
-            }
-        )
+        # val_loss, val_aupr, val_fmax, val_pr_plot = run_intermediate_validation(
+        #     model, val_loader, criterion, device, num_batches=len(val_loader)
+        # )
+        # logger.info(
+        #     f"End of epoch: Validation Loss: {val_loss}, Validation AUPR: {val_aupr}, Val F-max: {val_fmax}"
+        # )
+        # test_loss, test_aupr, test_fmax, test_pr_plot = run_intermediate_validation(
+        #     model, test_loader, criterion, device, num_batches=len(test_loader)
+        # )
+        # logger.info(
+        #     f"End of epoch: Test Loss: {test_loss}, Test AUPR: {test_aupr}, Test F-max: {test_fmax}"
+        # )
+        # wandb.log(
+        #     {
+        #         "epoch": epoch,
+        #         "end_epoch_val_loss": val_loss,
+        #         "end_epoch_val_aupr": val_aupr,
+        #         "end_epoch_val_fmax": val_fmax,
+        #         "end_epoch_val_pr_curve": val_pr_plot,
+        #         "end_epoch_test_loss": test_loss,
+        #         "end_epoch_test_aupr": test_aupr,
+        #         "end_epoch_test_fmax": test_fmax,
+        #         "end_epoch_test_pr_curve": test_pr_plot,
+        #     }
+        # )
 
         # Save checkpoint at end of each epoch
         save_checkpoint(
@@ -183,20 +173,7 @@ def train(
             subontology,
             val_aupr,
         )
-
-        # Save best model
-        if val_aupr > best_val_aupr:
-            best_val_aupr = val_aupr
-            best_model_path = os.path.join(
-                config["run"]["results_dir"], f"best_model.pth"
-            )
-            torch.save(model.state_dict(), best_model_path)
-            logger.info(
-                f"Saved best model with AUPR {best_val_aupr:.4f} to {best_model_path}"
-            )
-            wandb.log({"best_val_aupr": best_val_aupr})
-
-        log_gpu_memory(device, prefix=f"epoch_end")
+        wandb.log({"best_val_aupr": best_val_aupr})
 
 
 def run_intermediate_validation(model, val_loader, criterion, device, num_batches=5):
@@ -218,7 +195,6 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
     model.eval()
     val_loss_sum = 0
     all_scores, all_targets = [], []
-    # log_gpu_memory(device, prefix="val_start")
 
     with torch.no_grad():
         for _ in range(num_batches):
@@ -238,8 +214,6 @@ def run_intermediate_validation(model, val_loader, criterion, device, num_batche
             all_targets.append(val_batch["protein"].y.cpu().numpy())
     precision, recall, aupr, fmax = compute_metrics(all_scores, all_targets)
     val_loss = val_loss_sum / num_batches if num_batches > 0 else val_loss_sum
-
-    # log_gpu_memory(device, prefix="val_end")
 
     model.train()
 
@@ -298,160 +272,131 @@ def main():
         config["run"]["results_dir"] = f"./results/{config['data']['dataset']}/{run_id}"
         os.makedirs(config["run"]["results_dir"], exist_ok=True)
 
-        # Save config to results directory
         with open(os.path.join(config["run"]["results_dir"], "cfg.yaml"), "w") as f:
             yaml.dump(config, f)
 
     logger.info(
         "Config:\n" + yaml.dump(config, sort_keys=False, default_flow_style=False)
     )
+    subontology = config["data"]["subontology"]
 
-    for subontology in config["data"]["subontology"]:
-        # Check if resuming from checkpoint
-        start_epoch = 1
-        best_val_aupr = 0.0
-        checkpoint_path = os.path.join(
-            config["run"]["results_dir"],
-            "checkpoints",
-            f"checkpoint_latest_{subontology}.pth",
+    # Check if resuming from checkpoint
+    start_epoch = 1
+    best_val_aupr = 0.0
+    checkpoint_path = os.path.join(
+        config["run"]["results_dir"],
+        "checkpoints",
+        f"checkpoint_latest_{subontology}.pth",
+    )
+
+    # Initialize wandb
+    wandb_id = None
+    if args.resume and os.path.exists(checkpoint_path):
+        # Try to resume wandb run
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        start_epoch = checkpoint["epoch"] + 1
+        best_val_aupr = checkpoint.get("best_val_aupr", 0.0)
+        wandb_id = checkpoint.get("wandb_id", None)
+        logger.info(
+            f"Resuming training from epoch {start_epoch} with best val AUPR {best_val_aupr:.4f}"
         )
 
-        # Initialize wandb
-        wandb_id = None
-        if args.resume and os.path.exists(checkpoint_path):
-            # Try to resume wandb run
-            checkpoint = torch.load(checkpoint_path, map_location="cpu")
-            start_epoch = checkpoint["epoch"] + 1
-            best_val_aupr = checkpoint.get("best_val_aupr", 0.0)
-            wandb_id = checkpoint.get("wandb_id", None)
+    run_name = f"{os.path.basename(config['run']['results_dir'])}_{subontology}"
+    wandb.init(
+        project="PFP_layer",
+        config=config,
+        name=run_name,
+        id=wandb_id,
+        resume="allow" if wandb_id else None,
+    )
+    wandb.run.log_code(".")
+
+    # Set up logging to file
+    log_file = os.path.join(config["run"]["results_dir"], f"{subontology}.log")
+    file_handler = logging.FileHandler(log_file, mode="a" if args.resume else "w")
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    )
+    logger.addHandler(file_handler)
+
+    device = torch.device(
+        config["trainer"]["device"] if torch.cuda.is_available() else "cpu"
+    )
+    logger.info(f"Using device: {device}")
+    logger.info(f"Results will be saved to: {config['run']['results_dir']}")
+
+    # Create efficient dataset
+    logger.info("Creating dataset...")
+    dataset = SwissProtDataset(config)
+
+    logger.info("Creating data loaders...")
+    train_loader, val_loader, test_loader = define_loaders(config, dataset)
+
+    # Get vocab size for current subontology
+    go_vocab_size = dataset.go_vocab_sizes[subontology]
+
+    logger.info(f"Dataset loaded with {len(dataset.proteins)} total proteins")
+    logger.info(f"GO vocabulary size for {subontology}: {go_vocab_size}")
+    logger.info(f"InterPro vocabulary size: {dataset.ipr_vocab_size}")
+    logger.info(f"Number of training proteins: {len(dataset.train_idx)}")
+    logger.info(f"Number of validation proteins: {len(dataset.val_idx)}")
+    logger.info(f"Number of test proteins: {len(dataset.test_idx)}")
+
+    # Instantiate model with config values
+    model = ProteinGNN(
+        config,
+        dataset,
+    )
+    model = model.to(device)
+
+    # Load model checkpoint if resuming
+    if args.resume and os.path.exists(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        logger.info(f"Loaded model from checkpoint at epoch {checkpoint['epoch']}")
+
+    if config["trainer"].get("compile", False):
+        model = torch.compile(model)
+        logger.info("Model compiled with torch.compile()")
+    else:
+        logger.info("Model not compiled; running in standard mode.")
+    logger.info(f"Model: {model}")
+
+    # Training
+    train(
+        config,
+        model,
+        train_loader,
+        val_loader,
+        test_loader,
+        device,
+        subontology,
+        start_epoch,
+        best_val_aupr,
+    )
+
+    # Predictions
+    splits = ["test"] if config["run"]["test_only"] else ["val", "test"]
+    for split in splits:
+        loader = val_loader if split == "val" else test_loader
+        # Save predictions
+        if config["run"]["save_predictions"][split]:
+            save_predictions(config, model, loader, device, dataset, split)
             logger.info(
-                f"Resuming training from epoch {start_epoch} with best val AUPR {best_val_aupr:.4f}"
+                f"Saved predictions to {config['run']['results_dir']}/predictions_{split}_{dataset.subontology}.tsv"
             )
 
-        run_name = f"{os.path.basename(config['run']['results_dir'])}_{subontology}"
-        wandb.init(
-            project="PFP_layer",
-            config=config,
-            name=run_name,
-            id=wandb_id,
-            resume="allow" if wandb_id else None,
-        )
-        wandb.run.log_code(".")
+    # Compute evaluation metrics
+    logger.info("Starting evaluation...")
+    if config["run"]["save_predictions"]["val"]:
+        evaluate(logger, config, split="val")
+    if config["run"]["save_predictions"]["test"] or not config["run"]["test_only"]:
+        evaluate(logger, config, split="test")
+    logger.info(f"Evaluation completed")
 
-        # Set up logging to file
-        log_file = os.path.join(config["run"]["results_dir"], f"{subontology}.log")
-        file_handler = logging.FileHandler(log_file, mode="a" if args.resume else "w")
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        )
-        logger.addHandler(file_handler)
-
-        device = torch.device(
-            config["trainer"]["device"] if torch.cuda.is_available() else "cpu"
-        )
-        logger.info(f"Using device: {device}")
-        logger.info(f"Results will be saved to: {config['run']['results_dir']}")
-
-        # Create efficient dataset
-        logger.info("Creating dataset...")
-        dataset = SwissProtDataset(config)
-
-        logger.info("Creating data loaders...")
-        train_loader, val_loader, test_loader = define_loaders(config, dataset)
-
-        # Get vocab size for current subontology
-        go_vocab_size = dataset.go_vocab_sizes[subontology]
-
-        logger.info(f"Dataset loaded with {len(dataset.proteins)} total proteins")
-        logger.info(f"GO vocabulary size for {subontology}: {go_vocab_size}")
-        logger.info(f"InterPro vocabulary size: {dataset.ipr_vocab_size}")
-        logger.info(f"Number of training proteins: {len(dataset.train_idx)}")
-        logger.info(f"Number of validation proteins: {len(dataset.val_idx)}")
-        logger.info(f"Number of test proteins: {len(dataset.test_idx)}")
-
-        # Instantiate model with config values
-        model = ProteinGNN(
-            config,
-            dataset,
-        )
-        model = model.to(device)
-
-        # Load model checkpoint if resuming
-        if args.resume and os.path.exists(checkpoint_path):
-            checkpoint = torch.load(checkpoint_path, map_location=device)
-            model.load_state_dict(checkpoint["model_state_dict"])
-            logger.info(f"Loaded model from checkpoint at epoch {checkpoint['epoch']}")
-
-        if config["trainer"].get("compile", False):
-            model = torch.compile(model)
-            logger.info("Model compiled with torch.compile()")
-        else:
-            logger.info("Model not compiled; running in standard mode.")
-        logger.info(f"Model: {model}")
-
-        # Training
-        train(
-            config,
-            model,
-            train_loader,
-            val_loader,
-            test_loader,
-            device,
-            subontology,
-            start_epoch,
-            best_val_aupr,
-        )
-
-        # Load best model for evaluation
-        best_model_path = os.path.join(
-            config["run"]["results_dir"], f"best_model_{subontology}.pth"
-        )
-        if os.path.exists(best_model_path):
-            model.load_state_dict(torch.load(best_model_path, map_location=device))
-            logger.info(f"Loaded best model for evaluation from {best_model_path}")
-
-        # Predictions
-        splits = ["test"] if config["run"]["test_only"] else ["val", "test"]
-        for split in splits:
-            loader = val_loader if split == "val" else test_loader
-            # Save predictions
-            if config["run"]["save_predictions"][split]:
-                save_predictions(config, model, loader, device, dataset, split)
-                logger.info(
-                    f"Saved predictions to {config['run']['results_dir']}/predictions_{split}_{dataset.subontology}.tsv"
-                )
-
-        if config["run"].get("save_model"):
-            model_path = os.path.join(config["run"]["results_dir"], f"model.pth")
-            torch.save(model.state_dict(), model_path)
-            logger.info(f"Model saved to {model_path}")
-
-        # Compute evaluation metrics
-        logger.info("Starting evaluation...")
-        if config["run"]["save_predictions"]["val"]:
-            evaluate(
-                logger,
-                config["data"]["dataset"],
-                config["run"]["results_dir"],
-                subontology,
-                split="val",
-            )
-        if config["run"]["save_predictions"]["test"] or not config["run"]["test_only"]:
-            evaluate(
-                logger,
-                config["data"]["dataset"],
-                config["run"]["results_dir"],
-                subontology,
-                split="test",
-            )
-
-        logger.info(f"Evaluation completed")
-        wandb.finish()
-
-        # Remove file handler to avoid duplicate logs
-        logger.removeHandler(file_handler)
-        file_handler.close()
-
+    wandb.finish()
+    logger.removeHandler(file_handler)
+    file_handler.close()
     logger.info("Done!")
 
 
