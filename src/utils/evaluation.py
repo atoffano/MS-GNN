@@ -141,8 +141,11 @@ def evaluate(
     run_cafa_eval = config["run"]["run_cafa_eval"]
 
     # Longitdudinal setup
-    if dataset == "swissprot" and config["data"]["gt"] is not None:
+    # Check if config["data"] has "gt" key
+    if dataset == "swissprot" and config["data"].get("gt") is not None:
         gt_tsv = config["data"]["gt"]
+        gt_name = gt_tsv.split("/")[-1].replace(".tsv", "")
+        logger.info(f"Using custom ground truth file: {gt_tsv}")
     else:
         gt_tsv = f"./data/{dataset}/{dataset}_{subontology}_{split}_annotations.tsv"
 
@@ -240,7 +243,7 @@ def evaluate(
     # Run CAFA evaluation
     if run_cafa_eval:
         logger.info("Running CAFA evaluation...")
-        cafa_output_dir = f"{output_dir}/evaluation/{split}_{subontology}/cafa-eval"
+        cafa_output_dir = f"{output_dir}/evaluation/{split}_{subontology}/cafa-eval/{gt_name if "gt_name" in locals() else ""}"
         try:
             run_cafa(
                 predictions_file=pred_file,
@@ -272,26 +275,17 @@ def setup_logging(output_dir, subontology):
     log_dir = os.path.join(output_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f"{subontology}.log")
-
     logger = logging.getLogger(f"{subontology}")
     logger.setLevel(logging.INFO)
-
-    # Create file handler
     fh = logging.FileHandler(log_file)
     fh.setLevel(logging.INFO)
-
-    # Create console handler
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
-
-    # Create formatter and add it to the handlers
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
     fh.setFormatter(formatter)
     ch.setFormatter(formatter)
-
-    # Add the handlers to the logger
     if not logger.hasHandlers():
         logger.addHandler(fh)
         logger.addHandler(ch)
@@ -306,7 +300,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--input_dir",
         required=True,
-        help="Directory containing predictions and evaluation results. Will also serve as output",
+        help="Directory containing predictions and evaluation results.",
     )
     parser.add_argument("--dataset", required=True, help="Dataset name.")
     parser.add_argument(

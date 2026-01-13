@@ -134,7 +134,9 @@ def propagate_terms(terms_df, subontologies):
         total=grouped.ngroups,
     ):
         # Only include terms that are in the ancestor lookup
-        valid_terms = [t for t in set(entry_df.term.values) if t in ancestor_lookup[aspect]]
+        valid_terms = [
+            t for t in set(entry_df.term.values) if t in ancestor_lookup[aspect]
+        ]
         if valid_terms:
             protein_terms = set().union(
                 *[list(ancestor_lookup[aspect][t]) + [t] for t in valid_terms]
@@ -191,11 +193,11 @@ def calc_ia(term, count_matrix, ontology, terms_index):
     # count of proteins with all parents - only consider parents in the index
     valid_parents = [p for p in parents if p in terms_index]
     num_parents = len(valid_parents)
-    
+
     if num_parents == 0:
         # Root term or no valid parents
         return 0
-    
+
     prots_with_parents = (
         count_matrix[:, [terms_index[p] for p in valid_parents]].sum(1) == num_parents
     ).sum()
@@ -218,45 +220,52 @@ def parse_inputs(argv):
     """
     parser = argparse.ArgumentParser(
         description="Compute Information Accretion of GO annotations. "
-                    "Note: If annotations in input file have been propagated to ontology roots, "
-                    "the input ontology graph should be the same as the one used to propagate terms."
+        "Note: If annotations in input file have been propagated to ontology roots, "
+        "the input ontology graph should be the same as the one used to propagate terms."
     )
 
-    parser.add_argument(
-        "--annot", "-a",
-        required=True,
-        help="Path to annotation file"
-    )
+    parser.add_argument("--annot", "-a", required=True, help="Path to annotation file")
 
     parser.add_argument(
-        "--dataset", "-d",
+        "--dataset",
+        "-d",
         default=None,
-        help="Dataset name used to load test proteins. If empty, no filtering is applied."
+        help="Dataset name used to load test proteins. If empty, no filtering is applied.",
     )
 
     parser.add_argument(
-        "--ontology", "-go",
+        "--test_annots",
         default=None,
-        help="Path to OBO ontology graph file. If empty, current OBO will be downloaded."
+        help="Path to test annotation file to filter out proteins. Takes precedence over dataset.",
     )
 
     parser.add_argument(
-        "--prop", "-p",
+        "--ontology",
+        "-go",
+        default=None,
+        help="Path to OBO ontology graph file. If empty, current OBO will be downloaded.",
+    )
+
+    parser.add_argument(
+        "--prop",
+        "-p",
         action="store_true",
-        help="Flag to propagate terms in annotation file according to the ontology graph"
+        help="Flag to propagate terms in annotation file according to the ontology graph",
     )
 
     parser.add_argument(
-        "--aspect", "-asp",
+        "--aspect",
+        "-asp",
         default=None,
         choices=["BPO", "CCO", "MFO"],
-        help="Compute IA for terms in this aspect only. If empty, all aspects are computed."
+        help="Compute IA for terms in this aspect only. If empty, all aspects are computed.",
     )
 
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         default=None,
-        help="Output file path. If empty, saves to data/<dataset>/IC_<dataset>[_<aspect>].tsv"
+        help="Output file path. If empty, saves to data/<dataset>/IC_<dataset>[_<aspect>].tsv",
     )
 
     return parser.parse_args(argv)
@@ -268,7 +277,8 @@ def compute_ia(
     ontology_path=None,
     dataset=None,
     aspect=None,
-    propagate=False
+    propagate=False,
+    test_annots_path=None,
 ):
     """Compute Information Accretion values for GO terms.
 
@@ -279,6 +289,7 @@ def compute_ia(
         dataset: Dataset name for filtering test proteins (optional)
         aspect: Ontology aspect to compute IA for (optional, BPO/CCO/MFO)
         propagate: Whether to propagate terms (default: False)
+        test_annots_path: Path to test annotation file (optional)
 
     Returns:
         DataFrame with columns 'term' and 'ic'
@@ -288,9 +299,13 @@ def compute_ia(
     annotation_df = annotation_df[["EntryID", "term"]]
 
     # Load test proteins if dataset specified
-    test_df = None
-    if dataset and aspect:
+    test_file = None
+    if test_annots_path:
+        test_file = test_annots_path
+    elif dataset and aspect:
         test_file = f"./data/{dataset}/{dataset}_{aspect}_test_annotations.tsv"
+
+    if test_file:
         if os.path.exists(test_file):
             test_df = pd.read_csv(
                 test_file,
@@ -317,9 +332,7 @@ def compute_ia(
     )
 
     roots = {"BPO": "GO:0008150", "CCO": "GO:0005575", "MFO": "GO:0003674"}
-    subontologies = {
-        asp: fetch_aspect(ontology_graph, roots[asp]) for asp in roots
-    }
+    subontologies = {asp: fetch_aspect(ontology_graph, roots[asp]) for asp in roots}
 
     aspect_map = {
         "BPO": list(subontologies["BPO"].nodes),
@@ -334,8 +347,10 @@ def compute_ia(
     annotation_df = annotation_df.dropna(subset=["term"])
 
     # Handle multiple terms per cell - ensure term is string before split
-    annotation_df["term"] = annotation_df["term"].astype(str).apply(
-        lambda x: x.split("; ") if x and x != "nan" else []
+    annotation_df["term"] = (
+        annotation_df["term"]
+        .astype(str)
+        .apply(lambda x: x.split("; ") if x and x != "nan" else [])
     )
     annotation_df = annotation_df[annotation_df["term"].apply(lambda x: len(x) > 0)]
     annotation_df = annotation_df[["EntryID", "term"]].explode("term")
@@ -376,9 +391,7 @@ def compute_ia(
 
     # Compute IA
     print("Computing Information Accretion...")
-    aspect_ia = {
-        asp: {t: 0 for t in aspect_terms[asp]} for asp in aspect_terms.keys()
-    }
+    aspect_ia = {asp: {t: 0 for t in aspect_terms[asp]} for asp in aspect_terms.keys()}
     for asp, subontology in subontologies.items():
         for term in tqdm.tqdm(aspect_ia[asp].keys(), desc=f"Computing IA for {asp}"):
             aspect_ia[asp][term] = calc_ia(
@@ -409,7 +422,9 @@ def compute_ia(
 
     # Verify all counts are non-negative
     if ia_df["ic"].min() < 0:
-        print("Warning: Some IA values are negative. Check ontology version consistency.")
+        print(
+            "Warning: Some IA values are negative. Check ontology version consistency."
+        )
 
     # Save to file
     if output_file:
@@ -436,7 +451,6 @@ if __name__ == "__main__":
         ontology_path=args.ontology,
         dataset=args.dataset,
         aspect=args.aspect,
-        propagate=args.prop
+        propagate=args.prop,
+        test_annots_path=args.test_annots,
     )
-
-

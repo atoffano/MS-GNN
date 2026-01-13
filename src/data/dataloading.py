@@ -672,7 +672,7 @@ def define_loaders(config, dataset):
 
     # Some datasets, do not have a validation set
     # This is (dirtily) handled by using the test set as val too.
-    if config["data"]["dataset"] not in USES_ENTRYID:
+    if dataset.val_mask.sum() > 0:
         val_loader = NeighborLoader(
             dataset.data,
             num_neighbors=num_neighbors,
@@ -684,4 +684,5 @@ def define_loaders(config, dataset):
         )
         return train_loader, val_loader, test_loader
     else:
+        logger.info("No validation set found; using test set as validation.")
         return train_loader, test_loader, test_loader
