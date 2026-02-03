@@ -251,6 +251,7 @@ def evaluate(
                 ontology_file=go_obo_file,
                 output_dir=cafa_output_dir,
                 ia_file=config["run"].get("ia_file", None),
+                compute_pp=config["run"].get("compute_pp", False),
             )
             logger.info(
                 f"CAFA evaluation completed. Results saved to: {cafa_output_dir}"
@@ -331,6 +332,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip BEPROF evaluation",
     )
+    parser.add_argument(
+        "--per_protein",
+        action="store_true",
+        help="Compute per-protein performance during CAFA evaluation",
+    )
     args = parser.parse_args()
     eval_logger = setup_logging(args.input_dir, args.subontology)
 
@@ -345,6 +351,7 @@ if __name__ == "__main__":
             "run_beprof_eval": not args.no_beprof,
             "run_cafa_eval": not args.no_cafa,
             "ia_file": args.cafa_ia_file,
+            "compute_pp": args.per_protein,
         },
     }
 
