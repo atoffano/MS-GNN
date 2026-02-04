@@ -10,7 +10,7 @@ model:
 
   # How many edges to sample to build mini-batch subgraphs. Follows PyG nomenclature
   sampled_edges:
-    # protein__aligned_with__protein: -1
+    protein__aligned_with__protein: 0
     # protein__stringdb__protein: 30
 
 trainer:
@@ -30,22 +30,24 @@ scheduler:
 
 data:
   dataset: 'D1'
-  subontology: ['MFO']  # One or more from ['CCO', 'MFO', 'BPO']
-  train_on_swissprot: false  # Whether to train on SwissProt or original train dataset
-  exp_only: true  # If training on SwissProt, whether to use only experimental annotations
-  alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv  # Alignment TSV
+  subontology: 'MFO'
+  train_on_swissprot: false  # Override original train dataset to train on SwissProt instead. Ignored if dataset is already SwissProt.
+  #swissprot_release: '2017_01'  # SwissProt release used when training on SwissProt
+  #exp_only: true  # If training on SwissProt, whether to use only experimental annotations
+
+  external_annotations_path: ./data/swissprot/2022_01/swissprot_2022_01_MFO_exp_annotations.tsv
+
+  alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
   stringdb_path: ./data/swissprot/2024_01/swissprot_stringdb.tsv
 
 run:
-  qualifier: 2layerGNN_NOSYS_CONTACT_ATTR  # Additional string to append to run_id for uniqueness
-  logging:
-    status: true
-    gpu_memory_freq: 1  # Batches  
+  qualifier: GNN_NOSYS_CONTACT_ATTR  # Additional string to append to run_id for uniqueness
   save_predictions:
-    val: true
+    val: false
     test: true
-  test_only: false  # Whether to run evaluation only on the test set (no validation)
-  save_model: true
+  test_only: true  # Whether to run evaluation only on the test set (no validation)
   save_epoch_checkpoints: true  # Whether to save checkpoint for each epoch (in addition to latest)
+  run_beprof_eval: true
+  run_cafa_eval: true
   project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"

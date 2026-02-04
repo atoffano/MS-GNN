@@ -333,7 +333,7 @@ if __name__ == "__main__":
         help="Skip BEPROF evaluation",
     )
     parser.add_argument(
-        "--per_protein",
+        "--per-protein",
         action="store_true",
         help="Compute per-protein performance during CAFA evaluation",
     )

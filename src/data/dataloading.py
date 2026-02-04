@@ -65,23 +65,11 @@ class SwissProtDataset:
         # Load GO annotations to determine train/val/test splits
         self._load_split_masks(config)
 
-        # Load external annotations if provided
+        # Load external annotations, if provided
         if config["data"].get("dataset") == "swissprot":
-            annot_path = self.train_annots_path
-            if Path(annot_path).exists():
-                logger.info(f"Loading external annotations from {annot_path}")
-                annot_df = pd.read_csv(annot_path, sep="\t")
-                self.external_annotations = {}
-                for _, row in annot_df.iterrows():
-                    pid = row["EntryID"]
-                    if self.uses_entryid:
-                        pid = self.rev_pid_mapping.get(pid, pid)
-                    self.external_annotations[pid] = row["term"].split("; ")
-                logger.info(
-                    f"Loaded external annotations for {len(self.external_annotations)} proteins"
-                )
-            else:
-                logger.warning(f"External annotations file not found at {annot_path}")
+            self._load_external_annotations(self.train_annots_path)
+        if config["data"].get("external_annotations_path", None):
+            self._load_external_annotations(config["data"]["external_annotations_path"])
 
         # Create the protein-protein heterograph
         self.data = self._create_protein_graph(config)
@@ -100,6 +88,23 @@ class SwissProtDataset:
         logger.info(f"Train proteins: {self.train_mask.sum().item()}")
         logger.info(f"Val proteins: {self.val_mask.sum().item()}")
         logger.info(f"Test proteins: {self.test_mask.sum().item()}")
+
+    def _load_external_annotations(self, annot_path):
+        """Load external GO annotations from a TSV file."""
+        if Path(annot_path).exists():
+            logger.info(f"Loading external annotations from {annot_path}")
+            annot_df = pd.read_csv(annot_path, sep="\t")
+            self.external_annotations = {}
+            for _, row in annot_df.iterrows():
+                pid = row["EntryID"]
+                if self.uses_entryid:
+                    pid = self.rev_pid_mapping.get(pid, pid)
+                self.external_annotations[pid] = row["term"].split("; ")
+            logger.info(
+                f"Loaded {len(self.external_annotations)} external annotations from {annot_path}"
+            )
+        else:
+            logger.warning(f"External annotations file not found at {annot_path}")
 
     def _load_split_masks(self, config):
         """Load train/val/test splits based on GO annotations.
@@ -135,6 +140,12 @@ class SwissProtDataset:
             #     self.train_annots[pid]["term"] = self.train_annots[pid]["term"].split(
             #         "; "
             #     )
+        else:
+            logger.error(f"Train annotations file not found at {train_path}")
+            raise FileNotFoundError(
+                f"Train annotations file not found at {train_path}. Check for conflicting config settings ?"
+            )
+
         logger.info(f"Using {len(splits['train'])} train proteins from {train_path}")
 
         # Load val and test
