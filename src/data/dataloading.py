@@ -114,8 +114,9 @@ class SwissProtDataset:
         subontology = self.subontology
         release = config["data"].get("swissprot_release", None)
         dataset = config["data"]["dataset"]
+        train_proteins_config = config["data"].get("train_proteins", "dataset")
 
-        if config["data"]["train_on_swissprot"] or dataset == "swissprot":
+        if train_proteins_config == "swissprot" or dataset == "swissprot":
             exp_suffix = "exp_" if config["data"].get("exp_only", True) else ""
             train_path = f"./data/swissprot/{release}/swissprot_{release}_{subontology}_{exp_suffix}annotations.tsv"
             self.train_annots_path = train_path
@@ -130,7 +131,7 @@ class SwissProtDataset:
         if Path(train_path).exists():
             train_df = pd.read_csv(train_path, sep="\t")
             splits["train"] = set(train_df["EntryID"].tolist())
-            if config["data"]["train_on_swissprot"] and self.uses_entryid:
+            if train_proteins_config == "swissprot" and self.uses_entryid:
                 splits["train"] = set(
                     [self.rev_pid_mapping.get(pid, pid) for pid in splits["train"]]
                 )
@@ -153,7 +154,7 @@ class SwissProtDataset:
             split_path = (
                 f"./data/{dataset}/{dataset}_{subontology}_{split_name}_annotations.tsv"
             )
-            if release:
+            if release and dataset == "swissprot":
                 split_path = f"./data/swissprot/2024_01/swissprot_2024_01_{subontology}_{split_name}_annotations.tsv"
             if Path(split_path).exists():
                 split_df = pd.read_csv(split_path, sep="\t")
@@ -170,7 +171,7 @@ class SwissProtDataset:
                 )
 
         # Remove proteins from val/test if training on the full SwissProt release.
-        if config["data"]["train_on_swissprot"] or dataset == "swissprot":
+        if train_proteins_config == "swissprot" or dataset == "swissprot":
             for split in ["val", "test"]:
                 splits["train"] = splits["train"] - splits[split]
 

@@ -14,7 +14,7 @@ model:
     # protein__stringdb__protein: 30
 
 trainer:
-  epochs: 6
+  epochs: 10
   device: cuda
   compile: false  # Whether to use torch.compile
   num_workers: 4
@@ -29,13 +29,12 @@ scheduler:
   gamma: 0.5
 
 data:
-  dataset: 'D1'
   subontology: 'MFO'
-  train_on_swissprot: false  # Override original train dataset to train on SwissProt instead. Ignored if dataset is already SwissProt.
-  #swissprot_release: '2017_01'  # SwissProt release used when training on SwissProt
-  #exp_only: true  # If training on SwissProt, whether to use only experimental annotations
-
-  external_annotations_path: ./data/swissprot/2022_01/swissprot_2022_01_MFO_exp_annotations.tsv
+  dataset: 'D1' # Dataset to use, which determines test set proteins and default train proteins/annotations.
+  train_proteins: 'swissprot'  # Override 'dataset' train proteins with the specified dataset's proteins.
+  swissprot_release: '2017_01'  # SwissProt release annotations used when training on SwissProt proteins
+  exp_only: true  # Whether to use experimental or curated annotations when training on SwissProt proteins
+  external_annotations_path: ./data/swissprot/2022_01/swissprot_2022_01_MFO_exp_annotations.tsv # Override train annotations with a specific annotation file.
 
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
