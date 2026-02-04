@@ -595,13 +595,13 @@ class SwissProtDataset:
             # ).float()
 
             # Set protein node features as concatenation of InterPro and GO one hots.
-            # batch["protein"].x = torch.cat(
-            #     [batch["protein"].interpro, batch["protein"].go],
-            #     dim=1,
-            # )
+            batch["protein"].x = torch.cat(
+                [batch["protein"].interpro, batch["protein"].go],
+                dim=1,
+            )
 
-            # IPR Ablation: only GO terms as features
-            batch["protein"].x = batch["protein"].go
+            # # IPR Ablation: only GO terms as features
+            # batch["protein"].x = batch["protein"].go
 
             # Add amino acid nodes and features
             batch["aa"].x = torch.cat(batch_aa_features, dim=0).float()
