@@ -41,6 +41,9 @@ def load_model_and_config(model_path: str, device: torch.device):
     """Load pretrained model, config, and dataset."""
     with open(f"{model_path}/cfg.yaml", "r") as f:
         config = yaml.safe_load(f)
+        # If subontology is a list, convert to str for consistency
+        if isinstance(config.get("data", {}).get("subontology"), list):
+            config["data"]["subontology"] = config["data"]["subontology"][0]
 
     logger.info("Loading dataset...")
     dataset = SwissProtDataset(config)
@@ -492,7 +495,7 @@ def main():
         description="Generate explanations for protein function prediction model"
     )
     parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--proteins", nargs="*", default=None)
+    parser.add_argument("--proteins", nargs="*", default=None, required=True)
     parser.add_argument("--go_terms", nargs="*", default=None)
     parser.add_argument(
         "--threshold", type=float, default=0.5

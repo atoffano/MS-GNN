@@ -18,6 +18,7 @@ class SwissProtDataset:
     @timeit
     def __init__(self, config):
         self.config = config
+        self.external_annotations = None
         if config["data"]["dataset"] in USES_ENTRYID:
             self.uses_entryid = True
         else:
@@ -591,9 +592,9 @@ class SwissProtDataset:
                 batch["protein"].go[mask] = 0.0
 
             # Deletion experiment: set .x features to normal distribution samples
-            # batch["protein"].x = torch.randn(
-            #     batch["protein"].num_nodes, self.ipr_vocab_size + self.go_vocab_size
-            # ).float()
+            batch["protein"].x = torch.randn(
+                batch["protein"].num_nodes, self.ipr_vocab_size + self.go_vocab_size
+            ).float()
 
             # Set protein node features as concatenation of InterPro and GO one hots.
             batch["protein"].x = torch.cat(
@@ -603,6 +604,9 @@ class SwissProtDataset:
 
             # # IPR Ablation: only GO terms as features
             # batch["protein"].x = batch["protein"].go
+
+            # GO Ablation: only IPR features
+            # batch["protein"].x = batch["protein"].interpro
 
             # Add amino acid nodes and features
             batch["aa"].x = torch.cat(batch_aa_features, dim=0).float()
