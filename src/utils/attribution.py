@@ -6,6 +6,8 @@ import logging
 import argparse
 import go3
 import tqdm
+import pickle
+import os
 from typing import Optional, Dict
 from torch_geometric.explain import Explainer, CaptumExplainer
 from torch_geometric.loader import NeighborLoader
@@ -212,11 +214,13 @@ class ExplanationExporter:
         dataset,
         go_mapper: GOTermMapper,
         plot_neighbors: bool = False,
+        save_scores: bool = False,
     ):
         self.output_dir = output_dir
         self.dataset = dataset
         self.go_mapper = go_mapper
         self.plot_neighbors = plot_neighbors
+        self.save_scores = save_scores
         self.structure_cache: Dict[str, str] = {}
         self.aligned_seqs = None
 
@@ -290,6 +294,9 @@ class ExplanationExporter:
         go_name = self.go_mapper.get_name(go_term)
         title_suffix = f"GO: {go_name}"
 
+        if attentions and self.save_scores:
+            self._save_attention_pkl(batch, attentions, go_term)
+
         plot_systemic_explanation(
             self.output_dir,
             hetero_explanation,
@@ -327,8 +334,81 @@ class ExplanationExporter:
         if attentions:
             self._export_attention(batch, attentions, go_term)
 
+    def _save_attention_pkl(self, batch, attentions, go_term=None):
+        """Save attention scores to a single pickle file."""
+        pkl_path = os.path.join(self.output_dir, "attention_scores.pkl")
+
+        seed_idx = batch["protein"].n_id[0].item()
+        seed_name = self.dataset.idx_to_protein[seed_idx]
+        term_key = go_term if go_term else "global"
+
+        # Map local batch indices to protein names
+        n_ids = batch["protein"].n_id.detach().cpu().tolist()
+        local_idx_to_name = {
+            i: self.dataset.idx_to_protein[nid] for i, nid in enumerate(n_ids)
+        }
+
+        # Prepare layer-wise data
+        layers_data = []
+        target_keys = [
+            ("protein", "aligned_with", "protein"),
+            ("protein", "stringdb", "protein"),
+        ]
+
+        if attentions:
+            for layer_attn in attentions:
+                layer_dict = {}
+                if layer_attn:
+                    for key in target_keys:
+                        if key in layer_attn:
+                            edge_index, scores = layer_attn[key]
+                            # Convert indices to names
+                            u_indices = edge_index[0].detach().cpu().tolist()
+                            v_indices = edge_index[1].detach().cpu().tolist()
+
+                            u_names = [
+                                local_idx_to_name.get(idx, str(idx))
+                                for idx in u_indices
+                            ]
+                            v_names = [
+                                local_idx_to_name.get(idx, str(idx))
+                                for idx in v_indices
+                            ]
+
+                            layer_dict[key] = {
+                                "edge_index": (u_names, v_names),
+                                "scores": scores.detach().cpu().tolist(),
+                            }
+                layers_data.append(layer_dict)
+
+        # Load existing pickle if available (to append/update)
+        full_data = {}
+        if os.path.exists(pkl_path):
+            try:
+                with open(pkl_path, "rb") as f:
+                    full_data = pickle.load(f)
+            except Exception:
+                full_data = {}
+
+        if seed_name not in full_data:
+            full_data[seed_name] = {}
+
+        full_data[seed_name][term_key] = layers_data
+
+        try:
+            with open(pkl_path, "wb") as f:
+                pickle.dump(full_data, f)
+            logger.info(
+                f"Updated attention scores for {seed_name} ({term_key}) in {pkl_path}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to save attention scores: {e}")
+
     def _export_attention(self, batch, attentions, go_term=None):
         """Export attention visualizations."""
+        if go_term is None and self.save_scores:
+            self._save_attention_pkl(batch, attentions)
+
         for idx, layer_attention in enumerate(attentions, start=1):
             if layer_attention is None:
                 continue
@@ -511,6 +591,11 @@ def main():
         action="store_true",
         help="Generate plots for neighbor proteins",
     )
+    parser.add_argument(
+        "--save_scores",
+        action="store_true",
+        help="Save attention scores as pkl object",
+    )
 
     args = parser.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -527,7 +612,11 @@ def main():
     # Process each batch
     for batch in loader:
         exporter = ExplanationExporter(
-            args.model_path, dataset, go_mapper, plot_neighbors=args.plot_neighbors
+            args.model_path,
+            dataset,
+            go_mapper,
+            plot_neighbors=args.plot_neighbors,
+            save_scores=args.save_scores,
         )
         process_batch(
             batch,
