@@ -3,7 +3,7 @@ model:
   batch_size: 8
   edge_attrs: false
   edge_types:
-    - ["aa", "close_to", "aa"]
+    # - ["aa", "close_to", "aa"]
     - ["aa", "belongs_to", "protein"]
     - ["protein", "aligned_with", "protein"]
     - ["protein", "stringdb", "protein"]
