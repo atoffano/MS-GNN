@@ -26,6 +26,9 @@ def load_dataset_from_config(model_path: str):
     config_path = os.path.join(model_path, "cfg.yaml")
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
+        # If subontology is a list, convert to str for consistency
+        if isinstance(config.get("data", {}).get("subontology"), list):
+            config["data"]["subontology"] = config["data"]["subontology"][0]
 
     logger.info("Loading dataset...")
     dataset = SwissProtDataset(config)

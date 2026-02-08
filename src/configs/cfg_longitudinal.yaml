@@ -1,6 +1,6 @@
 model:
   hidden_channels: 256
-  batch_size: 16
+  batch_size: 32
   edge_attrs: false 
   edge_types:
     #- ["aa", "close_to", "aa"]
@@ -42,10 +42,10 @@ run:
   qualifier: LONG  # Additional string to append to run_id for uniqueness
   save_predictions:
     val: false
-    test: true
+    test: false
   test_only: true  # Whether to run evaluation only on the test set (no validation)
   save_epoch_checkpoints: true  # Whether to save checkpoint for each epoch (in addition to latest)
   run_beprof_eval: false
-  run_cafa_eval: true
+  run_cafa_eval: false
   project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"
   #project_path: "/home/atoffano/PFP_layer"

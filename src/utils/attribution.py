@@ -39,22 +39,38 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def load_model_and_config(model_path: str, device: torch.device):
+def load_model_and_config(
+    model_path: str,
+    device: torch.device,
+    checkpoint_name: str,
+):
     """Load pretrained model, config, and dataset."""
-    with open(f"{model_path}/cfg.yaml", "r") as f:
-        config = yaml.safe_load(f)
-        # If subontology is a list, convert to str for consistency
-        if isinstance(config.get("data", {}).get("subontology"), list):
-            config["data"]["subontology"] = config["data"]["subontology"][0]
+    checkpoint_path = f"{model_path}/checkpoints/{checkpoint_name}"
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location=device,
+        weights_only=False,
+    )
+
+    if "config" in checkpoint:
+        config = checkpoint["config"]
+        logger.info("Using configuration embedded in checkpoint")
+    else:
+        with open(f"{model_path}/cfg.yaml", "r") as f:
+            config = yaml.safe_load(f)
+        logger.info("Using configuration from cfg.yaml")
+
+    # If subontology is a list, convert to str for consistency
+    if isinstance(config.get("data", {}).get("subontology"), list):
+        config["data"]["subontology"] = config["data"]["subontology"][0]
 
     logger.info("Loading dataset...")
     dataset = SwissProtDataset(config)
 
     logger.info("Loading model...")
     model = ProteinGNN(config, dataset)
-    state_dict = torch.load(
-        f"{model_path}/best_model.pth", map_location=device, weights_only=False
-    )
+
+    state_dict = checkpoint.get("model_state_dict", checkpoint)
     state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
     model.load_state_dict(state_dict)
     model = model.to(device).eval()
@@ -254,42 +270,42 @@ class ExplanationExporter:
     def export_global(self, batch, hetero_explanation, attentions=None):
         """Export global model explanations."""
         self._ensure_cache(batch)
-        self._ensure_msa(batch)
+        # self._ensure_msa(batch)
         logger.info("Plotting global explanations...")
 
-        plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
-        plot_protein_explanation(
-            self.output_dir,
-            hetero_explanation,
-            self.dataset,
-            plot_neighbors=self.plot_neighbors,
-        )
-        plot_protein_explanation_msa(
-            self.output_dir,
-            hetero_explanation,
-            self.dataset,
-            batch,
-            aligned_seqs=self.aligned_seqs,
-        )
-        export_captum_3d(
-            self.output_dir,
-            self.dataset,
-            batch,
-            hetero_explanation,
-            structure_cache=self.structure_cache,
-            plot_neighbors=self.plot_neighbors,
-        )
+        # plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
+        # plot_protein_explanation(
+        #     self.output_dir,
+        #     hetero_explanation,
+        #     self.dataset,
+        #     plot_neighbors=self.plot_neighbors,
+        # )
+        # plot_protein_explanation_msa(
+        #     self.output_dir,
+        #     hetero_explanation,
+        #     self.dataset,
+        #     batch,
+        #     aligned_seqs=self.aligned_seqs,
+        # )
+        # export_captum_3d(
+        #     self.output_dir,
+        #     self.dataset,
+        #     batch,
+        #     hetero_explanation,
+        #     structure_cache=self.structure_cache,
+        #     plot_neighbors=self.plot_neighbors,
+        # )
 
         if attentions:
             self._export_attention(batch, attentions)
-            analyze_attention_captum_correlation(
-                self.output_dir, self.dataset, batch, attentions, hetero_explanation
-            )
+            # analyze_attention_captum_correlation(
+            #     self.output_dir, self.dataset, batch, attentions, hetero_explanation
+            # )
 
     def export_go_term(self, batch, hetero_explanation, go_term: str, attentions=None):
         """Export GO term-specific explanation."""
         self._ensure_cache(batch)
-        self._ensure_msa(batch)
+        # self._ensure_msa(batch)
         logger.info(f"Plotting explanations for {go_term}...")
         go_name = self.go_mapper.get_name(go_term)
         title_suffix = f"GO: {go_name}"
@@ -356,30 +372,28 @@ class ExplanationExporter:
         ]
 
         if attentions:
-            for layer_attn in attentions:
-                layer_dict = {}
-                if layer_attn:
-                    for key in target_keys:
-                        if key in layer_attn:
-                            edge_index, scores = layer_attn[key]
-                            # Convert indices to names
-                            u_indices = edge_index[0].detach().cpu().tolist()
-                            v_indices = edge_index[1].detach().cpu().tolist()
+            layer_attn = attentions[1]  # Use layer 2.
+            layer_dict = {}
+            if layer_attn:
+                for key in target_keys:
+                    if key in layer_attn:
+                        edge_index, scores = layer_attn[key]
+                        # Convert indices to names
+                        u_indices = edge_index[0].detach().cpu().tolist()
+                        v_indices = edge_index[1].detach().cpu().tolist()
 
-                            u_names = [
-                                local_idx_to_name.get(idx, str(idx))
-                                for idx in u_indices
-                            ]
-                            v_names = [
-                                local_idx_to_name.get(idx, str(idx))
-                                for idx in v_indices
-                            ]
+                        u_names = [
+                            local_idx_to_name.get(idx, str(idx)) for idx in u_indices
+                        ]
+                        v_names = [
+                            local_idx_to_name.get(idx, str(idx)) for idx in v_indices
+                        ]
 
-                            layer_dict[key] = {
-                                "edge_index": (u_names, v_names),
-                                "scores": scores.detach().cpu().tolist(),
-                            }
-                layers_data.append(layer_dict)
+                        layer_dict[key] = {
+                            "edge_index": (u_names, v_names),
+                            "scores": scores.detach().cpu().tolist(),
+                        }
+            layers_data.append(layer_dict)
 
         # Load existing pickle if available (to append/update)
         full_data = {}
@@ -409,77 +423,77 @@ class ExplanationExporter:
         if go_term is None and self.save_scores:
             self._save_attention_pkl(batch, attentions)
 
-        for idx, layer_attention in enumerate(attentions, start=1):
-            if layer_attention is None:
-                continue
+        # for idx, layer_attention in enumerate(attentions, start=1):
+        #     if layer_attention is None:
+        #         continue
 
-            if go_term is None:
-                plot_systemic_attention(
-                    self.output_dir, layer_attention, self.dataset, batch, idx
-                )
+        #     if go_term is None:
+        #         plot_systemic_attention(
+        #             self.output_dir, layer_attention, self.dataset, batch, idx
+        #         )
 
-            plot_protein_attention(
-                self.output_dir,
-                layer_attention,
-                self.dataset,
-                batch,
-                idx,
-                go_term,
-                plot_neighbors=self.plot_neighbors,
-            )
-            plot_protein_attention_msa(
-                self.output_dir,
-                layer_attention,
-                self.dataset,
-                batch,
-                idx,
-                go_term,
-                aligned_seqs=self.aligned_seqs,
-            )
+        #     plot_protein_attention(
+        #         self.output_dir,
+        #         layer_attention,
+        #         self.dataset,
+        #         batch,
+        #         idx,
+        #         go_term,
+        #         plot_neighbors=self.plot_neighbors,
+        #     )
+        #     plot_protein_attention_msa(
+        #         self.output_dir,
+        #         layer_attention,
+        #         self.dataset,
+        #         batch,
+        #         idx,
+        #         go_term,
+        #         aligned_seqs=self.aligned_seqs,
+        #     )
 
-            if self.plot_neighbors:
-                plot_attn_seed_vs_neighbor_scatter(
-                    self.output_dir,
-                    layer_attention,
-                    self.dataset,
-                    batch,
-                    idx,
-                    go_term,
-                    aligned_seqs=self.aligned_seqs,
-                )
-                plot_attn_stringdb_vs_aligned_scatter(
-                    self.output_dir,
-                    layer_attention,
-                    self.dataset,
-                    batch,
-                    idx,
-                    go_term,
-                )
+        #     if self.plot_neighbors:
+        #         plot_attn_seed_vs_neighbor_scatter(
+        #             self.output_dir,
+        #             layer_attention,
+        #             self.dataset,
+        #             batch,
+        #             idx,
+        #             go_term,
+        #             aligned_seqs=self.aligned_seqs,
+        #         )
+        #         plot_attn_stringdb_vs_aligned_scatter(
+        #             self.output_dir,
+        #             layer_attention,
+        #             self.dataset,
+        #             batch,
+        #             idx,
+        #             go_term,
+        #         )
 
-            export_layer_attention_3d(
-                self.output_dir,
-                self.dataset,
-                batch,
-                idx,
-                layer_attention,
-                structure_cache=self.structure_cache,
-                go_term=go_term,
-                plot_neighbors=self.plot_neighbors,
-            )
+        #     export_layer_attention_3d(
+        #         self.output_dir,
+        #         self.dataset,
+        #         batch,
+        #         idx,
+        #         layer_attention,
+        #         structure_cache=self.structure_cache,
+        #         go_term=go_term,
+        #         plot_neighbors=self.plot_neighbors,
+        #     )
 
-        # Export merged attention plots
-        plot_merged_systemic_attention(
-            self.output_dir, attentions, self.dataset, batch, go_term
-        )
-        plot_merged_protein_attention(
-            self.output_dir,
-            attentions,
-            self.dataset,
-            batch,
-            go_term,
-            aligned_seqs=self.aligned_seqs,
-            plot_neighbors=self.plot_neighbors,
-        )
+        # # Export merged attention plots
+        # plot_merged_systemic_attention(
+        #     self.output_dir, attentions, self.dataset, batch, go_term
+        # )
+        # plot_merged_protein_attention(
+        #     self.output_dir,
+        #     attentions,
+        #     self.dataset,
+        #     batch,
+        #     go_term,
+        #     aligned_seqs=self.aligned_seqs,
+        #     plot_neighbors=self.plot_neighbors,
+        # )
 
 
 def create_data_loader(dataset, config, protein_names: list[str]) -> NeighborLoader:
@@ -575,6 +589,12 @@ def main():
         description="Generate explanations for protein function prediction model"
     )
     parser.add_argument("--model_path", type=str, required=True)
+    # optional
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        help="Checkpoint to load (e.g. checkpoint_latest_MFO.pth).",
+    )
     parser.add_argument("--proteins", nargs="*", default=None, required=True)
     parser.add_argument("--go_terms", nargs="*", default=None)
     parser.add_argument(
@@ -602,7 +622,9 @@ def main():
     logger.info(f"Using device: {device}")
 
     # Load model and dataset
-    config, model, dataset = load_model_and_config(args.model_path, device)
+    config, model, dataset = load_model_and_config(
+        args.model_path, device, args.checkpoint
+    )
 
     # Initialize components
     go_mapper = GOTermMapper(dataset, obo_path=GO_OBO_PATH)
@@ -610,25 +632,27 @@ def main():
     loader = create_data_loader(dataset, config, args.proteins)
 
     # Process each batch
-    for batch in loader:
-        exporter = ExplanationExporter(
-            args.model_path,
-            dataset,
-            go_mapper,
-            plot_neighbors=args.plot_neighbors,
-            save_scores=args.save_scores,
-        )
-        process_batch(
-            batch,
-            model,
-            device,
-            exporter,
-            generator,
-            go_mapper,
-            args.go_terms,
-            threshold=args.threshold,
-        )
-
+    try:
+        for batch in loader:
+            exporter = ExplanationExporter(
+                args.model_path,
+                dataset,
+                go_mapper,
+                plot_neighbors=args.plot_neighbors,
+                save_scores=args.save_scores,
+            )
+            process_batch(
+                batch,
+                model,
+                device,
+                exporter,
+                generator,
+                go_mapper,
+                args.go_terms,
+                threshold=args.threshold,
+            )
+    except Exception as e:
+        logger.error(f"Error during explanation generation: {e}")
     logger.info(
         f"Explanation generation completed! Results saved to: {args.model_path}"
     )

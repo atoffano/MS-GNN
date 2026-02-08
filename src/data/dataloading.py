@@ -295,14 +295,13 @@ class SwissProtDataset:
             edge_index = torch.tensor(
                 [source_indices, target_indices], dtype=torch.long
             )
-            if config["model"]["edge_attrs"]:
-                # features = alignment_df.drop(columns=["protein1", "protein2"])
+            if config["model"][
+                "edge_attrs"
+            ]:  # Z-score Normalize bitscore as edge attribute
                 features = alignment_df[["bitscore"]]
-                means = features.mean()
-                stds = features.std()
-                normalized_features = (features - means) / stds
                 edge_attrs = torch.tensor(
-                    normalized_features.values, dtype=torch.float32
+                    ((features - features.mean()) / features.std()).values,
+                    dtype=torch.float32,
                 )
             else:
                 edge_attrs = None
@@ -371,14 +370,13 @@ class SwissProtDataset:
             edge_index = torch.tensor(
                 [source_indices, target_indices], dtype=torch.long
             )
-            if config["model"]["edge_attrs"]:
+            if config["model"][
+                "edge_attrs"
+            ]:  # Z-score Normalize combined_score as edge attribute
                 features = stringdb_df[["combined_score"]]
-                # features = stringdb_df.drop(columns=["protein1", "protein2"])
-                means = features.mean()
-                stds = features.std()
-                normalized_features = (features - means) / stds
                 edge_attrs = torch.tensor(
-                    normalized_features.values, dtype=torch.float32
+                    ((features - features.mean()) / features.std()).values,
+                    dtype=torch.float32,
                 )
             else:
                 edge_attrs = None
@@ -591,22 +589,30 @@ class SwissProtDataset:
                 mask = mask_val | mask_test
                 batch["protein"].go[mask] = 0.0
 
-            # Deletion experiment: set .x features to normal distribution samples
-            batch["protein"].x = torch.randn(
-                batch["protein"].num_nodes, self.ipr_vocab_size + self.go_vocab_size
-            ).float()
-
-            # Set protein node features as concatenation of InterPro and GO one hots.
-            batch["protein"].x = torch.cat(
-                [batch["protein"].interpro, batch["protein"].go],
-                dim=1,
-            )
-
-            # # IPR Ablation: only GO terms as features
-            # batch["protein"].x = batch["protein"].go
-
-            # GO Ablation: only IPR features
-            # batch["protein"].x = batch["protein"].interpro
+            if (
+                self.config["model"]["interpro"]
+                and self.config["model"]["go_neighbors"]
+            ):
+                # Set protein node features as concatenation of InterPro and GO one hots.
+                batch["protein"].x = torch.cat(
+                    [batch["protein"].interpro, batch["protein"].go],
+                    dim=1,
+                )
+            elif (
+                self.config["model"]["interpro"]
+                and not self.config["model"]["go_neighbors"]
+            ):  # GO Ablation: only IPR features
+                batch["protein"].x = batch["protein"].interpro
+            elif (
+                not self.config["model"]["interpro"]
+                and self.config["model"]["go_neighbors"]
+            ):  # IPR Ablation: only GO terms as features
+                batch["protein"].x = batch["protein"].go
+            else:
+                # Zero input
+                batch["protein"].x = torch.zeros(
+                    batch["protein"].num_nodes, self.ipr_vocab_size + self.go_vocab_size
+                ).float()
 
             # Add amino acid nodes and features
             batch["aa"].x = torch.cat(batch_aa_features, dim=0).float()
@@ -639,7 +645,18 @@ class SwissProtDataset:
             if return_sequences:
                 batch["protein"].sequences = sampled_sequences
 
-            batch = self.transform(batch)
+            try:
+                batch = self.transform(batch)
+            except Exception as e:
+                logger.error(f"Error applying graph transformations: {e}")
+                logger.error(f"Batch before transformation: {batch}")
+                logger.error(
+                    f"Batch edge_attrs before transformation: {batch['protein', 'stringdb', 'protein'].edge_attr}"
+                )
+                logger.error(
+                    f"Batch edge_attrs before transformation: {batch['protein', 'aligned_with', 'protein'].edge_attr}"
+                )
+
             return batch
 
 

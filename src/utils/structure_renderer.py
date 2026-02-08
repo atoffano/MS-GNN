@@ -14,29 +14,6 @@ from src.utils.visualize import (
 logger = logging.getLogger(__name__)
 
 
-# def _protein_scores_to_residue_list(
-#     protein_score_map: Dict[int, Dict[int, float]],
-# ) -> Dict[int, List[Tuple[int, float]]]:
-#     """Convert protein score map to sorted residue lists with 1-based indexing.
-
-#     Args:
-#         protein_score_map: Dict mapping protein_idx to {aa_idx: score}.
-
-#     Returns:
-#         Dict mapping protein_idx to [(residue_1_based, score), ...] sorted by residue.
-#     """
-#     residue_dict = {}
-#     for protein_idx, aa_to_score in protein_score_map.items():
-#         if not aa_to_score:
-#             continue
-#         # Sort by AA index and convert to 1-based
-#         sorted_items = sorted(aa_to_score.items(), key=lambda x: x[0])
-#         residue_dict[protein_idx] = [
-#             (aa_idx + 1, score) for aa_idx, score in sorted_items
-#         ]
-#     return residue_dict
-
-
 def _edge_scores_to_residues(
     edge_index: torch.Tensor, scores: torch.Tensor
 ) -> Dict[int, List[Tuple[int, float]]]:
@@ -87,7 +64,11 @@ def _render_structures(
                 if dataset.uses_entryid
                 else uniprot_id
             )
-            pdb_path = ensure_structure(pdb_id, context.seed_dir)
+            try:
+                pdb_path = ensure_structure(pdb_id, context.seed_dir)
+            except FileNotFoundError as e:
+                logger.warning(f"Skipping 3D rendering for {uniprot_id}: {e}")
+                continue
             if structure_cache is not None:
                 structure_cache[uniprot_id] = pdb_path
 
