@@ -36,7 +36,7 @@ data:
   train_proteins: 'D1'  # Override 'dataset' train proteins with the specified dataset's proteins.
   swissprot_release: '2024_01'  # SwissProt release annotations used when training on SwissProt proteins (train_proteins: swissprot)
   exp_only: true  # Whether to use experimental or curated annotations when training on SwissProt proteins
-  external_annotations_path: ./data/swissprot/2024_01/swissprot_2024_01_MFO_exp_annotations.tsv # Override train annotations with a specific annotation file. Also overrides 'exp_only' flag.
+  external_annotations_path: ./data/swissprot/2024_01/swissprot_2024_01_CCO_exp_annotations.tsv # Override train annotations with a specific annotation file. Also overrides 'exp_only' flag.
   
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
