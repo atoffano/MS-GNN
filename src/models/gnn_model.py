@@ -202,14 +202,10 @@ class ProteinGNN(torch.nn.Module):
             ],
             dim=1,
         )
-        x_prot = self.prelu_prot(x_prot)
-
-        x_prot = self.norm_prot(x_prot)
 
         # Post-process lin layers
         x_prot = self.lin_post(x_prot)
         x_prot = self.prelu_post(x_prot)
-
         x_prot = self.norm_post(x_prot)
 
         x_prot = self.lin_out(x_prot)

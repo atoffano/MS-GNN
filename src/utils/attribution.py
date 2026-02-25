@@ -14,7 +14,12 @@ from torch_geometric.loader import NeighborLoader
 
 from src.data.dataloading import SwissProtDataset, make_batch_transform
 from src.models.gnn_model import ProteinGNN
-from src.utils.constants import SUPPORTED_CAPTUM_METHODS, GO_OBO_PATH
+from src.utils.constants import (
+    SUPPORTED_CAPTUM_METHODS,
+    GO_OBO_PATH,
+    GO_VOCAB,
+    INTERPRO_VOCAB,
+)
 from src.utils.visualize import (
     plot_systemic_explanation,
     plot_protein_explanation,
@@ -24,8 +29,8 @@ from src.utils.visualize import (
     plot_protein_attention_msa,
     plot_attn_seed_vs_neighbor_scatter,
     plot_attn_stringdb_vs_aligned_scatter,
-    plot_merged_systemic_attention,
-    plot_merged_protein_attention,
+    # plot_merged_systemic_attention,
+    # plot_merged_protein_attention,
     ensure_structure,
     analyze_attention_captum_correlation,
     perform_msa_from_batch,
@@ -178,17 +183,24 @@ class ExplanationGenerator:
         self.device = device
         self.captum_method = captum_method
 
-    @timeit
-    def generate(
-        self,
-        batch,
-        explanation_type: str = "model",
-        target: Optional[torch.Tensor] = None,
-    ):
-        """Generate explanations for the batch."""
-        batch = batch.to(self.device)
+    def _get_explainer(
+        self, explanation_type: str, attribution_level: str
+    ) -> Explainer:
+        if attribution_level == "node":
+            return Explainer(
+                self.model,
+                algorithm=CaptumExplainer(self.captum_method),
+                explanation_type=explanation_type,
+                node_mask_type="attributes",
+                edge_mask_type=None,
+                model_config=dict(
+                    mode="binary_classification",
+                    task_level="node",
+                    return_type="probs",
+                ),
+            )
 
-        explainer = Explainer(
+        return Explainer(
             self.model,
             algorithm=CaptumExplainer(self.captum_method),
             explanation_type=explanation_type,
@@ -201,8 +213,20 @@ class ExplanationGenerator:
             ),
         )
 
+    @timeit
+    def generate(
+        self,
+        batch,
+        explanation_type: str = "model",
+        target: Optional[torch.Tensor] = None,
+        attribution_level: str = "edge",
+    ):
+        """Generate explanations for the batch."""
+        batch = batch.to(self.device)
+        explainer = self._get_explainer(explanation_type, attribution_level)
+
         logger.info(
-            f"Generating {explanation_type} explanations with {self.captum_method}..."
+            f"Generating {explanation_type} {attribution_level} explanations with {self.captum_method}..."
         )
 
         kwargs = {"batch": batch}
@@ -215,9 +239,17 @@ class ExplanationGenerator:
             )
 
         attributions = explainer(batch.x_dict, batch.edge_index_dict, **kwargs)
-        # Apply absolute value to all returned masks
-        for et in attributions.edge_types:
-            attributions[et].edge_mask = attributions[et].edge_mask.abs()
+
+        if attribution_level == "edge":
+            for et in attributions.edge_types:
+                attributions[et].edge_mask = attributions[et].edge_mask.abs()
+        elif (
+            "protein" in attributions.node_types
+            and hasattr(attributions["protein"], "node_mask")
+            and attributions["protein"].node_mask is not None
+        ):
+            attributions["protein"].node_mask = attributions["protein"].node_mask.abs()
+
         return attributions
 
 
@@ -239,6 +271,89 @@ class ExplanationExporter:
         self.save_scores = save_scores
         self.structure_cache: Dict[str, str] = {}
         self.aligned_seqs = None
+        self.go_idx_to_term, self.ipr_idx_to_term = self._load_feature_vocab_maps()
+        self.attr_abs_threshold = 1e-8  # skip numerical noise in dense masks
+
+        # Feature families to export from protein node_mask
+        # Allowed values: "ipr", "go"
+        # self.save = ["ipr", "go"]
+        self.save = ["go"]
+
+        self.feature_names, self.feature_keep_mask = self._build_feature_name_lookup()
+
+    def _build_feature_name_lookup(self):
+        """Precompute feature_idx -> term name and export mask for protein.x layout."""
+        use_ipr = self.dataset.config["model"]["interpro"]
+        use_go = self.dataset.config["model"]["go_neighbors"]
+        save_set = set(self.save)
+
+        names = []
+        keep = []
+
+        if use_ipr:
+            names.extend(
+                self.ipr_idx_to_term.get(i, f"IPR_IDX_{i}")
+                for i in range(self.dataset.ipr_vocab_size)
+            )
+            keep.extend(["ipr" in save_set] * self.dataset.ipr_vocab_size)
+
+        if use_go:
+            names.extend(
+                self.go_idx_to_term.get(i, f"GO_IDX_{i}")
+                for i in range(self.dataset.go_vocab_size)
+            )
+            keep.extend(["go" in save_set] * self.dataset.go_vocab_size)
+
+        if not names:
+            # fallback for zero-input mode
+            total = self.dataset.ipr_vocab_size + self.dataset.go_vocab_size
+            names = [f"FEATURE_IDX_{i}" for i in range(total)]
+            keep = [False] * total
+
+        return names, torch.tensor(keep, dtype=torch.bool)
+
+    def _load_feature_vocab_maps(self):
+        """Load idx->term maps for GO and InterPro."""
+        go_idx_to_term = {}
+        ipr_idx_to_term = {}
+
+        try:
+            with open(GO_VOCAB, "rb") as f:
+                go_vocab = pickle.load(f)
+            sub = self.dataset.subontology
+            go_to_idx = go_vocab.get(sub, {}).get("go_to_idx", {})
+            go_idx_to_term = {idx: term for term, idx in go_to_idx.items()}
+        except Exception as e:
+            logger.warning(f"Could not load GO vocab mapping: {e}")
+
+        try:
+            with open(INTERPRO_VOCAB, "rb") as f:
+                ipr_vocab = pickle.load(f)
+            ipr_to_idx = ipr_vocab.get("ipr_to_idx", {})
+            ipr_idx_to_term = {idx: term for term, idx in ipr_to_idx.items()}
+        except Exception as e:
+            logger.warning(f"Could not load InterPro vocab mapping: {e}")
+
+        return go_idx_to_term, ipr_idx_to_term
+
+    def _feature_idx_to_term(self, feature_idx: int) -> str:
+        """Convert protein feature position to InterPro/GO term based on model input layout."""
+        use_ipr = self.dataset.config["model"]["interpro"]
+        use_go = self.dataset.config["model"]["go_neighbors"]
+
+        if use_ipr and use_go:
+            if feature_idx < self.dataset.ipr_vocab_size:
+                return self.ipr_idx_to_term.get(feature_idx, f"IPR_IDX_{feature_idx}")
+            go_idx = feature_idx - self.dataset.ipr_vocab_size
+            return self.go_idx_to_term.get(go_idx, f"GO_IDX_{go_idx}")
+
+        if use_ipr and not use_go:
+            return self.ipr_idx_to_term.get(feature_idx, f"IPR_IDX_{feature_idx}")
+
+        if (not use_ipr) and use_go:
+            return self.go_idx_to_term.get(feature_idx, f"GO_IDX_{feature_idx}")
+
+        return f"FEATURE_IDX_{feature_idx}"
 
     def _ensure_msa(self, batch):
         """Ensure MSA is computed for the current batch."""
@@ -267,42 +382,175 @@ class ExplanationExporter:
             except FileNotFoundError as e:
                 logger.warning(f"Could not load structure for {uniprot_id}: {e}")
 
-    def export_global(self, batch, hetero_explanation, attentions=None):
+    def _save_captum_attributions_pkl(
+        self,
+        batch,
+        edge_attributions=None,
+        node_attributions=None,
+        go_term=None,
+    ):
+        """Save edge and protein feature attributions as a single pickle dict."""
+        pkl_path = os.path.join(self.output_dir, "captum_attributions.pkl")
+        seed_idx = batch["protein"].n_id[0].item()
+        seed_name = self.dataset.idx_to_protein[seed_idx]
+        term_key = go_term if go_term else "global"
+
+        n_ids = batch["protein"].n_id.detach().cpu().tolist()
+        local_idx_to_name = {
+            i: self.dataset.idx_to_protein[nid] for i, nid in enumerate(n_ids)
+        }
+
+        payload = {"edge": {}, "node": {}}
+
+        if edge_attributions is not None:
+            # Restrict to protein-protein edges for compact/fast serialization
+            for rel in edge_attributions.edge_types:
+                if hasattr(edge_attributions[rel], "edge_mask"):
+                    edge_index = edge_attributions[rel].edge_index.detach().cpu()
+                    edge_mask = edge_attributions[rel].edge_mask.detach().cpu()
+                    u = [
+                        local_idx_to_name.get(i, str(i)) for i in edge_index[0].tolist()
+                    ]
+                    v = [
+                        local_idx_to_name.get(i, str(i)) for i in edge_index[1].tolist()
+                    ]
+                    payload["edge"][rel] = {
+                        "edge_index": (u, v),
+                        "scores": edge_mask.tolist(),
+                    }
+
+        if (
+            node_attributions is not None
+            and "protein" in node_attributions.node_types
+            and hasattr(node_attributions["protein"], "node_mask")
+            and node_attributions["protein"].node_mask is not None
+        ):
+            protein_mask = node_attributions["protein"].node_mask.detach().abs().cpu()
+
+            # Keep only selected feature families from self.save
+            keep_mask = self.feature_keep_mask
+            if keep_mask.numel() < protein_mask.shape[1]:
+                pad = torch.zeros(
+                    protein_mask.shape[1] - keep_mask.numel(), dtype=torch.bool
+                )
+                keep_mask = torch.cat([keep_mask, pad], dim=0)
+            elif keep_mask.numel() > protein_mask.shape[1]:
+                keep_mask = keep_mask[: protein_mask.shape[1]]
+
+            selected = (protein_mask > self.attr_abs_threshold) & keep_mask.unsqueeze(0)
+            nz = torch.nonzero(selected, as_tuple=False)
+
+            if nz.numel() > 0:
+                node_idx = nz[:, 0]
+                feat_idx = nz[:, 1]
+                values = protein_mask[node_idx, feat_idx]
+
+                # Group contiguous rows by node after sorting
+                order = torch.argsort(node_idx)
+                node_idx = node_idx[order]
+                feat_idx = feat_idx[order]
+                values = values[order]
+
+                unique_nodes, counts = torch.unique_consecutive(
+                    node_idx, return_counts=True
+                )
+                offsets = torch.cumsum(counts, dim=0)
+                start = 0
+
+                for i, local_node_idx in enumerate(unique_nodes.tolist()):
+                    end = offsets[i].item()
+                    node_name = local_idx_to_name.get(
+                        local_node_idx, str(local_node_idx)
+                    )
+
+                    f_idx = feat_idx[start:end].tolist()
+                    vals = values[start:end].tolist()
+                    terms = [
+                        (
+                            self.feature_names[j]
+                            if j < len(self.feature_names)
+                            else f"FEATURE_IDX_{j}"
+                        )
+                        for j in f_idx
+                    ]
+
+                    payload["node"][node_name] = dict(zip(terms, vals))
+                    start = end
+
+        full_data = {}
+        if os.path.exists(pkl_path):
+            try:
+                with open(pkl_path, "rb") as f:
+                    full_data = pickle.load(f)
+            except Exception:
+                full_data = {}
+
+        if seed_name not in full_data:
+            full_data[seed_name] = {}
+        full_data[seed_name][term_key] = payload
+
+        try:
+            with open(pkl_path, "wb") as f:
+                pickle.dump(full_data, f)
+            logger.info(
+                f"Updated Captum attributions for {seed_name} ({term_key}) in {pkl_path}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to save Captum attributions: {e}")
+
+    def export_global(
+        self, batch, hetero_explanation, attentions=None, node_attributions=None
+    ):
         """Export global model explanations."""
         self._ensure_cache(batch)
-        # self._ensure_msa(batch)
+        self._ensure_msa(batch)
         logger.info("Plotting global explanations...")
 
-        # plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
-        # plot_protein_explanation(
-        #     self.output_dir,
-        #     hetero_explanation,
-        #     self.dataset,
-        #     plot_neighbors=self.plot_neighbors,
-        # )
-        # plot_protein_explanation_msa(
-        #     self.output_dir,
-        #     hetero_explanation,
-        #     self.dataset,
-        #     batch,
-        #     aligned_seqs=self.aligned_seqs,
-        # )
-        # export_captum_3d(
-        #     self.output_dir,
-        #     self.dataset,
-        #     batch,
-        #     hetero_explanation,
-        #     structure_cache=self.structure_cache,
-        #     plot_neighbors=self.plot_neighbors,
-        # )
+        if self.save_scores:
+            self._save_captum_attributions_pkl(
+                batch,
+                edge_attributions=hetero_explanation,
+                node_attributions=node_attributions,
+                go_term=None,
+            )
+
+        plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
+        plot_protein_explanation(
+            self.output_dir,
+            hetero_explanation,
+            self.dataset,
+            plot_neighbors=self.plot_neighbors,
+        )
+        plot_protein_explanation_msa(
+            self.output_dir,
+            hetero_explanation,
+            self.dataset,
+            batch,
+            aligned_seqs=self.aligned_seqs,
+        )
+        export_captum_3d(
+            self.output_dir,
+            self.dataset,
+            batch,
+            hetero_explanation,
+            structure_cache=self.structure_cache,
+            plot_neighbors=self.plot_neighbors,
+        )
 
         if attentions:
             self._export_attention(batch, attentions)
-            # analyze_attention_captum_correlation(
-            #     self.output_dir, self.dataset, batch, attentions, hetero_explanation
-            # )
+            analyze_attention_captum_correlation(
+                self.output_dir, self.dataset, batch, attentions, hetero_explanation
+            )
 
-    def export_go_term(self, batch, hetero_explanation, go_term: str, attentions=None):
+    def export_go_term(
+        self,
+        batch,
+        hetero_explanation,
+        go_term: str,
+        attentions=None,
+        node_attributions=None,
+    ):
         """Export GO term-specific explanation."""
         self._ensure_cache(batch)
         # self._ensure_msa(batch)
@@ -350,6 +598,14 @@ class ExplanationExporter:
         if attentions:
             self._export_attention(batch, attentions, go_term)
 
+        if self.save_scores:
+            self._save_captum_attributions_pkl(
+                batch,
+                edge_attributions=hetero_explanation,
+                node_attributions=node_attributions,
+                go_term=go_term,
+            )
+
     def _save_attention_pkl(self, batch, attentions, go_term=None):
         """Save attention scores to a single pickle file."""
         pkl_path = os.path.join(self.output_dir, "attention_scores.pkl")
@@ -366,16 +622,19 @@ class ExplanationExporter:
 
         # Prepare layer-wise data
         layers_data = []
-        target_keys = [
-            ("protein", "aligned_with", "protein"),
-            ("protein", "stringdb", "protein"),
-        ]
+        # target_keys = [
+        #     ("protein", "aligned_with", "protein"),
+        #     ("protein", "stringdb", "protein"),
+        #     ("protein", "rev_belongs_to", "aa"),
+        #     ("aa", "belongs_to", "protein"),
+        #     ("aa", "close_to", "aa"),
+        # ]
 
         if attentions:
             layer_attn = attentions[1]  # Use layer 2.
             layer_dict = {}
             if layer_attn:
-                for key in target_keys:
+                for key in batch.edge_index_dict.keys():
                     if key in layer_attn:
                         edge_index, scores = layer_attn[key]
                         # Convert indices to names
@@ -423,65 +682,68 @@ class ExplanationExporter:
         if go_term is None and self.save_scores:
             self._save_attention_pkl(batch, attentions)
 
-        # for idx, layer_attention in enumerate(attentions, start=1):
-        #     if layer_attention is None:
-        #         continue
+        for idx, layer_attention in enumerate(attentions, start=1):
+            if layer_attention is None:
+                continue
 
-        #     if go_term is None:
-        #         plot_systemic_attention(
-        #             self.output_dir, layer_attention, self.dataset, batch, idx
-        #         )
+            if go_term is None:
+                # Systemic level neighbor attribution
+                plot_systemic_attention(
+                    self.output_dir, layer_attention, self.dataset, batch, idx
+                )
 
-        #     plot_protein_attention(
-        #         self.output_dir,
-        #         layer_attention,
-        #         self.dataset,
-        #         batch,
-        #         idx,
-        #         go_term,
-        #         plot_neighbors=self.plot_neighbors,
-        #     )
-        #     plot_protein_attention_msa(
-        #         self.output_dir,
-        #         layer_attention,
-        #         self.dataset,
-        #         batch,
-        #         idx,
-        #         go_term,
-        #         aligned_seqs=self.aligned_seqs,
-        #     )
+            # Protein level residue attribution
+            plot_protein_attention(
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                go_term,
+                plot_neighbors=self.plot_neighbors,
+            )
+            plot_protein_attention_msa(
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                go_term,
+                aligned_seqs=self.aligned_seqs,
+            )
 
-        #     if self.plot_neighbors:
-        #         plot_attn_seed_vs_neighbor_scatter(
-        #             self.output_dir,
-        #             layer_attention,
-        #             self.dataset,
-        #             batch,
-        #             idx,
-        #             go_term,
-        #             aligned_seqs=self.aligned_seqs,
-        #         )
-        #         plot_attn_stringdb_vs_aligned_scatter(
-        #             self.output_dir,
-        #             layer_attention,
-        #             self.dataset,
-        #             batch,
-        #             idx,
-        #             go_term,
-        #         )
+            if self.plot_neighbors:
+                plot_attn_seed_vs_neighbor_scatter(
+                    self.output_dir,
+                    layer_attention,
+                    self.dataset,
+                    batch,
+                    idx,
+                    go_term,
+                    aligned_seqs=self.aligned_seqs,
+                )
+                plot_attn_stringdb_vs_aligned_scatter(
+                    self.output_dir,
+                    layer_attention,
+                    self.dataset,
+                    batch,
+                    idx,
+                    go_term,
+                )
 
-        #     export_layer_attention_3d(
-        #         self.output_dir,
-        #         self.dataset,
-        #         batch,
-        #         idx,
-        #         layer_attention,
-        #         structure_cache=self.structure_cache,
-        #         go_term=go_term,
-        #         plot_neighbors=self.plot_neighbors,
-        #     )
+            # 3D structure visualization with attention scores mapped onto residues
+            export_layer_attention_3d(
+                self.output_dir,
+                self.dataset,
+                batch,
+                idx,
+                layer_attention,
+                structure_cache=self.structure_cache,
+                go_term=go_term,
+                plot_neighbors=self.plot_neighbors,
+            )
 
-        # # Export merged attention plots
+        # # Merged attention plots across layers
         # plot_merged_systemic_attention(
         #     self.output_dir, attentions, self.dataset, batch, go_term
         # )
@@ -550,8 +812,18 @@ def process_batch(
     logger.info("=" * 60)
     logger.info("Generating global model explanations...")
     logger.info("=" * 60)
-    global_explanation = generator.generate(batch, "model")
-    exporter.export_global(batch, global_explanation, attn)
+    global_explanation = generator.generate(batch, "model", attribution_level="edge")
+    global_node_attributions = (
+        generator.generate(batch, "model", attribution_level="node")
+        if exporter.save_scores
+        else None
+    )
+    exporter.export_global(
+        batch,
+        global_explanation,
+        attn,
+        node_attributions=global_node_attributions,
+    )
 
     # GO term-specific explanations
     if not go_terms:
@@ -579,8 +851,21 @@ def process_batch(
             leaf_term_id, preds.size(1)
         ).to(device)
 
-        go_explanation = generator.generate(batch, "phenomenon", target)
-        exporter.export_go_term(batch, go_explanation, leaf_term_id, attn)
+        go_explanation = generator.generate(
+            batch, "phenomenon", target, attribution_level="edge"
+        )
+        go_node_attributions = (
+            generator.generate(batch, "phenomenon", target, attribution_level="node")
+            if exporter.save_scores
+            else None
+        )
+        exporter.export_go_term(
+            batch,
+            go_explanation,
+            leaf_term_id,
+            attn,
+            node_attributions=go_node_attributions,
+        )
 
 
 def main():
@@ -632,27 +917,27 @@ def main():
     loader = create_data_loader(dataset, config, args.proteins)
 
     # Process each batch
-    try:
-        for batch in loader:
-            exporter = ExplanationExporter(
-                args.model_path,
-                dataset,
-                go_mapper,
-                plot_neighbors=args.plot_neighbors,
-                save_scores=args.save_scores,
-            )
-            process_batch(
-                batch,
-                model,
-                device,
-                exporter,
-                generator,
-                go_mapper,
-                args.go_terms,
-                threshold=args.threshold,
-            )
-    except Exception as e:
-        logger.error(f"Error during explanation generation: {e}")
+    # try:
+    for batch in loader:
+        exporter = ExplanationExporter(
+            args.model_path,
+            dataset,
+            go_mapper,
+            plot_neighbors=args.plot_neighbors,
+            save_scores=args.save_scores,
+        )
+        process_batch(
+            batch,
+            model,
+            device,
+            exporter,
+            generator,
+            go_mapper,
+            args.go_terms,
+            threshold=args.threshold,
+        )
+    # except Exception as e:
+    #     logger.error(f"Error during explanation generation: {e}")
     logger.info(
         f"Explanation generation completed! Results saved to: {args.model_path}"
     )

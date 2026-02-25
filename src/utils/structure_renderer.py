@@ -104,11 +104,18 @@ def export_layer_attention_3d(
     plot_neighbors: bool = True,
 ) -> None:
     """Export layer attention to 3D structure renderings."""
-    key = ("aa", "belongs_to", "protein")
-    if layer_attention is None or key not in layer_attention:
+    keys = [
+        ("aa", "belongs_to", "protein"),
+        ("aa", "rev_belongs_to", "protein"),
+    ]
+    if layer_attention is None:
         return
 
-    edge_index, attn_weights = layer_attention[key]
+    selected_key = next((k for k in keys if k in layer_attention), None)
+    if selected_key is None:
+        return
+
+    edge_index, attn_weights = layer_attention[selected_key]
     residue_scores = _edge_scores_to_residues(
         edge_index.detach().cpu(),
         attn_weights.detach().cpu(),

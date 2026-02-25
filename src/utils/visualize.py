@@ -18,6 +18,7 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
+from torch_scatter import scatter
 
 from src.utils.constants import RANDOM_SEED, MUSCLE_EXECUTABLE
 from src.utils.api import download_alphafold, download_pdb
@@ -209,23 +210,23 @@ def ensure_structure(uniprot_id: str, out_dir: str) -> str:
         return pdb_path
 
     # Check local data directories
-    current_file_dir = os.path.dirname(os.path.abspath(__file__))
-    for cache_name in ["alphafold_pdb", "esmfold_pdb"]:
-        cache_path = os.path.join(
-            current_file_dir,
-            "..",
-            "..",
-            "data",
-            "swissprot",
-            "2024_01",
-            cache_name,
-            f"{uniprot_id}.pdb",
-        )
-        if os.path.exists(cache_path):
-            shutil.copy2(cache_path, pdb_path)
-            return pdb_path
+    # current_file_dir = os.path.dirname(os.path.abspath(__file__))
+    # for cache_name in ["alphafold_pdb", "esmfold_pdb"]:
+    #     cache_path = os.path.join(
+    #         current_file_dir,
+    #         "..",
+    #         "..",
+    #         "data",
+    #         "swissprot",
+    #         "2024_01",
+    #         cache_name,
+    #         f"{uniprot_id}.pdb",
+    #     )
+    #     if os.path.exists(cache_path):
+    #         shutil.copy2(cache_path, pdb_path)
+    #         return pdb_path
 
-    # # Download from remote sources
+    # Download from remote sources
     # if download_pdb(uniprot_id, pdb_path):
     #     logger.info(f"Downloaded PDB structure for {uniprot_id} from RCSB")
     #     return pdb_path
@@ -1102,161 +1103,90 @@ def plot_protein_attention(
 ):
     """Plot amino acid to protein attention weights."""
     context = build_plot_context(path, dataset, batch)
-    key = ("aa", "belongs_to", "protein")
 
-    if layer_attention is None or key not in layer_attention:
+    if layer_attention is None:
         return
 
-    edge_index, attn_weights = layer_attention[key]
-    _plot_aa_to_protein_scatter(
+    # Plot AA -> Protein attention for both directional relation names.
+    for key in [
+        ("aa", "belongs_to", "protein"),
+        ("protein", "rev_belongs_to", "aa"),
+    ]:
+        if key not in layer_attention:
+            continue
+
+        edge_index, attn_weights = layer_attention[key]
+        # reverse edge direction for rev_belongs_to to maintain AA->protein convention
+        if key[1] == "rev_belongs_to":
+            edge_index = edge_index.flip(0)
+        _plot_aa_to_protein_scatter(
+            context,
+            edge_index.detach().cpu(),
+            attn_weights.mean(dim=-1).detach().cpu(),
+            f"AA-Protein Attention ({key[1]}, Layer {layer_idx}): {{protein}}",
+            "Attention weight",
+            f"aa_attention_{key[1]}_layer{layer_idx}",
+            go_term,
+            plot_neighbors=plot_neighbors,
+        )
+
+    # Plot AA->AA attention for residues linked to seed protein, if available
+    # Get AA indices linked to seed protein (index 0) through belongs_to edges
+    edge_index, _ = layer_attention[("aa", "belongs_to", "protein")]
+    aa_src, protein_dst = edge_index[0], edge_index[1]
+    seed_mask = protein_dst == 0
+    aa_idx = aa_src[seed_mask]
+    edge_index, attn_weights = layer_attention[("aa", "close_to", "aa")]
+    # Get attention weights for edge_index where both source and target are in aa_idx
+    aa_src, aa_dst = edge_index[0], edge_index[1]
+    aa_mask = torch.isin(aa_src, aa_idx) & torch.isin(aa_dst, aa_idx)
+    aa_edge_index = edge_index[:, aa_mask].detach().cpu()
+    aa_attn_weights = attn_weights[aa_mask].detach().cpu()
+    # Mean attn per unique src node
+    node_avg_attn = scatter(aa_attn_weights, aa_edge_index[0], dim=0, reduce="mean")
+
+    _plot_aa_to_aa_scatter(
         context,
-        edge_index.detach().cpu(),
-        attn_weights.mean(dim=-1).detach().cpu(),
-        f"AA-Protein Attention (Layer {layer_idx}): {{protein}}",
-        "Attention weight",
-        f"aa_attention_layer{layer_idx}",
+        aa_edge_index,
+        node_avg_attn.flatten(),
+        f"AA→AA Attention (Layer {layer_idx}): {{protein}}",
+        "Mean Attention Weight",
+        f"aa_to_aa_attention_layer{layer_idx}",
         go_term,
-        plot_neighbors=plot_neighbors,
     )
 
 
-def plot_merged_systemic_attention(
-    path: str,
-    attentions: list,
-    dataset,
-    batch,
+def _plot_aa_to_aa_scatter(
+    context: ProteinPlotContext,
+    aa_edge_index: torch.Tensor,
+    node_avg_attn: torch.Tensor,
+    title_template: str,
+    ylabel: str,
+    filename_suffix: str,
     go_term: Optional[str] = None,
 ):
-    """Plot merged protein-protein attention graph across all layers."""
-    context = build_plot_context(path, dataset, batch)
-
-    if not attentions:
+    """Scatter plot of per-residue average AA→AA attention for the seed protein."""
+    if aa_edge_index.numel() == 0:
+        logger.warning("No AA→AA edges found, skipping scatter plot.")
         return
 
-    merged_weights = {}  # (src, rel, dst) -> tensor of weights
-    edge_indices = {}  # (src, rel, dst) -> edge_index
+    unique_src = aa_edge_index[0].unique().cpu()
 
-    for layer_attn in attentions:
-        if layer_attn is None:
-            continue
-
-        for edge_type, (edge_index, attn_weights) in layer_attn.items():
-            if not isinstance(edge_type, tuple) or len(edge_type) != 3:
-                continue
-
-            src, rel, dst = edge_type
-            if src == "protein" and dst == "protein":
-                edge_index = edge_index.detach().cpu()
-                weights = attn_weights.mean(dim=-1).detach().cpu()
-
-                if edge_type not in merged_weights:
-                    merged_weights[edge_type] = weights
-                    edge_indices[edge_type] = edge_index
-                else:
-                    if edge_index.shape == edge_indices[edge_type].shape:
-                        merged_weights[edge_type] += weights
-    # Average weights
-    for edge_type in merged_weights.keys():
-        merged_weights[edge_type] /= len(attentions)
-
-    plotted = False
-    for edge_type, _ in merged_weights.items():
-        src, rel, dst = edge_type
-        edge_index = edge_indices[edge_type]
-
-        # Filter out self-loops for non-seed proteins
-        src_idx, dst_idx = edge_index[0], edge_index[1]
-        mask = ~((src_idx == dst_idx) & (src_idx != 0))
-        edge_index = edge_index[:, mask]
-
-        if edge_index.numel() == 0:
-            continue
-
-        title = f"Protein-Protein Attention (Merged, {rel}): {context.seed_label}"
-        _plot_protein_network(
-            context,
-            edge_index,
-            merged_weights[edge_type][mask],
-            title,
-            "Avg Normalized Attention",
-            f"system_attention_merged_{rel}",
-            go_term,
-        )
-        plotted = True
-
-    if not plotted:
-        logger.info("No systemic attention found to merge.")
-
-
-def plot_merged_protein_attention(
-    path: str,
-    attentions: list,
-    dataset,
-    batch,
-    go_term: Optional[str] = None,
-    aligned_seqs: Optional[List[str]] = None,
-    plot_neighbors: bool = True,
-):
-    """Plot merged amino acid to protein attention weights across all layers."""
-    context = build_plot_context(path, dataset, batch)
-    key = ("aa", "belongs_to", "protein")
-
-    if not attentions:
-        return
-
-    total_weights = None
-    edge_index_ref = None
-    count = 0
-
-    for layer_attn in attentions:
-        if layer_attn is None or key not in layer_attn:
-            continue
-
-        edge_index, attn_weights = layer_attn[key]
-        weights = attn_weights.mean(dim=-1).detach().cpu()
-        edge_index = edge_index.detach().cpu()
-
-        if total_weights is None:
-            total_weights = weights
-            edge_index_ref = edge_index
-            count = 1
-        else:
-            if weights.shape == total_weights.shape:
-                total_weights += weights
-                count += 1
-
-    if total_weights is None:
-        return
-
-    avg_weights = total_weights / count
-
-    # Scatter plot
-    _plot_aa_to_protein_scatter(
-        context,
-        edge_index_ref,
-        avg_weights,
-        f"Merged AA-Protein Attention: {{protein}}",
-        "Avg Attention weight",
-        "aa_attention_merged",
-        go_term,
-        plot_neighbors=plot_neighbors,
+    plt.figure(figsize=(10, 4))
+    sc = plt.scatter(
+        unique_src.numpy(),
+        node_avg_attn.numpy(),
+        c=node_avg_attn.numpy(),
+        cmap=plt.cm.Spectral_r,
+        s=15,
+        alpha=0.8,
     )
-
-    # MSA plot
-    if aligned_seqs is None:
-        aligned_seqs = perform_msa_from_batch(batch)
-    if aligned_seqs:
-        _plot_aa_to_protein_msa(
-            context,
-            edge_index_ref,
-            avg_weights,
-            aligned_seqs,
-            f"Merged AA-Protein Attention (MSA-aligned): {context.seed_label}",
-            "Layer-Averaged Normalized Attention",
-            "aa_attention_merged_msa",
-            go_term,
-            center_on_uniform=True,
-        )
+    plt.colorbar(sc, label=ylabel)
+    plt.xlabel("Residue (sorted by AA index)")
+    plt.ylabel(ylabel)
+    plt.title(title_template.format(protein=context.seed_label))
+    plt.tight_layout()
+    _save_plot(context, filename_suffix, local_idx=0, go_term=go_term)
 
 
 def analyze_attention_captum_correlation(

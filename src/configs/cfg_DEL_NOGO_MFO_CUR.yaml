@@ -3,12 +3,12 @@ model:
   batch_size: 8
   edge_attrs: true
   edge_types:
-    # - ["aa", "close_to", "aa"]
+    - ["aa", "close_to", "aa"]
     - ["aa", "belongs_to", "protein"]
     - ["protein", "aligned_with", "protein"]
     - ["protein", "stringdb", "protein"]
   interpro: true # Intepro domain annotations as additional input features
-  go_neighbors: true # Whether to include direct GO term negihbors as additional input features
+  go_neighbors: false # Whether to include direct GO term negihbors as additional input features
 
   # How many edges to sample to build mini-batch subgraphs. Follows PyG nomenclature
   sampled_edges:
@@ -31,19 +31,19 @@ scheduler:
   gamma: 0.5
 
 data:
-  subontology: 'CCO'
+  subontology: 'MFO'
   dataset: 'D1' # Dataset to use, which determines test set proteins and default train proteins/annotations.
   train_proteins: 'D1'  # Override 'dataset' train proteins with the specified dataset's proteins.
   swissprot_release: '2024_01'  # SwissProt release annotations used when training on SwissProt proteins (train_proteins: swissprot)
   exp_only: true  # Whether to use experimental or curated annotations when training on SwissProt proteins
-  external_annotations_path: ./data/swissprot/2024_01/swissprot_2024_01_CCO_exp_annotations.tsv # Override train annotations with a specific annotation file. Also overrides 'exp_only' flag.
+  external_annotations_path: ./data/swissprot/2024_01/swissprot_2024_01_MFO_annotations.tsv # Override train annotations with a specific annotation file. Also overrides 'exp_only' flag.
   
   alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv
   protein_graphs: ./data/swissprot/2024_01/protein_graphs
   stringdb_path: ./data/swissprot/2024_01/swissprot_stringdb.tsv
 
 run:
-  qualifier: GNN_DEL_CONTACT  # Additional string to append to run_id for uniqueness
+  qualifier: GNN_DEL_NOGO_CUR  # Additional string to append to run_id for uniqueness
   save_predictions:
     val: true
     test: true

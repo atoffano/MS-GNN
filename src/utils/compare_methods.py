@@ -328,17 +328,34 @@ def plot_multi_pred_gt(
     # Increase right margin to accommodate legend and colorbars
     plt.tight_layout(rect=[0, 0, 0.85, 1])
 
-    # Colorbars for each method (Bottom Right)
+    # Right-side panel layout (figure coordinates)
+    fig = plt.gcf()
+    colorbar_x = 0.87
+    colorbar_w = 0.02
+    colorbar_h = 0.04
+    colorbar_bottom = 0.08
+    colorbar_step = 0.07
+    legend_gap = 0.06  # vertical gap between top colorbar and legend
+
+    # Colorbars for each method (stacked bottom-right)
     for i, (cmap, name) in enumerate(zip(pred_cmaps, pred_names)):
-        # Place colorbars in the bottom right margin
-        # Start from bottom (0.1) and go up
-        cbar_ax = plt.gcf().add_axes([0.87, 0.1 + i * 0.07, 0.02, 0.04])
+        cbar_y = colorbar_bottom + i * colorbar_step
+        cbar_ax = fig.add_axes([colorbar_x, cbar_y, colorbar_w, colorbar_h])
         sm = mpl.cm.ScalarMappable(cmap=cmap, norm=mpl.colors.Normalize(vmin=0, vmax=1))
         sm.set_array([])
         cbar = plt.colorbar(sm, cax=cbar_ax)
         cbar.set_label(f"{name} score", fontsize=10, rotation=360, labelpad=15)
 
-    # Custom legend for shapes and subnodes (Top Right)
+    # Compute top of colorbar stack and place legend above it with a gap
+    if pred_names:
+        colorbar_top = (
+            colorbar_bottom + (len(pred_names) - 1) * colorbar_step + colorbar_h
+        )
+    else:
+        colorbar_top = colorbar_bottom
+    legend_y = min(0.98, colorbar_top + legend_gap)
+
+    # Custom legend for shapes and subnodes
     legend_elements = [
         Line2D(
             [0],
@@ -377,7 +394,12 @@ def plot_multi_pred_gt(
                 markersize=6,
             )
         )
-    plt.legend(handles=legend_elements, loc="upper right", bbox_to_anchor=(1.25, 1.0))
+    ax.legend(
+        handles=legend_elements,
+        loc="lower left",
+        bbox_to_anchor=(0.86, legend_y),
+        bbox_transform=fig.transFigure,
+    )
 
     # Save with protein name
     outname = f"pred_{protein_name}.png"
