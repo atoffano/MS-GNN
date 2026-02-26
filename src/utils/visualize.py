@@ -1142,8 +1142,17 @@ def plot_protein_attention(
     aa_mask = torch.isin(aa_src, aa_idx) & torch.isin(aa_dst, aa_idx)
     aa_edge_index = edge_index[:, aa_mask].detach().cpu()
     aa_attn_weights = attn_weights[aa_mask].detach().cpu()
-    # Mean attn per unique src node
-    node_avg_attn = scatter(aa_attn_weights, aa_edge_index[0], dim=0, reduce="mean")
+
+    if aa_attn_weights.dim() > 1:
+        aa_attn_weights = aa_attn_weights.mean(dim=-1)
+
+    # Aggregate AA->AA attention per source AA node with degree smoothing
+    node_sum_attn = scatter(aa_attn_weights, aa_edge_index[0], dim=0, reduce="sum")
+    node_degree = scatter(
+        torch.ones_like(aa_attn_weights), aa_edge_index[0], dim=0, reduce="sum"
+    )
+    smoothing_factor = node_degree.mean().item() if node_degree.numel() > 0 else 1.0
+    node_avg_attn = node_sum_attn / (node_degree + smoothing_factor)
 
     _plot_aa_to_aa_scatter(
         context,

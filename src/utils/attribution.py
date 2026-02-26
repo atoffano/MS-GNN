@@ -502,8 +502,8 @@ class ExplanationExporter:
         self, batch, hetero_explanation, attentions=None, node_attributions=None
     ):
         """Export global model explanations."""
-        self._ensure_cache(batch)
-        self._ensure_msa(batch)
+        # self._ensure_cache(batch)
+        # self._ensure_msa(batch)
         logger.info("Plotting global explanations...")
 
         if self.save_scores:
@@ -514,28 +514,28 @@ class ExplanationExporter:
                 go_term=None,
             )
 
-        plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
-        plot_protein_explanation(
-            self.output_dir,
-            hetero_explanation,
-            self.dataset,
-            plot_neighbors=self.plot_neighbors,
-        )
-        plot_protein_explanation_msa(
-            self.output_dir,
-            hetero_explanation,
-            self.dataset,
-            batch,
-            aligned_seqs=self.aligned_seqs,
-        )
-        export_captum_3d(
-            self.output_dir,
-            self.dataset,
-            batch,
-            hetero_explanation,
-            structure_cache=self.structure_cache,
-            plot_neighbors=self.plot_neighbors,
-        )
+        # plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
+        # plot_protein_explanation(
+        #     self.output_dir,
+        #     hetero_explanation,
+        #     self.dataset,
+        #     plot_neighbors=self.plot_neighbors,
+        # )
+        # plot_protein_explanation_msa(
+        #     self.output_dir,
+        #     hetero_explanation,
+        #     self.dataset,
+        #     batch,
+        #     aligned_seqs=self.aligned_seqs,
+        # )
+        # export_captum_3d(
+        #     self.output_dir,
+        #     self.dataset,
+        #     batch,
+        #     hetero_explanation,
+        #     structure_cache=self.structure_cache,
+        #     plot_neighbors=self.plot_neighbors,
+        # )
 
         if attentions:
             self._export_attention(batch, attentions)
@@ -552,7 +552,7 @@ class ExplanationExporter:
         node_attributions=None,
     ):
         """Export GO term-specific explanation."""
-        self._ensure_cache(batch)
+        # self._ensure_cache(batch)
         # self._ensure_msa(batch)
         logger.info(f"Plotting explanations for {go_term}...")
         go_name = self.go_mapper.get_name(go_term)
@@ -561,39 +561,39 @@ class ExplanationExporter:
         if attentions and self.save_scores:
             self._save_attention_pkl(batch, attentions, go_term)
 
-        plot_systemic_explanation(
-            self.output_dir,
-            hetero_explanation,
-            self.dataset,
-            title_suffix=title_suffix,
-            go_term=go_term,
-        )
-        plot_protein_explanation(
-            self.output_dir,
-            hetero_explanation,
-            self.dataset,
-            title_suffix=title_suffix,
-            go_term=go_term,
-            plot_neighbors=self.plot_neighbors,
-        )
-        plot_protein_explanation_msa(
-            self.output_dir,
-            hetero_explanation,
-            self.dataset,
-            batch,
-            title_suffix=title_suffix,
-            go_term=go_term,
-            aligned_seqs=self.aligned_seqs,
-        )
-        export_captum_3d(
-            self.output_dir,
-            self.dataset,
-            batch,
-            hetero_explanation,
-            go_term=go_term,
-            structure_cache=self.structure_cache,
-            plot_neighbors=self.plot_neighbors,
-        )
+        # plot_systemic_explanation(
+        #     self.output_dir,
+        #     hetero_explanation,
+        #     self.dataset,
+        #     title_suffix=title_suffix,
+        #     go_term=go_term,
+        # )
+        # plot_protein_explanation(
+        #     self.output_dir,
+        #     hetero_explanation,
+        #     self.dataset,
+        #     title_suffix=title_suffix,
+        #     go_term=go_term,
+        #     plot_neighbors=self.plot_neighbors,
+        # )
+        # plot_protein_explanation_msa(
+        #     self.output_dir,
+        #     hetero_explanation,
+        #     self.dataset,
+        #     batch,
+        #     title_suffix=title_suffix,
+        #     go_term=go_term,
+        #     aligned_seqs=self.aligned_seqs,
+        # )
+        # export_captum_3d(
+        #     self.output_dir,
+        #     self.dataset,
+        #     batch,
+        #     hetero_explanation,
+        #     go_term=go_term,
+        #     structure_cache=self.structure_cache,
+        #     plot_neighbors=self.plot_neighbors,
+        # )
 
         if attentions:
             self._export_attention(batch, attentions, go_term)
@@ -622,20 +622,20 @@ class ExplanationExporter:
 
         # Prepare layer-wise data
         layers_data = []
-        # target_keys = [
-        #     ("protein", "aligned_with", "protein"),
-        #     ("protein", "stringdb", "protein"),
-        #     ("protein", "rev_belongs_to", "aa"),
-        #     ("aa", "belongs_to", "protein"),
-        #     ("aa", "close_to", "aa"),
-        # ]
+        target_keys = [
+            ("protein", "aligned_with", "protein"),
+            ("protein", "stringdb", "protein"),
+            #     ("protein", "rev_belongs_to", "aa"),
+            #     ("aa", "belongs_to", "protein"),
+            #     ("aa", "close_to", "aa"),
+        ]
 
         if attentions:
             layer_attn = attentions[1]  # Use layer 2.
             layer_dict = {}
             if layer_attn:
                 for key in batch.edge_index_dict.keys():
-                    if key in layer_attn:
+                    if key in target_keys:
                         edge_index, scores = layer_attn[key]
                         # Convert indices to names
                         u_indices = edge_index[0].detach().cpu().tolist()
@@ -682,66 +682,66 @@ class ExplanationExporter:
         if go_term is None and self.save_scores:
             self._save_attention_pkl(batch, attentions)
 
-        for idx, layer_attention in enumerate(attentions, start=1):
-            if layer_attention is None:
-                continue
+        # for idx, layer_attention in enumerate(attentions, start=1):
+        #     if layer_attention is None:
+        #         continue
 
-            if go_term is None:
-                # Systemic level neighbor attribution
-                plot_systemic_attention(
-                    self.output_dir, layer_attention, self.dataset, batch, idx
-                )
+        #     if go_term is None:
+        #         # Systemic level neighbor attribution
+        #         plot_systemic_attention(
+        #             self.output_dir, layer_attention, self.dataset, batch, idx
+        #         )
 
-            # Protein level residue attribution
-            plot_protein_attention(
-                self.output_dir,
-                layer_attention,
-                self.dataset,
-                batch,
-                idx,
-                go_term,
-                plot_neighbors=self.plot_neighbors,
-            )
-            plot_protein_attention_msa(
-                self.output_dir,
-                layer_attention,
-                self.dataset,
-                batch,
-                idx,
-                go_term,
-                aligned_seqs=self.aligned_seqs,
-            )
+        #     # Protein level residue attribution
+        #     plot_protein_attention(
+        #         self.output_dir,
+        #         layer_attention,
+        #         self.dataset,
+        #         batch,
+        #         idx,
+        #         go_term,
+        #         plot_neighbors=self.plot_neighbors,
+        #     )
+        #     plot_protein_attention_msa(
+        #         self.output_dir,
+        #         layer_attention,
+        #         self.dataset,
+        #         batch,
+        #         idx,
+        #         go_term,
+        #         aligned_seqs=self.aligned_seqs,
+        #     )
 
-            if self.plot_neighbors:
-                plot_attn_seed_vs_neighbor_scatter(
-                    self.output_dir,
-                    layer_attention,
-                    self.dataset,
-                    batch,
-                    idx,
-                    go_term,
-                    aligned_seqs=self.aligned_seqs,
-                )
-                plot_attn_stringdb_vs_aligned_scatter(
-                    self.output_dir,
-                    layer_attention,
-                    self.dataset,
-                    batch,
-                    idx,
-                    go_term,
-                )
+        #     if self.plot_neighbors:
+        #         plot_attn_seed_vs_neighbor_scatter(
+        #             self.output_dir,
+        #             layer_attention,
+        #             self.dataset,
+        #             batch,
+        #             idx,
+        #             go_term,
+        #             aligned_seqs=self.aligned_seqs,
+        #         )
+        #         plot_attn_stringdb_vs_aligned_scatter(
+        #             self.output_dir,
+        #             layer_attention,
+        #             self.dataset,
+        #             batch,
+        #             idx,
+        #             go_term,
+        #         )
 
-            # 3D structure visualization with attention scores mapped onto residues
-            export_layer_attention_3d(
-                self.output_dir,
-                self.dataset,
-                batch,
-                idx,
-                layer_attention,
-                structure_cache=self.structure_cache,
-                go_term=go_term,
-                plot_neighbors=self.plot_neighbors,
-            )
+        #     # 3D structure visualization with attention scores mapped onto residues
+        #     export_layer_attention_3d(
+        #         self.output_dir,
+        #         self.dataset,
+        #         batch,
+        #         idx,
+        #         layer_attention,
+        #         structure_cache=self.structure_cache,
+        #         go_term=go_term,
+        #         plot_neighbors=self.plot_neighbors,
+        #     )
 
         # # Merged attention plots across layers
         # plot_merged_systemic_attention(

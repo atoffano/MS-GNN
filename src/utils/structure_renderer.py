@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Dict, List, Optional, Tuple
 import torch
+from torch_scatter import scatter
 from src.utils.visualize import (
     build_plot_context,
     build_protein_score_map,
@@ -106,7 +107,6 @@ def export_layer_attention_3d(
     """Export layer attention to 3D structure renderings."""
     keys = [
         ("aa", "belongs_to", "protein"),
-        ("aa", "rev_belongs_to", "protein"),
     ]
     if layer_attention is None:
         return
@@ -133,6 +133,53 @@ def export_layer_attention_3d(
         go_term=go_term,
         plot_neighbors=plot_neighbors,
     )
+
+    # Render AA -> AA attention
+    aa_key = ("aa", "close_to", "aa")
+    if aa_key in layer_attention:
+        aa_edge_index, aa_attn_weights = layer_attention[aa_key]
+        aa_edge_index = aa_edge_index.detach().cpu()
+        aa_attn_weights = aa_attn_weights.detach().cpu()
+
+        if aa_attn_weights.dim() > 1:
+            aa_attn_weights = aa_attn_weights.mean(dim=-1)
+
+        # Aggregate AA->AA attention per source AA node with degree smoothing
+        node_sum_attn = scatter(aa_attn_weights, aa_edge_index[0], dim=0, reduce="sum")
+        node_degree = scatter(
+            torch.ones_like(aa_attn_weights), aa_edge_index[0], dim=0, reduce="sum"
+        )
+        smoothing_factor = node_degree.mean().item() if node_degree.numel() > 0 else 1.0
+        node_avg_attn = node_sum_attn / (node_degree + smoothing_factor)
+
+        # Map AA nodes to their respective proteins using the belongs_to edge_index
+        belongs_to_idx = edge_index.detach().cpu()
+        if selected_key[1] == "rev_belongs_to":
+            belongs_to_idx = belongs_to_idx.flip(0)
+
+        aa_to_protein = {
+            int(aa): int(prot) for aa, prot in zip(belongs_to_idx[0], belongs_to_idx[1])
+        }
+
+        aa_residue_scores = {}
+        for aa_idx, score in enumerate(node_avg_attn.tolist()):
+            if score > 0 and aa_idx in aa_to_protein:
+                prot_idx = aa_to_protein[aa_idx]
+                if prot_idx not in aa_residue_scores:
+                    aa_residue_scores[prot_idx] = []
+                aa_residue_scores[prot_idx].append((aa_idx + 1, score))
+
+        _render_structures(
+            context,
+            dataset,
+            context.protein_ids,
+            aa_residue_scores,
+            suffix=f"aa_aa_attention_layer{layer_idx}",
+            title_prefix=f"AA-AA Attention L{layer_idx}",
+            structure_cache=structure_cache,
+            go_term=go_term,
+            plot_neighbors=plot_neighbors,
+        )
 
 
 def export_captum_3d(
