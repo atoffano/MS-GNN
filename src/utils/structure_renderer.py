@@ -43,6 +43,7 @@ def _render_structures(
     structure_cache: Optional[Dict[str, str]] = None,
     go_term: Optional[str] = None,
     plot_neighbors: bool = True,
+    global_dir: Optional[str] = None,
 ):
     """Render residue structures with optional caching."""
     for local_idx, residues in residue_scores.items():
@@ -58,7 +59,7 @@ def _render_structures(
 
         # Get structure path with caching
         if structure_cache and uniprot_id in structure_cache:
-            pdb_path = structure_cache[uniprot_id]
+            structure_path = structure_cache[uniprot_id]
         else:
             pdb_id = (
                 dataset.pid_mapping.get(uniprot_id, uniprot_id)
@@ -66,12 +67,12 @@ def _render_structures(
                 else uniprot_id
             )
             try:
-                pdb_path = ensure_structure(pdb_id, context.seed_dir)
+                structure_path = ensure_structure(pdb_id, context.seed_dir, global_dir=global_dir)
             except FileNotFoundError as e:
                 logger.warning(f"Skipping 3D rendering for {uniprot_id}: {e}")
                 continue
             if structure_cache is not None:
-                structure_cache[uniprot_id] = pdb_path
+                structure_cache[uniprot_id] = structure_path
 
         # Resolve output path - Neighbor or seed protein ?
         is_seed = local_idx == 0
@@ -90,7 +91,7 @@ def _render_structures(
 
         image_path = f"{out_dir}/{prefix}_{suffix}.png"
         render_scene(
-            pdb_path, residues, image_path, title=f"{uniprot_id} – {title_prefix}"
+            structure_path, residues, image_path, title=f"{uniprot_id} – {title_prefix}"
         )
 
 
@@ -103,6 +104,7 @@ def export_layer_attention_3d(
     structure_cache: Optional[Dict[str, str]] = None,
     go_term: Optional[str] = None,
     plot_neighbors: bool = True,
+    global_dir: Optional[str] = None,
 ) -> None:
     """Export layer attention to 3D structure renderings."""
     keys = [
@@ -127,11 +129,12 @@ def export_layer_attention_3d(
         dataset,
         context.protein_ids,
         residue_scores,
-        suffix=f"attention_layer{layer_idx}",
+        suffix=f"attention_layer{layer_idx}_scene",
         title_prefix=f"Attention L{layer_idx}",
         structure_cache=structure_cache,
         go_term=go_term,
         plot_neighbors=plot_neighbors,
+        global_dir=output_dir,
     )
 
     # Render AA -> AA attention
@@ -146,11 +149,11 @@ def export_layer_attention_3d(
 
         # Aggregate AA->AA attention per source AA node with degree smoothing
         node_sum_attn = scatter(aa_attn_weights, aa_edge_index[0], dim=0, reduce="sum")
-        node_degree = scatter(
-            torch.ones_like(aa_attn_weights), aa_edge_index[0], dim=0, reduce="sum"
-        )
-        smoothing_factor = node_degree.mean().item() if node_degree.numel() > 0 else 1.0
-        node_avg_attn = node_sum_attn / (node_degree + smoothing_factor)
+        # node_degree = scatter(
+        #     torch.ones_like(aa_attn_weights), aa_edge_index[0], dim=0, reduce="sum"
+        # )
+        # smoothing_factor = node_degree.mean().item() if node_degree.numel() > 0 else 1.0
+        # node_avg_attn = node_sum_attn / (node_degree + smoothing_factor)
 
         # Map AA nodes to their respective proteins using the belongs_to edge_index
         belongs_to_idx = edge_index.detach().cpu()
@@ -162,7 +165,7 @@ def export_layer_attention_3d(
         }
 
         aa_residue_scores = {}
-        for aa_idx, score in enumerate(node_avg_attn.tolist()):
+        for aa_idx, score in enumerate(node_sum_attn.tolist()):
             if score > 0 and aa_idx in aa_to_protein:
                 prot_idx = aa_to_protein[aa_idx]
                 if prot_idx not in aa_residue_scores:
@@ -174,11 +177,12 @@ def export_layer_attention_3d(
             dataset,
             context.protein_ids,
             aa_residue_scores,
-            suffix=f"aa_aa_attention_layer{layer_idx}",
+            suffix=f"aa_aa_attention_layer{layer_idx}_scene",
             title_prefix=f"AA-AA Attention L{layer_idx}",
             structure_cache=structure_cache,
             go_term=go_term,
             plot_neighbors=plot_neighbors,
+            global_dir=output_dir,
         )
 
 
@@ -201,7 +205,7 @@ def export_captum_3d(
     residue_scores = _edge_scores_to_residues(edge_index, edge_scores)
 
     context = build_plot_context(output_dir, dataset, batch)
-    suffix = f"captum_{go_term.replace(':', '_')}" if go_term else "captum"
+    suffix = f"captum_{go_term.replace(':', '_')}_scene" if go_term else "captum_scene"
     title_prefix = f"Captum ({go_term})" if go_term else "Captum"
 
     _render_structures(
@@ -214,4 +218,5 @@ def export_captum_3d(
         structure_cache=structure_cache,
         go_term=go_term,
         plot_neighbors=plot_neighbors,
+        global_dir=output_dir,
     )

@@ -2,7 +2,9 @@ import requests
 from src.utils.constants import (
     UNIPROT_JSON_URL,
     PDB_DOWNLOAD_URL,
+    CIF_DOWNLOAD_URL,
     ALPHAFOLD_STRUCTURE_URL,
+    ALPHAFOLD_CIF_URL,
 )
 
 
@@ -38,6 +40,34 @@ def download_alphafold(uniprot_id: str, dest_path: str) -> bool:
     try:
         response = requests.get(
             ALPHAFOLD_STRUCTURE_URL.format(uniprot_id=uniprot_id), timeout=15
+        )
+        response.raise_for_status()
+        with open(dest_path, "wb") as f:
+            f.write(response.content)
+        return True
+    except requests.RequestException:
+        return False
+
+
+def download_alphafold_cif(uniprot_id: str, dest_path: str) -> bool:
+    """Try downloading CIF structure from AlphaFold."""
+    try:
+        response = requests.get(
+            ALPHAFOLD_CIF_URL.format(uniprot_id=uniprot_id), timeout=15
+        )
+        response.raise_for_status()
+        with open(dest_path, "wb") as f:
+            f.write(response.content)
+        return True
+    except requests.RequestException:
+        return False
+
+
+def download_pdb_cif(pdb_id: str, dest_path: str) -> bool:
+    """Try downloading CIF structure from RCSB."""
+    try:
+        response = requests.get(
+            CIF_DOWNLOAD_URL.format(pdb_id=pdb_id), timeout=5
         )
         response.raise_for_status()
         with open(dest_path, "wb") as f:

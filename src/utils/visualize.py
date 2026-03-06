@@ -21,7 +21,7 @@ import torch
 from torch_scatter import scatter
 
 from src.utils.constants import RANDOM_SEED, MUSCLE_EXECUTABLE
-from src.utils.api import download_alphafold, download_pdb
+from src.utils.api import download_alphafold, download_alphafold_cif, download_pdb
 
 try:
     import pymol2
@@ -63,99 +63,99 @@ def build_protein_score_map(
     return protein_data
 
 
-def perform_msa(sequences: List[str], labels: List[str]):
-    """Perform multiple sequence alignment using MUSCLE via subprocess.
+# def perform_msa(sequences: List[str], labels: List[str]):
+#     """Perform multiple sequence alignment using MUSCLE via subprocess.
 
-    Returns:
-        aligned_seqs: List of aligned sequences with gaps
-        alignment_mappings: List of dicts mapping original_aa_idx -> aligned_position for each protein
-    """
-    if len(sequences) < 2:
-        # No alignment needed for single sequence
-        return [sequences[0]], [{i: i for i in range(len(sequences[0]))}]
+#     Returns:
+#         aligned_seqs: List of aligned sequences with gaps
+#         alignment_mappings: List of dicts mapping original_aa_idx -> aligned_position for each protein
+#     """
+#     if len(sequences) < 2:
+#         # No alignment needed for single sequence
+#         return [sequences[0]], [{i: i for i in range(len(sequences[0]))}]
 
-    logger.info(f"Performing MSA with MUSCLE for {len(sequences)} sequences...")
+#     logger.info(f"Performing MSA with MUSCLE for {len(sequences)} sequences...")
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".fasta", delete=False
-    ) as input_fasta:
-        input_path = input_fasta.name
-        for label, seq in zip(labels, sequences):
-            input_fasta.write(f">{label}\n{seq}\n")
+#     with tempfile.NamedTemporaryFile(
+#         mode="w", suffix=".fasta", delete=False
+#     ) as input_fasta:
+#         input_path = input_fasta.name
+#         for label, seq in zip(labels, sequences):
+#             input_fasta.write(f">{label}\n{seq}\n")
 
-    output_path = input_path.replace(".fasta", "_aligned.fasta")
+#     output_path = input_path.replace(".fasta", "_aligned.fasta")
 
-    try:
-        cmd = [str(MUSCLE_EXECUTABLE), "-align", input_path, "-output", output_path]
+#     try:
+#         cmd = [str(MUSCLE_EXECUTABLE), "-align", input_path, "-output", output_path]
 
-        logger.info(f"Running MUSCLE: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+#         logger.info(f"Running MUSCLE: {' '.join(cmd)}")
+#         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 
-        if result.stderr:
-            logger.debug(f"MUSCLE stderr: {result.stderr}")
+#         if result.stderr:
+#             logger.debug(f"MUSCLE stderr: {result.stderr}")
 
-        # Parse the alignment manually
-        aligned_seqs = []
-        current_seq = ""
-        current_label = None
+#         # Parse the alignment manually
+#         aligned_seqs = []
+#         current_seq = ""
+#         current_label = None
 
-        with open(output_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith(">"):
-                    if current_label is not None and current_seq:
-                        aligned_seqs.append(current_seq)
-                    current_label = line[1:]
-                    current_seq = ""
-                else:
-                    current_seq += line
+#         with open(output_path, "r") as f:
+#             for line in f:
+#                 line = line.strip()
+#                 if line.startswith(">"):
+#                     if current_label is not None and current_seq:
+#                         aligned_seqs.append(current_seq)
+#                     current_label = line[1:]
+#                     current_seq = ""
+#                 else:
+#                     current_seq += line
 
-            # Add the last sequence
-            if current_label is not None and current_seq:
-                aligned_seqs.append(current_seq)
+#             # Add the last sequence
+#             if current_label is not None and current_seq:
+#                 aligned_seqs.append(current_seq)
 
-        if len(aligned_seqs) != len(sequences):
-            raise ValueError(
-                f"Expected {len(sequences)} aligned sequences, got {len(aligned_seqs)}"
-            )
+#         if len(aligned_seqs) != len(sequences):
+#             raise ValueError(
+#                 f"Expected {len(sequences)} aligned sequences, got {len(aligned_seqs)}"
+#             )
 
-        return aligned_seqs
+#         return aligned_seqs
 
-    except subprocess.CalledProcessError as e:
-        logger.error(f"MUSCLE failed with return code {e.returncode}: {e.stderr}")
-        return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
-    except Exception as e:
-        logger.error(f"MSA failed: {e}. Falling back to unaligned sequences.")
-        return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
+#     except subprocess.CalledProcessError as e:
+#         logger.error(f"MUSCLE failed with return code {e.returncode}: {e.stderr}")
+#         return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
+#     except Exception as e:
+#         logger.error(f"MSA failed: {e}. Falling back to unaligned sequences.")
+#         return sequences, [{i: i for i in range(len(seq))} for seq in sequences]
 
-    finally:
-        try:
-            os.unlink(input_path)
-            if os.path.exists(output_path):
-                os.unlink(output_path)
-        except:
-            pass
+#     finally:
+#         try:
+#             os.unlink(input_path)
+#             if os.path.exists(output_path):
+#                 os.unlink(output_path)
+#         except:
+#             pass
 
 
-def calculate_msa_offsets(aligned_seqs: List[str]) -> Dict[int, int]:
-    """Calculate cumulative AA offsets for each protein in an MSA.
+# def calculate_msa_offsets(aligned_seqs: List[str]) -> Dict[int, int]:
+#     """Calculate cumulative AA offsets for each protein in an MSA.
 
-    The offset for protein i is the total number of non-gap characters
-    in all sequences before it. This maps global AA indices back to
-    their original protein.
+#     The offset for protein i is the total number of non-gap characters
+#     in all sequences before it. This maps global AA indices back to
+#     their original protein.
 
-    Args:
-        aligned_seqs: List of aligned sequences (may contain gaps '-').
+#     Args:
+#         aligned_seqs: List of aligned sequences (may contain gaps '-').
 
-    Returns:
-        Dict mapping protein index to its cumulative offset.
-    """
-    offsets = {}
-    cumulative = 0
-    for i, seq in enumerate(aligned_seqs):
-        offsets[i] = cumulative
-        cumulative += sum(1 for c in seq if c != "-")
-    return offsets
+#     Returns:
+#         Dict mapping protein index to its cumulative offset.
+#     """
+#     offsets = {}
+#     cumulative = 0
+#     for i, seq in enumerate(aligned_seqs):
+#         offsets[i] = cumulative
+#         cumulative += sum(1 for c in seq if c != "-")
+#     return offsets
 
 
 def get_sequence_length(aligned_seq: str) -> int:
@@ -199,15 +199,32 @@ def build_plot_context(base_path: str, dataset, batch) -> ProteinPlotContext:
     )
 
 
-def ensure_structure(uniprot_id: str, out_dir: str) -> str:
+def ensure_structure(uniprot_id: str, out_dir: str, global_dir: Optional[str] = None) -> str:
     """Get structure for UniProt ID, checking caches before downloading.
 
-    Priority: output cache -> alphafold_pdb -> esmfold_pdb -> RCSB PDB -> AlphaFold download
+    Priority: global_dir .cif -> global_dir .pdb -> out_dir .cif -> out_dir .pdb
+              -> AlphaFold CIF download (to global_dir or out_dir) -> AlphaFold PDB download
+    Returns the path to the structure file (.cif preferred over .pdb).
     """
     os.makedirs(out_dir, exist_ok=True)
-    pdb_path = os.path.join(out_dir, f"{uniprot_id}.pdb")
-    if os.path.exists(pdb_path):
-        return pdb_path
+
+    # Check global model directory first
+    search_dirs = [d for d in [global_dir, out_dir] if d]
+    for search_dir in search_dirs:
+        cif_path = os.path.join(search_dir, f"{uniprot_id}.cif")
+        if os.path.exists(cif_path):
+            logger.info(f"Found CIF structure for {uniprot_id} in {search_dir}")
+            return cif_path
+        pdb_path = os.path.join(search_dir, f"{uniprot_id}.pdb")
+        if os.path.exists(pdb_path):
+            logger.info(f"Found PDB structure for {uniprot_id} in {search_dir}")
+            return pdb_path
+
+    # Download to global_dir if provided, otherwise out_dir
+    download_dir = global_dir if global_dir else out_dir
+    os.makedirs(download_dir, exist_ok=True)
+    cif_path = os.path.join(download_dir, f"{uniprot_id}.cif")
+    pdb_path = os.path.join(download_dir, f"{uniprot_id}.pdb")
 
     # Check local data directories
     # current_file_dir = os.path.dirname(os.path.abspath(__file__))
@@ -224,16 +241,20 @@ def ensure_structure(uniprot_id: str, out_dir: str) -> str:
     #     )
     #     if os.path.exists(cache_path):
     #         shutil.copy2(cache_path, pdb_path)
-    #         return pdb_path
+    # #         return pdb_path
 
-    # Download from remote sources
+    # Download from remote sources — try CIF first, then fall back to PDB
+    if download_alphafold_cif(uniprot_id, cif_path):
+        logger.info(f"Downloaded CIF structure for {uniprot_id} from AlphaFold")
+        return cif_path
+
     # if download_pdb(uniprot_id, pdb_path):
     #     logger.info(f"Downloaded PDB structure for {uniprot_id} from RCSB")
     #     return pdb_path
 
-    # if download_alphafold(uniprot_id, pdb_path):
-    #     logger.info(f"Downloaded PDB structure for {uniprot_id} from AlphaFold")
-    #     return pdb_path
+    if download_alphafold(uniprot_id, pdb_path):
+        logger.info(f"Downloaded PDB structure for {uniprot_id} from AlphaFold")
+        return pdb_path
 
     raise FileNotFoundError(f"No structure available for {uniprot_id}")
 
@@ -307,16 +328,16 @@ def apply_spectrum(cmd, cmap, scores, ca_resi, n_colors=256):
 
 
 def render_scene(
-    pdb_path: str,
+    structure_path: str,
     residue_scores: Sequence[Tuple[int, float]],
     image_path: str,
     *,
     title: str | None = None,
 ) -> None:
-    """Color a structure by residue scores via PyMOL."""
+    """Color a structure by residue scores via PyMOL. Supports both .pdb and .cif files."""
 
     if not residue_scores:
-        logger.warning(f"No residue scores for {pdb_path}, skipping")
+        logger.warning(f"No residue scores for {structure_path}, skipping")
         return
 
     res_idx, scores = zip(*residue_scores)
@@ -324,12 +345,12 @@ def render_scene(
     scores = np.asarray(scores, dtype=np.float32)
 
     os.makedirs(os.path.dirname(image_path), exist_ok=True)
-    logger.info(f"Rendering structure {pdb_path}")
+    logger.info(f"Rendering structure {structure_path}")
 
     with pymol2.PyMOL() as pymol:
         cmd = pymol.cmd
         cmd.reinitialize()
-        cmd.load(pdb_path, "prot")
+        cmd.load(structure_path, "prot")
         cmd.alter("prot", "b=0.0")
         ca_resi = [int(atom.resi) for atom in cmd.get_model("prot and name CA").atom]
         if len(ca_resi) != len(scores):
@@ -356,7 +377,7 @@ def render_scene(
         cmd.bg_color("black")
         cmd.orient("prot")
         cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
-        cmd.save(image_path.replace(".png", "_scene.pse"))
+        cmd.save(image_path.replace(".png", ".pse"))
         logger.info(f"Saved structure rendering to {image_path}")
 
 
@@ -479,421 +500,421 @@ def _plot_aa_to_protein_scatter(
         _save_plot(context, filename_suffix, target_idx, go_term)
 
 
-def _plot_aa_to_protein_msa(
-    context: ProteinPlotContext,
-    edge_index: torch.Tensor,
-    edge_values: torch.Tensor,
-    aligned_seqs: List[str],
-    title: str,
-    ylabel: str,
-    filename_suffix: str,
-    go_term: Optional[str] = None,
-    window_size: Optional[int] = 3,
-    center_on_uniform: bool = False,
-):
-    """Plot AA→protein scores aligned by MSA."""
-    protein_data = build_protein_score_map(edge_index, edge_values)
-    if not protein_data or not aligned_seqs:
-        return
-
-    offsets = calculate_msa_offsets(aligned_seqs)
-
-    plt.figure(figsize=(14, 6))
-    cmap = plt.cm.get_cmap("tab10")
-
-    if center_on_uniform:
-        plt.axhline(y=0, color="black", linestyle="--", linewidth=1, alpha=0.5)
-
-    for idx, (dst_val, aa_to_score) in enumerate(protein_data.items()):
-        target_label = context.labels[int(dst_val)]
-        is_seed = context.protein_ids[int(dst_val)] == context.seed_global
-
-        aligned_seq = aligned_seqs[int(dst_val)]
-        offset = offsets[int(dst_val)]
-
-        # Calculate uniform baseline for this sequence if requested
-        baseline = 0.0
-        if center_on_uniform:
-            seq_len = get_sequence_length(aligned_seq)
-            if seq_len > 0:
-                baseline = 1.0 / seq_len
-
-        x_pos, y_vals = [], []
-        residue_idx = 0
-        for aligned_pos, char in enumerate(aligned_seq):
-            if char != "-":
-                global_aa_idx = offset + residue_idx
-                if global_aa_idx in aa_to_score:
-                    x_pos.append(aligned_pos)
-                    y_vals.append(aa_to_score[global_aa_idx] - baseline)
-                residue_idx += 1
-            else:
-                x_pos.append(aligned_pos)
-                y_vals.append(np.nan)
-
-        if not x_pos:
-            continue
-
-        # Apply sliding window if requested
-        if window_size and window_size > 1 and len(y_vals) >= window_size:
-            kernel = np.ones(window_size) / window_size
-            y_vals = np.convolve(y_vals, kernel, mode="valid")
-            # Adjust x_pos to center the window
-            trim_start = (window_size - 1) // 2
-            trim_end = trim_start + len(y_vals)
-            x_pos = x_pos[trim_start:trim_end]
-
-        plt.plot(
-            x_pos,
-            y_vals,
-            label=target_label,
-            color=cmap(idx % 10),
-            linewidth=3.0 if is_seed else 1.5,
-            alpha=0.7,
-            zorder=10 if is_seed else 5,
-            marker="o" if is_seed else ".",
-            markersize=6 if is_seed else 4,
-        )
-
-    plt.xlabel("Aligned Position")
-    plt.ylabel(ylabel)
-    plt.title(title)
-    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    _save_plot(context, filename_suffix, go_term=go_term)
-
-
-def _plot_attn_seed_vs_neighbor_scatter(
-    context: ProteinPlotContext,
-    edge_index: torch.Tensor,
-    edge_values: torch.Tensor,
-    aligned_seqs: List[str],
-    title: str,
-    filename_suffix: str,
-    go_term: Optional[str] = None,
-):
-    """Scatter plot of Seed Attention vs Neighbor Attention for aligned residues."""
-    protein_data = build_protein_score_map(edge_index, edge_values)
-    if not protein_data or not aligned_seqs:
-        return
-
-    offsets = calculate_msa_offsets(aligned_seqs)
-
-    # Identify seed
-    seed_local_idx = None
-    for idx, global_id in enumerate(context.protein_ids):
-        if global_id == context.seed_global:
-            seed_local_idx = idx
-            break
-
-    if seed_local_idx is None or seed_local_idx not in protein_data:
-        return
-
-    seed_scores_map = protein_data[seed_local_idx]  # global_aa_idx -> score
-    seed_offset = offsets[seed_local_idx]
-    seed_seq = aligned_seqs[seed_local_idx]
-
-    # Map MSA position to seed score
-    msa_pos_to_seed_score = {}
-    residue_idx = 0
-    for msa_pos, char in enumerate(seed_seq):
-        if char != "-":
-            global_aa_idx = seed_offset + residue_idx
-            if global_aa_idx in seed_scores_map:
-                msa_pos_to_seed_score[msa_pos] = seed_scores_map[global_aa_idx]
-            residue_idx += 1
-
-    plt.figure(figsize=(10, 8))
-    cmap = plt.cm.get_cmap("tab10")
-
-    has_points = False
-
-    for idx, (dst_val, neighbor_scores_map) in enumerate(protein_data.items()):
-        if dst_val == seed_local_idx:
-            continue  # Skip seed vs seed
-
-        neighbor_label = context.labels[int(dst_val)]
-        neighbor_seq = aligned_seqs[int(dst_val)]
-        neighbor_offset = offsets[int(dst_val)]
-
-        xs = []  # Seed attn scores
-        ys = []  # Neighbor attn scores
-
-        residue_idx = 0
-        for msa_pos, char in enumerate(neighbor_seq):
-            if char != "-":
-                global_aa_idx = neighbor_offset + residue_idx
-                if (
-                    global_aa_idx in neighbor_scores_map
-                    and msa_pos in msa_pos_to_seed_score
-                ):
-                    xs.append(msa_pos_to_seed_score[msa_pos])
-                    ys.append(neighbor_scores_map[global_aa_idx])
-                residue_idx += 1
-
-        if xs:
-            color = cmap(idx % 10)
-            label_suffix = ""
-            if len(xs) > 1:
-                try:
-                    m, b = np.polyfit(xs, ys, 1)
-                    r = np.corrcoef(xs, ys)[0, 1]
-                    x_range = np.array([min(xs), max(xs)])
-                    y_range = m * x_range + b
-                    plt.plot(
-                        x_range,
-                        y_range,
-                        color=color,
-                        linestyle="--",
-                        alpha=0.5,
-                        linewidth=1.5,
-                    )
-                    label_suffix = f" (R={r:.2f})"
-                except Exception:
-                    pass
-
-            plt.scatter(
-                xs,
-                ys,
-                label=f"{neighbor_label}{label_suffix}",
-                alpha=0.6,
-                s=20,
-                color=color,
-            )
-
-            has_points = True
-
-    if not has_points:
-        plt.close()
-        return
-
-    plt.xlabel(f"Protein Attention ({context.seed_label})")
-    plt.ylabel("Neighbor Attention")
-    plt.title(title)
-    plt.legend(
-        bbox_to_anchor=(1.05, 1), loc="upper left", borderaxespad=0.0, fontsize=9
-    )
-
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    _save_plot(context, filename_suffix, go_term=go_term)
-
-
-def _plot_msa_alignment_violin(
-    context: ProteinPlotContext,
-    edge_index: torch.Tensor,
-    edge_values: torch.Tensor,
-    aligned_seqs: List[str],
-    title: str,
-    filename_suffix: str,
-    go_term: Optional[str] = None,
-):
-    """Violin plot comparing attention of residues aligned to seed vs not aligned."""
-    protein_data = build_protein_score_map(edge_index, edge_values)
-    if not protein_data or not aligned_seqs:
-        return
-
-    # Identify seed index
-    seed_local_idx = None
-    for idx, global_id in enumerate(context.protein_ids):
-        if global_id == context.seed_global:
-            seed_local_idx = idx
-            break
-
-    if seed_local_idx is None:
-        return
-
-    seed_seq = aligned_seqs[seed_local_idx]
-    offsets = calculate_msa_offsets(aligned_seqs)
-
-    data_records = []
-
-    for idx, (dst_val, aa_to_score) in enumerate(protein_data.items()):
-        aligned_seq = aligned_seqs[int(dst_val)]
-        offset = offsets[int(dst_val)]
-
-        # Calculate uniform baseline
-        seq_len = get_sequence_length(aligned_seq)
-        baseline = 1.0 / seq_len if seq_len > 0 else 0.0
-
-        residue_idx = 0
-        for msa_pos, char in enumerate(aligned_seq):
-            if char != "-":
-                global_aa_idx = offset + residue_idx
-                if global_aa_idx in aa_to_score:
-                    score = aa_to_score[global_aa_idx] - baseline
-
-                    # Check alignment with seed
-                    is_aligned = seed_seq[msa_pos] != "-"
-
-                    condition = (
-                        "Aligned to Protein in MSA" if is_aligned else "Not Aligned"
-                    )
-                    data_records.append(
-                        {
-                            "Normalized Attention": score,
-                            "Condition": condition,
-                        }
-                    )
-                residue_idx += 1
-
-    if not data_records:
-        return
-
-    df = pd.DataFrame(data_records)
-
-    if df.empty:
-        return
-
-    plt.figure(figsize=(6, 6))
-    sns.violinplot(
-        data=df,
-        x="Condition",
-        y="Normalized Attention",
-        hue="Condition",
-        inner="quartile",
-        palette="muted",
-        legend=False,
-    )
-    plt.title(title)
-    plt.axhline(y=0, color="black", linestyle="--", linewidth=1, alpha=0.5)
-    plt.tight_layout()
-    _save_plot(context, filename_suffix, go_term=go_term)
-
-
-def perform_msa_from_batch(batch) -> Optional[List[str]]:
-    """Perform MSA on batch sequences, returning None on failure."""
-
-    sequences = batch["protein"].sequences
-    labels = batch["protein"].protein_ids
-
-    if len(sequences) < 2:
-        logger.warning("Not enough sequences for MSA alignment")
-        return None
-
-    aligned_seqs = perform_msa(sequences, labels)
-    if len(aligned_seqs) != len(sequences):
-        logger.error("MSA failed")
-        return None
-
-    return aligned_seqs
-
-
-def plot_protein_explanation_msa(
-    path: str,
-    hetero_explanation,
-    dataset,
-    batch,
-    title_suffix: Optional[str] = None,
-    go_term: Optional[str] = None,
-    aligned_seqs: Optional[List[str]] = None,
-):
-    """Plot amino acid to protein explanation aligned by MSA."""
-    if aligned_seqs is None:
-        aligned_seqs = perform_msa_from_batch(batch)
-    if aligned_seqs is None:
-        return
-
-    context = build_plot_context(path, dataset, hetero_explanation.batch)
-    key = ("aa", "belongs_to", "protein")
-
-    title = f"AA-Protein Explanation (MSA-aligned): {context.seed_label}"
-    if title_suffix:
-        title += f" ({title_suffix})"
-
-    _plot_aa_to_protein_msa(
-        context,
-        hetero_explanation[key]["edge_index"].detach().cpu(),
-        hetero_explanation[key]["edge_mask"].detach().cpu(),
-        aligned_seqs,
-        title,
-        "Normalized Edge Importance",
-        "aa_explanation_msa",
-        go_term,
-    )
-
-
-def plot_protein_attention_msa(
-    path: str,
-    layer_attention,
-    dataset,
-    batch,
-    layer_idx: int,
-    go_term: Optional[str] = None,
-    aligned_seqs: Optional[List[str]] = None,
-):
-    """Plot amino acid to protein attention weights aligned by MSA."""
-    if aligned_seqs is None:
-        aligned_seqs = perform_msa_from_batch(batch)
-    if aligned_seqs is None:
-        return
-
-    context = build_plot_context(path, dataset, batch)
-    key = ("aa", "belongs_to", "protein")
-
-    if layer_attention is None or key not in layer_attention:
-        return
-
-    edge_index, attn_weights = layer_attention[key]
-    mean_attn = attn_weights.mean(dim=-1).detach().cpu()
-    edge_index_cpu = edge_index.detach().cpu()
-
-    _plot_aa_to_protein_msa(
-        context,
-        edge_index_cpu,
-        mean_attn,
-        aligned_seqs,
-        f"AA-Protein Attention (Layer {layer_idx}, MSA-aligned): {context.seed_label}",
-        "Normalized Attention Weight",
-        f"aa_attention_layer{layer_idx}_msa",
-        go_term,
-        center_on_uniform=True,
-    )
-
-    _plot_msa_alignment_violin(
-        context,
-        edge_index_cpu,
-        mean_attn,
-        aligned_seqs,
-        f"Aligned vs Unaligned Attention (Layer {layer_idx}): {context.seed_label}",
-        f"aa_attention_layer{layer_idx}_msa_violin",
-        go_term,
-    )
-
-
-def plot_attn_seed_vs_neighbor_scatter(
-    path: str,
-    layer_attention,
-    dataset,
-    batch,
-    layer_idx: int,
-    go_term: Optional[str] = None,
-    aligned_seqs: Optional[List[str]] = None,
-):
-    """Plot scatter of seed vs neighbor attention for aligned residues."""
-    if aligned_seqs is None:
-        aligned_seqs = perform_msa_from_batch(batch)
-    if aligned_seqs is None:
-        return
-
-    context = build_plot_context(path, dataset, batch)
-    key = ("aa", "belongs_to", "protein")
-
-    if layer_attention is None or key not in layer_attention:
-        return
-
-    edge_index, attn_weights = layer_attention[key]
-
-    _plot_attn_seed_vs_neighbor_scatter(
-        context,
-        edge_index.detach().cpu(),
-        attn_weights.mean(dim=-1).detach().cpu(),
-        aligned_seqs,
-        f"Seed vs Neighbor Normalized Attention (Layer {layer_idx}): {context.seed_label}",
-        f"attn_seed_vs_neighbor_layer{layer_idx}",
-        go_term,
-    )
+# def _plot_aa_to_protein_msa(
+#     context: ProteinPlotContext,
+#     edge_index: torch.Tensor,
+#     edge_values: torch.Tensor,
+#     aligned_seqs: List[str],
+#     title: str,
+#     ylabel: str,
+#     filename_suffix: str,
+#     go_term: Optional[str] = None,
+#     window_size: Optional[int] = 3,
+#     center_on_uniform: bool = False,
+# ):
+#     """Plot AA→protein scores aligned by MSA."""
+#     protein_data = build_protein_score_map(edge_index, edge_values)
+#     if not protein_data or not aligned_seqs:
+#         return
+
+#     offsets = calculate_msa_offsets(aligned_seqs)
+
+#     plt.figure(figsize=(14, 6))
+#     cmap = plt.cm.get_cmap("tab10")
+
+#     if center_on_uniform:
+#         plt.axhline(y=0, color="black", linestyle="--", linewidth=1, alpha=0.5)
+
+#     for idx, (dst_val, aa_to_score) in enumerate(protein_data.items()):
+#         target_label = context.labels[int(dst_val)]
+#         is_seed = context.protein_ids[int(dst_val)] == context.seed_global
+
+#         aligned_seq = aligned_seqs[int(dst_val)]
+#         offset = offsets[int(dst_val)]
+
+#         # Calculate uniform baseline for this sequence if requested
+#         baseline = 0.0
+#         if center_on_uniform:
+#             seq_len = get_sequence_length(aligned_seq)
+#             if seq_len > 0:
+#                 baseline = 1.0 / seq_len
+
+#         x_pos, y_vals = [], []
+#         residue_idx = 0
+#         for aligned_pos, char in enumerate(aligned_seq):
+#             if char != "-":
+#                 global_aa_idx = offset + residue_idx
+#                 if global_aa_idx in aa_to_score:
+#                     x_pos.append(aligned_pos)
+#                     y_vals.append(aa_to_score[global_aa_idx] - baseline)
+#                 residue_idx += 1
+#             else:
+#                 x_pos.append(aligned_pos)
+#                 y_vals.append(np.nan)
+
+#         if not x_pos:
+#             continue
+
+#         # Apply sliding window if requested
+#         if window_size and window_size > 1 and len(y_vals) >= window_size:
+#             kernel = np.ones(window_size) / window_size
+#             y_vals = np.convolve(y_vals, kernel, mode="valid")
+#             # Adjust x_pos to center the window
+#             trim_start = (window_size - 1) // 2
+#             trim_end = trim_start + len(y_vals)
+#             x_pos = x_pos[trim_start:trim_end]
+
+#         plt.plot(
+#             x_pos,
+#             y_vals,
+#             label=target_label,
+#             color=cmap(idx % 10),
+#             linewidth=3.0 if is_seed else 1.5,
+#             alpha=0.7,
+#             zorder=10 if is_seed else 5,
+#             marker="o" if is_seed else ".",
+#             markersize=6 if is_seed else 4,
+#         )
+
+#     plt.xlabel("Aligned Position")
+#     plt.ylabel(ylabel)
+#     plt.title(title)
+#     plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
+#     plt.grid(True, alpha=0.3)
+#     plt.tight_layout()
+#     _save_plot(context, filename_suffix, go_term=go_term)
+
+
+# def _plot_attn_seed_vs_neighbor_scatter(
+#     context: ProteinPlotContext,
+#     edge_index: torch.Tensor,
+#     edge_values: torch.Tensor,
+#     aligned_seqs: List[str],
+#     title: str,
+#     filename_suffix: str,
+#     go_term: Optional[str] = None,
+# ):
+#     """Scatter plot of Seed Attention vs Neighbor Attention for aligned residues."""
+#     protein_data = build_protein_score_map(edge_index, edge_values)
+#     if not protein_data or not aligned_seqs:
+#         return
+
+#     offsets = calculate_msa_offsets(aligned_seqs)
+
+#     # Identify seed
+#     seed_local_idx = None
+#     for idx, global_id in enumerate(context.protein_ids):
+#         if global_id == context.seed_global:
+#             seed_local_idx = idx
+#             break
+
+#     if seed_local_idx is None or seed_local_idx not in protein_data:
+#         return
+
+#     seed_scores_map = protein_data[seed_local_idx]  # global_aa_idx -> score
+#     seed_offset = offsets[seed_local_idx]
+#     seed_seq = aligned_seqs[seed_local_idx]
+
+#     # Map MSA position to seed score
+#     msa_pos_to_seed_score = {}
+#     residue_idx = 0
+#     for msa_pos, char in enumerate(seed_seq):
+#         if char != "-":
+#             global_aa_idx = seed_offset + residue_idx
+#             if global_aa_idx in seed_scores_map:
+#                 msa_pos_to_seed_score[msa_pos] = seed_scores_map[global_aa_idx]
+#             residue_idx += 1
+
+#     plt.figure(figsize=(10, 8))
+#     cmap = plt.cm.get_cmap("tab10")
+
+#     has_points = False
+
+#     for idx, (dst_val, neighbor_scores_map) in enumerate(protein_data.items()):
+#         if dst_val == seed_local_idx:
+#             continue  # Skip seed vs seed
+
+#         neighbor_label = context.labels[int(dst_val)]
+#         neighbor_seq = aligned_seqs[int(dst_val)]
+#         neighbor_offset = offsets[int(dst_val)]
+
+#         xs = []  # Seed attn scores
+#         ys = []  # Neighbor attn scores
+
+#         residue_idx = 0
+#         for msa_pos, char in enumerate(neighbor_seq):
+#             if char != "-":
+#                 global_aa_idx = neighbor_offset + residue_idx
+#                 if (
+#                     global_aa_idx in neighbor_scores_map
+#                     and msa_pos in msa_pos_to_seed_score
+#                 ):
+#                     xs.append(msa_pos_to_seed_score[msa_pos])
+#                     ys.append(neighbor_scores_map[global_aa_idx])
+#                 residue_idx += 1
+
+#         if xs:
+#             color = cmap(idx % 10)
+#             label_suffix = ""
+#             if len(xs) > 1:
+#                 try:
+#                     m, b = np.polyfit(xs, ys, 1)
+#                     r = np.corrcoef(xs, ys)[0, 1]
+#                     x_range = np.array([min(xs), max(xs)])
+#                     y_range = m * x_range + b
+#                     plt.plot(
+#                         x_range,
+#                         y_range,
+#                         color=color,
+#                         linestyle="--",
+#                         alpha=0.5,
+#                         linewidth=1.5,
+#                     )
+#                     label_suffix = f" (R={r:.2f})"
+#                 except Exception:
+#                     pass
+
+#             plt.scatter(
+#                 xs,
+#                 ys,
+#                 label=f"{neighbor_label}{label_suffix}",
+#                 alpha=0.6,
+#                 s=20,
+#                 color=color,
+#             )
+
+#             has_points = True
+
+#     if not has_points:
+#         plt.close()
+#         return
+
+#     plt.xlabel(f"Protein Attention ({context.seed_label})")
+#     plt.ylabel("Neighbor Attention")
+#     plt.title(title)
+#     plt.legend(
+#         bbox_to_anchor=(1.05, 1), loc="upper left", borderaxespad=0.0, fontsize=9
+#     )
+
+#     plt.grid(True, alpha=0.3)
+#     plt.tight_layout()
+#     _save_plot(context, filename_suffix, go_term=go_term)
+
+
+# def _plot_msa_alignment_violin(
+#     context: ProteinPlotContext,
+#     edge_index: torch.Tensor,
+#     edge_values: torch.Tensor,
+#     aligned_seqs: List[str],
+#     title: str,
+#     filename_suffix: str,
+#     go_term: Optional[str] = None,
+# ):
+#     """Violin plot comparing attention of residues aligned to seed vs not aligned."""
+#     protein_data = build_protein_score_map(edge_index, edge_values)
+#     if not protein_data or not aligned_seqs:
+#         return
+
+#     # Identify seed index
+#     seed_local_idx = None
+#     for idx, global_id in enumerate(context.protein_ids):
+#         if global_id == context.seed_global:
+#             seed_local_idx = idx
+#             break
+
+#     if seed_local_idx is None:
+#         return
+
+#     seed_seq = aligned_seqs[seed_local_idx]
+#     offsets = calculate_msa_offsets(aligned_seqs)
+
+#     data_records = []
+
+#     for idx, (dst_val, aa_to_score) in enumerate(protein_data.items()):
+#         aligned_seq = aligned_seqs[int(dst_val)]
+#         offset = offsets[int(dst_val)]
+
+#         # Calculate uniform baseline
+#         seq_len = get_sequence_length(aligned_seq)
+#         baseline = 1.0 / seq_len if seq_len > 0 else 0.0
+
+#         residue_idx = 0
+#         for msa_pos, char in enumerate(aligned_seq):
+#             if char != "-":
+#                 global_aa_idx = offset + residue_idx
+#                 if global_aa_idx in aa_to_score:
+#                     score = aa_to_score[global_aa_idx] - baseline
+
+#                     # Check alignment with seed
+#                     is_aligned = seed_seq[msa_pos] != "-"
+
+#                     condition = (
+#                         "Aligned to Protein in MSA" if is_aligned else "Not Aligned"
+#                     )
+#                     data_records.append(
+#                         {
+#                             "Normalized Attention": score,
+#                             "Condition": condition,
+#                         }
+#                     )
+#                 residue_idx += 1
+
+#     if not data_records:
+#         return
+
+#     df = pd.DataFrame(data_records)
+
+#     if df.empty:
+#         return
+
+#     plt.figure(figsize=(6, 6))
+#     sns.violinplot(
+#         data=df,
+#         x="Condition",
+#         y="Normalized Attention",
+#         hue="Condition",
+#         inner="quartile",
+#         palette="muted",
+#         legend=False,
+#     )
+#     plt.title(title)
+#     plt.axhline(y=0, color="black", linestyle="--", linewidth=1, alpha=0.5)
+#     plt.tight_layout()
+#     _save_plot(context, filename_suffix, go_term=go_term)
+
+
+# def perform_msa_from_batch(batch) -> Optional[List[str]]:
+#     """Perform MSA on batch sequences, returning None on failure."""
+
+#     sequences = batch["protein"].sequences
+#     labels = batch["protein"].protein_ids
+
+#     if len(sequences) < 2:
+#         logger.warning("Not enough sequences for MSA alignment")
+#         return None
+
+#     aligned_seqs = perform_msa(sequences, labels)
+#     if len(aligned_seqs) != len(sequences):
+#         logger.error("MSA failed")
+#         return None
+
+#     return aligned_seqs
+
+
+# def plot_protein_explanation_msa(
+#     path: str,
+#     hetero_explanation,
+#     dataset,
+#     batch,
+#     title_suffix: Optional[str] = None,
+#     go_term: Optional[str] = None,
+#     aligned_seqs: Optional[List[str]] = None,
+# ):
+#     """Plot amino acid to protein explanation aligned by MSA."""
+#     if aligned_seqs is None:
+#         aligned_seqs = perform_msa_from_batch(batch)
+#     if aligned_seqs is None:
+#         return
+
+#     context = build_plot_context(path, dataset, hetero_explanation.batch)
+#     key = ("aa", "belongs_to", "protein")
+
+#     title = f"AA-Protein Explanation (MSA-aligned): {context.seed_label}"
+#     if title_suffix:
+#         title += f" ({title_suffix})"
+
+#     _plot_aa_to_protein_msa(
+#         context,
+#         hetero_explanation[key]["edge_index"].detach().cpu(),
+#         hetero_explanation[key]["edge_mask"].detach().cpu(),
+#         aligned_seqs,
+#         title,
+#         "Normalized Edge Importance",
+#         "aa_explanation_msa",
+#         go_term,
+#     )
+
+
+# def plot_protein_attention_msa(
+#     path: str,
+#     layer_attention,
+#     dataset,
+#     batch,
+#     layer_idx: int,
+#     go_term: Optional[str] = None,
+#     aligned_seqs: Optional[List[str]] = None,
+# ):
+#     """Plot amino acid to protein attention weights aligned by MSA."""
+#     if aligned_seqs is None:
+#         aligned_seqs = perform_msa_from_batch(batch)
+#     if aligned_seqs is None:
+#         return
+
+#     context = build_plot_context(path, dataset, batch)
+#     key = ("aa", "belongs_to", "protein")
+
+#     if layer_attention is None or key not in layer_attention:
+#         return
+
+#     edge_index, attn_weights = layer_attention[key]
+#     mean_attn = attn_weights.mean(dim=-1).detach().cpu()
+#     edge_index_cpu = edge_index.detach().cpu()
+
+#     _plot_aa_to_protein_msa(
+#         context,
+#         edge_index_cpu,
+#         mean_attn,
+#         aligned_seqs,
+#         f"AA-Protein Attention (Layer {layer_idx}, MSA-aligned): {context.seed_label}",
+#         "Normalized Attention Weight",
+#         f"aa_attention_layer{layer_idx}_msa",
+#         go_term,
+#         center_on_uniform=True,
+#     )
+
+#     _plot_msa_alignment_violin(
+#         context,
+#         edge_index_cpu,
+#         mean_attn,
+#         aligned_seqs,
+#         f"Aligned vs Unaligned Attention (Layer {layer_idx}): {context.seed_label}",
+#         f"aa_attention_layer{layer_idx}_msa_violin",
+#         go_term,
+#     )
+
+
+# def plot_attn_seed_vs_neighbor_scatter(
+#     path: str,
+#     layer_attention,
+#     dataset,
+#     batch,
+#     layer_idx: int,
+#     go_term: Optional[str] = None,
+#     aligned_seqs: Optional[List[str]] = None,
+# ):
+#     """Plot scatter of seed vs neighbor attention for aligned residues."""
+#     if aligned_seqs is None:
+#         aligned_seqs = perform_msa_from_batch(batch)
+#     if aligned_seqs is None:
+#         return
+
+#     context = build_plot_context(path, dataset, batch)
+#     key = ("aa", "belongs_to", "protein")
+
+#     if layer_attention is None or key not in layer_attention:
+#         return
+
+#     edge_index, attn_weights = layer_attention[key]
+
+#     _plot_attn_seed_vs_neighbor_scatter(
+#         context,
+#         edge_index.detach().cpu(),
+#         attn_weights.mean(dim=-1).detach().cpu(),
+#         aligned_seqs,
+#         f"Seed vs Neighbor Normalized Attention (Layer {layer_idx}): {context.seed_label}",
+#         f"attn_seed_vs_neighbor_layer{layer_idx}",
+#         go_term,
+#     )
 
 
 def plot_attn_stringdb_vs_aligned_scatter(
@@ -1107,18 +1128,14 @@ def plot_protein_attention(
     if layer_attention is None:
         return
 
-    # Plot AA -> Protein attention for both directional relation names.
+    # Plot AA -> Protein attention.
     for key in [
         ("aa", "belongs_to", "protein"),
-        ("protein", "rev_belongs_to", "aa"),
     ]:
         if key not in layer_attention:
             continue
 
         edge_index, attn_weights = layer_attention[key]
-        # reverse edge direction for rev_belongs_to to maintain AA->protein convention
-        if key[1] == "rev_belongs_to":
-            edge_index = edge_index.flip(0)
         _plot_aa_to_protein_scatter(
             context,
             edge_index.detach().cpu(),
@@ -1160,7 +1177,7 @@ def plot_protein_attention(
         node_avg_attn.flatten(),
         f"AA→AA Attention (Layer {layer_idx}): {{protein}}",
         "Mean Attention Weight",
-        f"aa_to_aa_attention_layer{layer_idx}",
+        f"aa_aa_attention_layer{layer_idx}",
         go_term,
     )
 

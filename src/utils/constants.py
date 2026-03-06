@@ -210,8 +210,12 @@ SUPPORTED_CAPTUM_METHODS = [
 
 UNIPROT_JSON_URL = "https://rest.uniprot.org/uniprotkb/{uniprot_id}.json"
 PDB_DOWNLOAD_URL = "https://files.rcsb.org/download/{pdb_id}.pdb"
+CIF_DOWNLOAD_URL = "https://files.rcsb.org/download/{pdb_id}.cif"
 ALPHAFOLD_STRUCTURE_URL = (
     "https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v6.pdb"
+)
+ALPHAFOLD_CIF_URL = (
+    "https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v6.cif"
 )
 
 # ============================================================================
