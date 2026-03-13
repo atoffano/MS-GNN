@@ -11,6 +11,7 @@ import os
 import sys
 import subprocess
 import pickle
+from collections import defaultdict
 import tqdm
 import argparse
 import torch
@@ -19,6 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.metrics import precision_recall_curve, auc
 import wandb
+import go3
 
 from src.utils.beprof_eval import (
     run_beprof_evaluation as run_beprof,
@@ -71,8 +73,70 @@ def plot_aupr(precision, recall, aupr=None):
     return pr_plot
 
 
+def _filter_leaf_terms(predicted_terms):
+    """Return only leaf GO terms from *predicted_terms*.
+
+    A term is considered a "leaf" within the predicted set when none of its
+    direct GO children are also present in the predicted set.  This removes
+    redundant ancestor terms so only the most specific predictions survive.
+
+    Args:
+        predicted_terms (list[str]): GO term IDs predicted for one protein.
+
+    Returns:
+        list[str]: Subset of *predicted_terms* containing only leaf terms.
+    """
+    term_set = set(predicted_terms)
+    leaf_terms = []
+    for term_id in term_set:
+        try:
+            term = go3.get_term_by_id(term_id)
+            # Keep only if none of its children are also predicted
+            if not any(child in term_set for child in term.children):
+                leaf_terms.append(term_id)
+        except Exception:
+            # Unknown term – include it to be safe
+            leaf_terms.append(term_id)
+    return leaf_terms
+
+
+def _initialize_barebones_output(config, dataset, split, pred_path):
+    """Prepare barebones output file and ontology cache.
+
+    Returns:
+        str: Path to barebones predictions file.
+    """
+    obo_path = "./data/go.obo"
+    if os.path.exists(obo_path):
+        go3.load_go_terms(obo_path)
+    else:
+        go3.load_go_terms()
+    with open(pred_path, "w") as f:
+        f.write("target_ID\tterm_ID\n")
+    return pred_path
+
+
+def _flush_predictions(pred_path, prediction_buffer, barebones=False):
+    """Flush buffered predictions to disk in standard or barebones format."""
+    if not prediction_buffer:
+        return
+
+    with open(pred_path, "a") as f:
+        if barebones:
+            for pid, terms in prediction_buffer.items():
+                leaf_terms = _filter_leaf_terms(terms)
+                if leaf_terms:
+                    f.write(f"{pid}\t{'; '.join(leaf_terms)}\n")
+        else:
+            for rows in prediction_buffer.values():
+                f.writelines(rows)
+    prediction_buffer.clear()
+
+
 @timeit
-def save_predictions(config, model, loader, device, dataset, split=None, tau=False):
+def save_predictions(
+    config, model, loader, device, dataset, split=None, tau=False, barebones=False
+):
     """Save model predictions to a TSV file.
 
     Args:
@@ -82,16 +146,27 @@ def save_predictions(config, model, loader, device, dataset, split=None, tau=Fal
         device: torch.device for computation
         dataset: SwissProtDataset instance
         split: Dataset split name ('train', 'val', or 'test')
+        tau: Score threshold for filtering predictions
+        barebones: If True (requires tau), write a condensed file with one row per
+                   protein containing only leaf GO terms (semicolon-separated).
     """
     model.eval()
+    if barebones and tau is None:
+        raise ValueError("barebones output requires a tau threshold")
+
     go_idx_to_term = {
         v: k for k, v in dataset.go_vocab_info[dataset.subontology]["go_to_idx"].items()
     }
     pred_path = f"{config['run']['results_dir']}/predictions/predictions_{split}_{dataset.subontology}.tsv"
     os.makedirs(os.path.dirname(pred_path), exist_ok=True)
-    with open(pred_path, "w") as f:
-        f.write("target_ID\tterm_ID\tscore\n")
-    batch_buffer = []
+
+    if barebones:
+        _initialize_barebones_output(config, dataset, split, pred_path)
+    else:
+        with open(pred_path, "w") as f:
+            f.write("target_ID\tterm_ID\tscore\n")
+
+    prediction_buffer = defaultdict(list)  # pid -> rows/terms depending on mode
     with torch.no_grad():
         for batch_count, batch in tqdm.tqdm(
             enumerate(loader), desc=f"Predicting on {split} proteins"
@@ -107,16 +182,18 @@ def save_predictions(config, model, loader, device, dataset, split=None, tau=Fal
                 for j, score in enumerate(scores[i]):
                     term_id = go_idx_to_term[j]
                     if tau and score > tau:
-                        batch_buffer.append(f"{pid}\t{term_id}\n")
+                        if barebones:
+                            prediction_buffer[pid].append(term_id)
+                        else:
+                            prediction_buffer[pid].append(f"{pid}\t{term_id}\n")
                     elif not tau and score > 0:
-                        batch_buffer.append(f"{pid}\t{term_id}\t{float(score)}\n")
-            if batch_count % 50 == 0:
-                with open(pred_path, "a") as f:
-                    f.writelines(batch_buffer)
-                batch_buffer = []
-        if batch_buffer:
-            with open(pred_path, "a") as f:
-                f.writelines(batch_buffer)
+                        prediction_buffer[pid].append(
+                            f"{pid}\t{term_id}\t{float(score)}\n"
+                        )
+            if (batch_count + 1) % 50 == 0:
+                _flush_predictions(pred_path, prediction_buffer, barebones=barebones)
+        # Flush remaining
+        _flush_predictions(pred_path, prediction_buffer, barebones=barebones)
 
 
 @timeit
@@ -141,7 +218,6 @@ def evaluate(
     run_cafa_eval = config["run"]["run_cafa_eval"]
 
     # Longitdudinal setup
-    # Check if config["data"] has "gt" key
     if dataset == "swissprot" and config["data"].get("gt") is not None:
         gt_tsv = config["data"]["gt"]
         gt_name = gt_tsv.split("/")[-1].replace(".tsv", "")
