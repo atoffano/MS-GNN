@@ -13,13 +13,7 @@ MS-GNN overcomes the limitations of existing computational methods by integratin
 1. **Protein-Level Graph (Atomic Scale):** Each protein is modeled as a spatial graph where nodes correspond to amino acids initialized with pre-trained protein language model (pLM ESM-1b) embeddings. Edges connect residues within 10Å of each other based on AlphaFold/ESMFold predictions.
 2. **Network-Level Graph (Systemic Scale):** Proteins are embedded into a broader systemic network, with edges weighted by sequence similarity (DIAMOND) and functional associations (STRING database).
 
-A specialized central node for each protein aggregates functional signatures (InterPro domains and, during training, neighborhood GO terms) and connects both levels, enabling information to propagate from local structural motifs up to broader biological functional pathways via Graph Attention Networks (GAT).
-
-## Key Features
-- **Multiscale Integration:** Bridging 3D spatial properties and massive systemic network context.
-- **Multiple Datasets Support:** Evaluated on ATGO (2022) and D1 (2024) protein function prediction datasets.
-- **Labeling Strategies:** Support two training regimes: `EXP` (strictly experimental labels) and `CUR` (curated, review-based labels including broader annotations).
-- **Ablation Studies:** Validates functional vs. structural feature importance across the different GO ontologies.
+A specialized central node for each protein aggregates functional signatures and connects both levels, enabling information to propagate from local structural motifs up to broader biological functional pathways via Graph Attention Networks (GAT).
 
 ## Installation
 
@@ -38,8 +32,8 @@ cd MS-GNN
 
 2. Create the conda environment:
 ```bash
-conda env create -f pyg.yml
-conda activate pyg2
+conda env create -f msgnn.yml
+conda activate msgnn
 ```
 
 3. Install PyTorch Geometric dependencies:
@@ -95,7 +89,7 @@ python main.py --config src/configs/toy_cfg.yaml
 ```
 
 Modify `src/configs/cfg.yaml` to configure target `dataset` (e.g., `D1`, `ATGO`), specify the `subontology` (`MFO`, `BPO`, or `CCO`), and toggle between experimental logic (`exp_only: true`) vs. curated labels paradigms.
-
+x@
 ### Evaluation and Inference
 To generate predictions from a trained model run and automatically compute F-max and threshold-independent metrics (AUPR) evaluating against the testing set:
 

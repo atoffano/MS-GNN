@@ -1,4 +1,4 @@
-name: pyg2
+name: msgnn
 channels:
   - bioconda
   - rmg
