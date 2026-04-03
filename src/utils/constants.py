@@ -20,12 +20,24 @@ SRC_ROOT = PROJECT_ROOT / "src"
 USES_ENTRYID = ["H30", "D1"]
 
 # SwissProt
+SWISSPROT_RELEASE = "2024_01"
 SWISSPROT_ROOT = DATA_ROOT / "swissprot" / "2024_01"
 SWISSPROT_FASTA = SWISSPROT_ROOT / "swissprot_2024_01.fasta"
 PID_MAPPING = SWISSPROT_ROOT / "swissprot_2024_01_annotations.tsv"
 DIAMOND_ALIGNMENT = SWISSPROT_ROOT / "diamond_swissprot_2024_01_alignment.tsv"
+SWISSPROT_TAR_URL = (
+    "https://ftp.uniprot.org/pub/databases/uniprot/previous_releases/"
+    f"release-{SWISSPROT_RELEASE}/knowledgebase/uniprot_sprot-only{SWISSPROT_RELEASE}.tar.gz"
+)
+SWISSPROT_TAR_PATH = SWISSPROT_ROOT / f"uniprot_sprot-only{SWISSPROT_RELEASE}.tar.gz"
+SWISSPROT_DAT_GZ_PATH = SWISSPROT_ROOT / "uniprot_sprot.dat.gz"
+SWISSPROT_DAT_PATH = SWISSPROT_ROOT / "uniprot_sprot.dat"
 
 # InterPro
+INTERPRO_URL = (
+    "https://ftp.ebi.ac.uk/pub/databases/interpro/releases/106.0/protein2ipr.dat.gz"
+)
+INTERPRO_GZ_PATH = SWISSPROT_ROOT / "protein2ipr.dat.gz"
 INTERPRO_TSV = SWISSPROT_ROOT / "swissprot_interpro_106_0.tsv"
 INTERPRO_VOCAB = SWISSPROT_ROOT / "protein_graphs" / "interpro_vocab.pkl"
 
@@ -43,6 +55,10 @@ EMBED_H5_PATH = SWISSPROT_ROOT / "swissprot_esm1b_per_aa.h5"
 # Structures
 ALPHAFOLD_PDB_DIR = SWISSPROT_ROOT / "alphafold_pdb"
 ESMFOLD_PDB_DIR = SWISSPROT_ROOT / "esmfold_pdb"
+ALPHAFOLD_URL = (
+    "https://ftp.ebi.ac.uk/pub/databases/alphafold/latest/swissprot_pdb_v6.tar"
+)
+ALPHAFOLD_TAR_PATH = SWISSPROT_ROOT / "swissprot_pdb_v6.tar"
 
 # Graphs
 PROTEIN_GRAPHS_DIR = SWISSPROT_ROOT / "protein_graphs"
@@ -50,6 +66,10 @@ STRUCTURE_MISSING_PATH = PROTEIN_GRAPHS_DIR / "structure_missing_rev.fasta"
 STRUCTURE_MISSING_FASTA = SWISSPROT_ROOT / "structure_missing.fasta"
 
 # StringDB
+STRINGDB_LINKS_URL = (
+    "https://stringdb-downloads.org/download/stream/protein.links.detailed.v12.0.onlyAB.tsv.gz",
+)
+STRINGDB_LINKS_GZ_PATH = SWISSPROT_ROOT / "protein.links.detailed.v12.0.onlyAB.tsv.gz"
 STRINGDB_PATH = SWISSPROT_ROOT / "swissprot_stringdb.tsv"
 STRINGDB_SWISSPROT_MAPPING = SWISSPROT_ROOT / "idmapping_swissprot_stringdb.tsv"
 
@@ -208,15 +228,14 @@ SUPPORTED_CAPTUM_METHODS = [
 # External API URLs
 # ============================================================================
 
+GO_OBO_URL = "https://release.geneontology.org/2024-06-17/ontology/go.obo"
 UNIPROT_JSON_URL = "https://rest.uniprot.org/uniprotkb/{uniprot_id}.json"
 PDB_DOWNLOAD_URL = "https://files.rcsb.org/download/{pdb_id}.pdb"
 CIF_DOWNLOAD_URL = "https://files.rcsb.org/download/{pdb_id}.cif"
 ALPHAFOLD_STRUCTURE_URL = (
     "https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v6.pdb"
 )
-ALPHAFOLD_CIF_URL = (
-    "https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v6.cif"
-)
+ALPHAFOLD_CIF_URL = "https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v6.cif"
 
 # ============================================================================
 # Logging Configuration
@@ -230,5 +249,5 @@ LOG_LEVEL_DEFAULT = "INFO"
 # Conda Environments
 # ============================================================================
 
-CONDA_ENV_MAIN = "pyg2"
+CONDA_ENV_MAIN = "msgnn"
 CONDA_ENV_ESMFOLD = "esmfold"

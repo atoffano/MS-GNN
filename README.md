@@ -44,7 +44,7 @@ pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -
 ## Data Preparation
 
 ### 1. Download Datasets & AlphaFold Structures
-A unified dataset preparation script automatically downloads AlphaFold structures corresponding to SwissProt targets and fetches functional annotations (e.g., InterPro):
+A unified dataset preparation script automatically downloads AlphaFold structures corresponding to SwissProt targets and fetches functional annotations (e.g., InterPro), plus network interactions from STRING database:
 ```bash
 python -m src.data.gather_data
 ```
@@ -57,12 +57,7 @@ Generate the pre-trained amino acid language embeddings using the ESM-1b model:
 python -m src.data.embed_residues --fasta data/swissprot/2024_01/swissprot_2024_01.fasta
 ```
 
-### 3. Compute Network Interactions & Alignment
-Download and parse network interactions from STRING database restricted to the appropriate sequence subset:
-```bash
-python -m src.data.get_stringdb
-```
-
+### 3. Compute Alignments
 To enable homology context, compute DIAMOND protein alignments (requires `diamond` executable):
 ```bash
 diamond makedb --in data/swissprot/2024_01/swissprot_2024_01.fasta -d data/swissprot/2024_01/swissprot_2024_01
