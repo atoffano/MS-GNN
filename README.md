@@ -4,6 +4,7 @@
 
 This repository contains the source code, training configurations, and evaluation logic for modeling protein functions across all Gene Ontology (GO) sub-ontologies (MFO, BPO, CCO). It accompanies the paper: *"Bridging Scales: A Multi-Level Graph Neural Network for Protein Function Prediction."*
 
+Predicted annotations for all SwissProt proteins alongside all original workflows can be found in this repository under `predictions`. 
 ## Architecture Highlights
 
 ![MS-GNN Architecture](gnn_model.png)
@@ -102,8 +103,8 @@ python -m src.utils.evaluation \
     --subontology MFO
 ```
 
-## Data availability and Pre-computed Predictions
-Predicted annotations for all SwissProt proteins alongside all original workflows can be found in this repository. Benchmark datasets and evaluation scripts rely on original published sources from `cafa-eval` and original dataset providers.
+## Data availability
+Benchmark datasets and evaluation scripts rely on original published sources from `cafa-eval` and original dataset providers.
 
 
 ## Acknowledgements
