@@ -2,7 +2,7 @@
 
 **MS-GNN** is a deep learning framework for protein function prediction in the form of Gene Ontology terms. It utilizes a graph neural network architecture based on attention mechanisms that simultaneously learns from residue-level 3D structures and global protein–protein association networks.
 
-This repository contains the source code, training configurations, and evaluation logic for modeling protein functions across all Gene Ontology (GO) sub-ontologies (MFO, BPO, CCO). It accompanies the paper: *"Bridging Scales: A Multi-Level Graph Neural Network for Protein Function Prediction."*
+This repository contains the source code, training configurations, and evaluation logic for modeling protein functions across all Gene Ontology (GO) sub-ontologies (MFO, BPO, CCO). It accompanies the paper: *"[Bridging Scales: A Multi-Level Graph Neural Network for Protein Function Prediction](https://hal.science/hal-05580207)."*
 
 Predicted annotations for all SwissProt proteins alongside all original workflows can be found in this repository under `predictions`. 
 ## Architecture Highlights
