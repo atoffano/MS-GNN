@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 def save_checkpoint(
-    config, model, optimizer, scheduler, epoch, subontology, best_val_aupr=None
+    config, model, optimizer, scheduler, epoch, subontology
 ):
     """Save a training checkpoint.
 
@@ -20,7 +20,6 @@ def save_checkpoint(
         scheduler: Learning rate scheduler instance
         epoch: Current epoch number
         subontology: Current GO subontology being trained
-        best_val_aupr: Best validation AUPR achieved (optional)
     """
     checkpoint_dir = os.path.join(config["run"]["results_dir"], "checkpoints")
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -33,9 +32,6 @@ def save_checkpoint(
         "subontology": subontology,
         "config": config,
     }
-
-    if best_val_aupr is not None:
-        checkpoint["best_val_aupr"] = best_val_aupr
 
     # Save epoch-specific checkpoint first if configured (safer for recovery)
     epoch_path = os.path.join(
@@ -61,7 +57,7 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, device):
         device: torch.device for computation
 
     Returns:
-        tuple: (start_epoch, config, best_val_aupr)
+        tuple: (start_epoch, config)
     """
     logger.info(f"Loading checkpoint from {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -103,7 +99,6 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, device):
 
     start_epoch = checkpoint["epoch"] + 1
     config = checkpoint.get("config")
-    best_val_aupr = checkpoint.get("best_val_aupr", 0.0)
 
     logger.info(f"Resuming from epoch {start_epoch}")
-    return start_epoch, config, best_val_aupr
+    return start_epoch, config

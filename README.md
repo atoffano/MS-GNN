@@ -66,7 +66,7 @@ diamond blastp -q data/swissprot/2024_01/swissprot_2024_01.fasta -d data/swisspr
 ```
 
 ### 4. Construct Multi-level Graphs
-Compile raw data into serialized PyTorch Geometric hetero-graph structures mapping the sequence embeddings and AlphaFold spatial boundaries:
+Compile data into PyTorch Geometric hetero-graph structures:
 ```bash
 python -m src.data.create_graphs --fasta data/swissprot/2024_01/swissprot_2024_01.fasta --num-workers 16
 ```
@@ -79,15 +79,12 @@ Train the model by pointing to a specific configuration file:
 ```bash
 # Standard training run
 python main.py --config src/configs/cfg.yaml
-
-# Quick testing on toy data
-python main.py --config src/configs/toy_cfg.yaml
 ```
 
 Modify `src/configs/cfg.yaml` to configure target `dataset` (e.g., `D1`, `ATGO`), specify the `subontology` (`MFO`, `BPO`, or `CCO`), and toggle between experimental logic (`exp_only: true`) vs. curated labels paradigms.
 x@
 ### Evaluation and Inference
-To generate predictions from a trained model run and automatically compute F-max and threshold-independent metrics (AUPR) evaluating against the testing set:
+To generate predictions from a trained model run and automatically evaluate against the testing set:
 
 ```bash
 # Run prediction and save outputs

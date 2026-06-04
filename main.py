@@ -42,7 +42,6 @@ def train(
     device,
     subontology,
     start_epoch=1,
-    best_val_aupr=0.0,
 ):
     """Train the protein function prediction model.
 
@@ -55,7 +54,6 @@ def train(
         device: torch.device for computation (CPU or CUDA)
         subontology: Current GO subontology being trained
         start_epoch: Epoch to start/resume training from (default: 1)
-        best_val_aupr: Best validation AUPR achieved so far (default: 0.0)
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=config["optimizer"]["lr"])
     scheduler = torch.optim.lr_scheduler.StepLR(
@@ -72,7 +70,7 @@ def train(
             f"checkpoint_latest_{subontology}.pth",
         )
         if os.path.exists(checkpoint_path):
-            start_epoch, _, best_val_aupr = load_checkpoint(
+            start_epoch, _ = load_checkpoint(
                 checkpoint_path, model, optimizer, scheduler, device
             )
 
@@ -174,9 +172,7 @@ def train(
             scheduler,
             epoch,
             subontology,
-            val_aupr,
         )
-        wandb.log({"best_val_aupr": best_val_aupr})
 
 
 def run_intermediate_validation(model, val_loader, criterion, device, num_batches=5):
@@ -285,7 +281,6 @@ def main():
 
     # Check if resuming from checkpoint
     start_epoch = 1
-    best_val_aupr = 0.0
     checkpoint_path = os.path.join(
         config["run"]["results_dir"],
         "checkpoints",
@@ -298,10 +293,9 @@ def main():
         # Try to resume wandb run
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
         start_epoch = checkpoint["epoch"] + 1
-        best_val_aupr = checkpoint.get("best_val_aupr", 0.0)
         wandb_id = checkpoint.get("wandb_id", None)
         logger.info(
-            f"Resuming training from epoch {start_epoch} with best val AUPR {best_val_aupr:.4f}"
+            f"Resuming training from epoch {start_epoch}"
         )
 
     run_name = f"{os.path.basename(config['run']['results_dir'])}_{subontology}"
@@ -375,7 +369,6 @@ def main():
         device,
         subontology,
         start_epoch,
-        best_val_aupr,
     )
 
     # Predictions
