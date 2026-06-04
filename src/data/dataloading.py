@@ -6,7 +6,17 @@ import pandas as pd
 import pickle
 from pathlib import Path
 import logging
-from src.utils.constants import *
+from src.utils.constants import (
+    CONTACT_CUTOFF,
+    DIAMOND_ALIGNMENT,
+    GO_VOCAB,
+    INTERPRO_VOCAB,
+    PID_MAPPING,
+    PROTEIN_GRAPHS_DIR,
+    STRINGDB_PATH,
+    STRINGDB_SWISSPROT_MAPPING,
+    USES_ENTRYID,
+)
 from src.utils.helpers import timeit
 
 logger = logging.getLogger(__name__)
@@ -202,47 +212,7 @@ class SwissProtDataset:
             f"Loaded splits - Train: {len(self.train_idx)}, Val: {len(self.val_idx)}, Test: {len(self.test_idx)}"
         )
 
-        # BCE pos weights for handling class imbalance
-        # self.pos_weights = self._compute_pos_weights()
-        # logger.info(f"Computed pos weights for {len(self.pos_weights)} GO terms")
 
-    @timeit
-    def _compute_pos_weights(self):
-        """LEGACY | Compute positive weights for each GO term to handle class imbalance."""
-        go_to_idx = self.go_vocab_info[self.subontology]["go_to_idx"]
-        term_counts = torch.zeros(len(go_to_idx), dtype=torch.float32)
-
-        all_term_indices = []
-        for protein in self.train_idx:
-            pid = self.idx_to_protein[protein]
-            if pid in self.train_annots:
-                terms = self.train_annots[pid]["term"]
-                term_indices = [go_to_idx[term] for term in terms if term in go_to_idx]
-                all_term_indices.extend(term_indices)
-        if all_term_indices:
-            term_indices_tensor = torch.tensor(all_term_indices, dtype=torch.long)
-            term_counts = torch.bincount(
-                term_indices_tensor, minlength=len(go_to_idx)
-            ).float()
-        inf_mask = term_counts == 0
-        # pos_weights = len(self.train_idx) / (term_counts + 1)
-        pos_weights = len(self.train_idx) / (len(term_counts) * (term_counts + 1e-8))
-
-        # Replace pos weights equal to len(self.train_idx) with 1
-        if inf_mask.any():
-            pos_weights[inf_mask] = pos_weights.min().item()
-            logger.info(
-                f"{inf_mask.sum().item()} GO terms had zero positive samples; set pos weight to min"
-            )
-        logger.info(f"Pos weight sample: {pos_weights[:10]}")
-        logger.info(
-            f"Pos weight stats - Min: {pos_weights.min()}, Max: {pos_weights.max()}, Mean: {pos_weights.mean()}"
-        )
-        sorted_weights, _ = torch.sort(pos_weights)
-        logger.info(
-            f"Sorted pos weights sample: {sorted_weights[:10]} ... {sorted_weights[-10:]}"
-        )
-        return pos_weights
 
     def _create_protein_graph(self, config):
         """Creates the high-level protein network."""
@@ -250,7 +220,7 @@ class SwissProtDataset:
         @timeit
         def alignment_edge_data():
             alignment_df = pd.read_csv(
-                DIAMOND_ALIGNMENT,
+                config["data"].get("alignment_path", DIAMOND_ALIGNMENT),
                 sep="\t",
                 header=None,
                 names=[
@@ -323,7 +293,7 @@ class SwissProtDataset:
             rev_stringdb_mapping = {v: k for k, v in stringdb_mapping.items()}
 
             stringdb_df = pd.read_csv(
-                STRINGDB_PATH,
+                config["data"].get("stringdb_path", STRINGDB_PATH),
                 sep="\t",
                 header=0,
                 names=[
@@ -450,6 +420,9 @@ class SwissProtDataset:
 
             use_edge_attrs = self.config["model"]["edge_attrs"]
             use_contact = ["aa", "close_to", "aa"] in self.config["model"]["edge_types"]
+            mean_pool_aa = self.config["model"].get("mean_pool_aa", False)
+            if mean_pool_aa:
+                use_contact = False
 
             if return_sequences:
                 sampled_sequences = []
@@ -478,6 +451,8 @@ class SwissProtDataset:
                     aa_feat = torch.zeros(
                         200, 1280, dtype=torch.float32
                     )  # Default 200 AAs
+                    if mean_pool_aa:
+                        aa_feat = aa_feat.mean(dim=0, keepdim=True)
                     if use_contact:
                         local_contact_edge_index = torch.empty((2, 0), dtype=torch.long)
                         local_contact_edge_attr = (
@@ -493,6 +468,8 @@ class SwissProtDataset:
                         sampled_sequences.append(protein_graph["protein"].sequence)
                     interpro_feat = protein_graph["protein"].interpro.squeeze(0)
                     aa_feat = protein_graph["aa"].x
+                    if mean_pool_aa:
+                        aa_feat = aa_feat.mean(dim=0, keepdim=True)
 
                     if self.external_annotations is not None:
                         if raw_pid in self.external_annotations:

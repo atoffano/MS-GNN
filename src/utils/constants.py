@@ -67,7 +67,7 @@ STRUCTURE_MISSING_FASTA = SWISSPROT_ROOT / "structure_missing.fasta"
 
 # StringDB
 STRINGDB_LINKS_URL = (
-    "https://stringdb-downloads.org/download/stream/protein.links.detailed.v12.0.onlyAB.tsv.gz",
+    "https://stringdb-downloads.org/download/stream/protein.links.detailed.v12.0.onlyAB.tsv.gz"
 )
 STRINGDB_LINKS_GZ_PATH = SWISSPROT_ROOT / "protein.links.detailed.v12.0.onlyAB.tsv.gz"
 STRINGDB_PATH = SWISSPROT_ROOT / "swissprot_stringdb.tsv"
@@ -79,19 +79,6 @@ STRINGDB_SWISSPROT_MAPPING = SWISSPROT_ROOT / "idmapping_swissprot_stringdb.tsv"
 
 DIAMOND_DB_DIR = DATA_ROOT / "diamond"
 DIAMOND_SWISSPROT_DB = SWISSPROT_ROOT / "swissprot_2024_01.dmnd"
-MUSCLE_EXECUTABLE = DATA_ROOT / "muscle-linux-x86.v5.3"
-
-# ============================================================================
-# Model Checkpoints and Configs
-# ============================================================================
-
-CONFIGS_DIR = SRC_ROOT / "configs"
-DEFAULT_CONFIG = CONFIGS_DIR / "cfg.yaml"
-TOY_CONFIG = CONFIGS_DIR / "toy_cfg.yaml"
-
-MODELS_DIR = PROJECT_ROOT / "models"
-CHECKPOINTS_DIR = PROJECT_ROOT / "checkpoints"
-
 # ESM Model
 ESM_CHECKPOINT_DIR = DATA_ROOT / "esm_checkpoints"
 ESM1B_CHECKPOINT = ESM_CHECKPOINT_DIR / "esm1b_t33_650M_UR50S.pt"
@@ -101,7 +88,7 @@ ESMFOLD_CHECKPOINT = ESM_CHECKPOINT_DIR / "esmfold_v1.pt"
 # Output Directories
 # ============================================================================
 
-RESULTS_DIR = PROJECT_ROOT / "results"
+
 INFERENCE_OUTPUT_DIR = DATA_ROOT / "inference_outputs"
 TMP_DIR = DATA_ROOT / "tmp"
 
@@ -145,8 +132,7 @@ INTERPROSCAN_MAX_RETRIES = 3
 
 DIAMOND_EXECUTABLE = "diamond"
 DIAMOND_DEFAULT_EVALUE = 1e-3
-DIAMOND_OUTPUT_FORMAT = "6"  # Tabular format
-DIAMOND_DEFAULT_THREADS = 4
+
 
 # ============================================================================
 # Graph Construction Parameters
@@ -156,15 +142,7 @@ DIAMOND_DEFAULT_THREADS = 4
 CONTACT_CUTOFF = 10.0  # Angstroms
 CONTACT_CHUNK_SIZE = 512
 
-# Node types
-NODE_TYPE_AA = "aa"
-NODE_TYPE_PROTEIN = "protein"
 
-# Edge types
-EDGE_TYPE_BELONGS_TO = ("aa", "belongs_to", "protein")
-EDGE_TYPE_HAS = ("protein", "has", "aa")
-EDGE_TYPE_CLOSE_TO = ("aa", "close_to", "aa")
-EDGE_TYPE_STRINGDB = ("protein", "stringdb", "protein")
 
 # ============================================================================
 # Gene Ontology Parameters
@@ -207,8 +185,7 @@ GO_NAMESPACES_REVERT = {
 # Training/Evaluation Parameters
 # ============================================================================
 
-BATCH_SIZE = 32
-LEARNING_RATE = 1e-3
+
 RANDOM_SEED = 42
 
 # ============================================================================
@@ -242,12 +219,5 @@ ALPHAFOLD_CIF_URL = "https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_
 # ============================================================================
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-LOG_LEVEL_DEFAULT = "INFO"
 
-# ============================================================================
-# Conda Environments
-# ============================================================================
 
-CONDA_ENV_MAIN = "msgnn"
-CONDA_ENV_ESMFOLD = "esmfold"

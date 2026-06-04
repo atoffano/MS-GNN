@@ -36,9 +36,6 @@ from src.utils.constants import (
 )
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 EXP_CODES = {
@@ -163,8 +160,6 @@ __all__ = [
     "Ontology",
 ]
 
-# Re-export constants for backwards compatibility
-ROOT_GO_TERMS = GO_ROOT_TERMS
 
 
 def gt_convert(gt_tsv):
@@ -426,13 +421,6 @@ def save_pkl(pklfile, data):
         pkl.dump(data, fw)
 
 
-# Re-export constants for backwards compatibility
-BIOLOGICAL_PROCESS = GO_BIOLOGICAL_PROCESS
-MOLECULAR_FUNCTION = GO_MOLECULAR_FUNCTION
-CELLULAR_COMPONENT = GO_CELLULAR_COMPONENT
-FUNC_DICT = GO_FUNC_DICT
-NAMESPACES = GO_NAMESPACES
-NAMESPACES_REVERT = GO_NAMESPACES_REVERT
 
 
 def is_cafa_target(org):
@@ -467,7 +455,7 @@ class Ontology(object):
             self.ic[go_id] = math.log(min_n / n, 2)
             self.icdepth[go_id] = (
                 math.log(
-                    self.get_depth(go_id, NAMESPACES_REVERT[self.get_namespace(go_id)]),
+                    self.get_depth(go_id, GO_NAMESPACES_REVERT[self.get_namespace(go_id)]),
                     2,
                 )
                 * self.ic[go_id]
@@ -583,7 +571,7 @@ class Ontology(object):
             if all_p:
                 layer += 1
                 for item in all_p:
-                    if item == FUNC_DICT[ont]:
+                    if item == GO_FUNC_DICT[ont]:
                         return layer
                     q.append(item)
         return layer
@@ -615,8 +603,8 @@ class Ontology(object):
 
 def compute_performance(test_df, go, ont, output_path):
 
-    go_set = go.get_namespace_terms(NAMESPACES[ont])
-    go_set.remove(FUNC_DICT[ont])
+    go_set = go.get_namespace_terms(GO_NAMESPACES[ont])
+    go_set.remove(GO_FUNC_DICT[ont])
     print(len(go_set))
 
     labels = list(go_set)

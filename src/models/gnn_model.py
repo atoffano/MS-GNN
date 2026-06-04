@@ -151,7 +151,6 @@ class ProteinGNN(torch.nn.Module):
         self.norm_post = LayerNorm(hidden_channels)
 
         self.lin_out = Linear(hidden_channels, out_channels)
-        self.previous_tensors = {}
 
     def forward(self, x_dict, edge_index_dict, batch, return_attention_weights=None):
         """Forward pass through the protein GNN.

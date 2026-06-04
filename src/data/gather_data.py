@@ -32,8 +32,6 @@ import requests
 from Bio import SeqIO
 from tqdm.auto import tqdm
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.utils.constants import (
     ALPHAFOLD_TAR_PATH,

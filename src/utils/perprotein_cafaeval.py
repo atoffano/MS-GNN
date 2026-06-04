@@ -195,7 +195,12 @@ def compute_per_protein_metrics(pred, gt, tau, toi, ic_arr=None, ns=None):
     )
 
     # Add protein IDs if available
-    if hasattr(pred, "ids"):
+    if gt is not None and hasattr(gt, "ids"):
+        protein_ids = [None] * len(gt.ids)
+        for pid, idx in gt.ids.items():
+            protein_ids[idx] = pid
+        df["protein_id"] = protein_ids
+    elif hasattr(pred, "ids"):
         df["protein_id"] = list(pred.ids.keys())
 
     # Add context columns to ensure data is identifiable

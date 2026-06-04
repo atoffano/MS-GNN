@@ -30,9 +30,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-torch.cuda.memory._record_memory_history()
-
-
 def train(
     config,
     model,
@@ -239,6 +236,24 @@ def main():
         default=None,
         help="Path to checkpoint directory to resume training from",
     )
+    parser.add_argument(
+        "--subontology",
+        type=str,
+        default=None,
+        help="Override subontology in config (e.g., MFO, BPO, CCO)",
+    )
+    parser.add_argument(
+        "--qualifier",
+        type=str,
+        default=None,
+        help="Override qualifier in config",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="Override dataset in config",
+    )
     args = parser.parse_args()
     config_path = args.config
 
@@ -259,6 +274,14 @@ def main():
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
 
+    if args.subontology:
+        config["data"]["subontology"] = args.subontology
+    if args.qualifier:
+        config["run"]["qualifier"] = args.qualifier
+    if args.dataset:
+        config["data"]["dataset"] = args.dataset
+
+    if not args.resume:
         time_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         dataset_name = config["data"]["dataset"]
         if config["data"].get("train_on_swissprot", True):

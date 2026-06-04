@@ -7,17 +7,12 @@ import sys
 import yaml
 from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.data.dataloading import SwissProtDataset
 from src.utils.api import download_alphafold, download_pdb
 from torch_geometric.loader import NeighborLoader
 import torch
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 

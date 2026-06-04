@@ -36,7 +36,6 @@ data:
   train_proteins: 'toy'  # Override 'dataset' train proteins with the specified dataset's proteins.
   exp_only: true  # If training on SwissProt, whether to use only experimental annotations
   swissprot_release: '2024_01'  # SwissProt release annotations used when training on SwissProt proteins (train_proteins: swissprot)
-  exp_only: true  # Whether to use experimental or curated annotations when training on SwissProt proteins
   external_annotations_path: ./data/swissprot/2024_01/swissprot_2024_01_MFO_exp_annotations.tsv # Override train annotations with a specific annotation file. Also overrides 'exp_only' flag.
 
   alignment_path: ./data/toy/toy_swissprot_2024_01_alignment.tsv
@@ -53,5 +52,3 @@ run:
   save_model: true
   run_beprof_eval: true
   run_cafa_eval: true
-  project_path: "/home/atoffano/PFP_layer"  # From constants.py
-  # project_path: "/lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer"

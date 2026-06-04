@@ -23,22 +23,15 @@ from src.utils.constants import (
 from src.utils.visualize import (
     plot_systemic_explanation,
     plot_protein_explanation,
-    # plot_protein_explanation_msa,
     plot_systemic_attention,
     plot_protein_attention,
-    # plot_protein_attention_msa,
-    # plot_attn_seed_vs_neighbor_scatter,
     plot_attn_stringdb_vs_aligned_scatter,
     ensure_structure,
     analyze_attention_captum_correlation,
-    # perform_msa_from_batch,
 )
 from src.utils.structure_renderer import export_captum_3d, export_layer_attention_3d
 from src.utils.helpers import timeit
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
@@ -872,7 +865,7 @@ def main():
     loader = create_data_loader(dataset, config, args.proteins)
 
     # Process each batch
-    # try:
+
     for batch in loader:
         exporter = ExplanationExporter(
             args.model_path,
@@ -891,8 +884,7 @@ def main():
             args.go_terms,
             threshold=args.threshold,
         )
-    # except Exception as e:
-    #     logger.error(f"Error during explanation generation: {e}")
+
     logger.info(
         f"Explanation generation completed! Results saved to: {args.model_path}"
     )

@@ -320,7 +320,7 @@ def run_cafa_evaluation(
             th_step=th_step,
         )
 
-        logger.info("\n" + "=" * 60)
+        logger.info("=" * 60)
         logger.info("CAFA Evaluation Summary")
         logger.info("=" * 60)
 
