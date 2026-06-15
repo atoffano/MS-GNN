@@ -14,6 +14,7 @@ model:
   sampled_edges:
     protein__aligned_with__protein: -1
     protein__stringdb__protein: 30
+  weighted_sampling: true  # Bias StringDB neighbor sampling toward high combined_score edges
 
 trainer:
   epochs: 6
