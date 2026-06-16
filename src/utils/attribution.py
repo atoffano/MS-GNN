@@ -352,14 +352,18 @@ class ExplanationExporter:
     #         self.aligned_seqs = perform_msa_from_batch(batch)
 
     def _ensure_cache(self, batch):
-        """Lazy-load structure cache when first needed."""
-        if self.structure_cache:
+        """Lazy-load structure cache for proteins in the batch."""
+        protein_ids = batch["protein"].n_id.detach().cpu().tolist()
+        uncached = [
+            pid for pid in protein_ids
+            if self.dataset.idx_to_protein[pid] not in self.structure_cache
+        ]
+        if not uncached:
             return
 
-        logger.info("Loading protein structures...")
-        protein_ids = batch["protein"].n_id.detach().cpu().tolist()
+        logger.info(f"Loading {len(uncached)} protein structures...")
 
-        for protein_id in tqdm.tqdm(protein_ids, desc="Loading structures"):
+        for protein_id in tqdm.tqdm(uncached, desc="Loading structures"):
             uniprot_id = self.dataset.idx_to_protein[protein_id]
             pdb_id = (
                 self.dataset.pid_mapping.get(uniprot_id, uniprot_id)
@@ -713,11 +717,23 @@ def create_data_loader(dataset, config, protein_names: list[str]) -> NeighborLoa
         if "_" in protein:
             if dataset.uses_entryid:
                 proteins.append(protein)
+            else:
+                logger.warning(
+                    f"Protein '{protein}' looks like an EntryID but dataset uses "
+                    f"accession numbers. Skipping."
+                )
         else:
             if not dataset.uses_entryid:
                 proteins.append(protein)
             else:
-                proteins.append(dataset.rev_pid_mapping[protein])
+                mapped = dataset.rev_pid_mapping.get(protein)
+                if mapped is not None:
+                    proteins.append(mapped)
+                else:
+                    logger.warning(
+                        f"Protein '{protein}' not found in pid mapping, "
+                        f"cannot convert to EntryID. Skipping."
+                    )
 
     protein_ids = []
     for protein in proteins:
@@ -818,6 +834,11 @@ def process_batch(
 
 def main():
     """Main entry point for explanation generation."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
     parser = argparse.ArgumentParser(
         description="Generate explanations for protein function prediction model"
     )
@@ -840,6 +861,12 @@ def main():
         choices=SUPPORTED_CAPTUM_METHODS,
     )
     parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Device to use (e.g. 'cpu', 'cuda', 'cuda:0')",
+    )
+    parser.add_argument(
         "--plot_neighbors",
         action="store_true",
         help="Generate plots for neighbor proteins",
@@ -851,7 +878,7 @@ def main():
     )
 
     args = parser.parse_args()
-    device = torch.device("cpu")
+    device = torch.device(args.device)
     logger.info(f"Using device: {device}")
 
     # Load model and dataset
@@ -864,16 +891,17 @@ def main():
     generator = ExplanationGenerator(model, device, args.captum_method)
     loader = create_data_loader(dataset, config, args.proteins)
 
-    # Process each batch
+    # Create exporter once (shares structure cache across batches)
+    exporter = ExplanationExporter(
+        args.model_path,
+        dataset,
+        go_mapper,
+        plot_neighbors=args.plot_neighbors,
+        save_scores=args.save_scores,
+    )
 
+    # Process each batch
     for batch in loader:
-        exporter = ExplanationExporter(
-            args.model_path,
-            dataset,
-            go_mapper,
-            plot_neighbors=args.plot_neighbors,
-            save_scores=args.save_scores,
-        )
         process_batch(
             batch,
             model,

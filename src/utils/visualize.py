@@ -222,9 +222,9 @@ def render_scene(
         logger.warning(f"No residue scores for {structure_path}, skipping")
         return
 
-    res_idx, scores = zip(*residue_scores)
-    res_idx = np.asarray(res_idx, dtype=np.int32)
-    scores = np.asarray(scores, dtype=np.float32)
+    # Build lookup from PDB residue number to score
+    score_map = dict(residue_scores)
+    score_values = np.asarray([s for _, s in residue_scores], dtype=np.float32)
 
     os.makedirs(os.path.dirname(image_path), exist_ok=True)
     logger.info(f"Rendering structure {structure_path}")
@@ -235,20 +235,24 @@ def render_scene(
         cmd.load(structure_path, "prot")
         cmd.alter("prot", "b=0.0")
         ca_resi = [int(atom.resi) for atom in cmd.get_model("prot and name CA").atom]
-        if len(ca_resi) != len(scores):
-            logger.warning(
-                f"Number of scores ({len(scores)}) does not match the number of CA atoms ({len(ca_resi)}). Only assigning up to the shorter list."
-            )
+        scored_resi = []
         for resi_nb in ca_resi:
-            try:
-                cmd.alter(f"prot and resi {resi_nb}", f"b={scores[resi_nb - 1]}")
-            except Exception:
-                continue
-        apply_spectrum(cmd, plt.cm.Spectral_r, scores, ca_resi)
-        cmd.color(
-            "gray70",
-            selection=f"not resi {'+'.join(str(resi_nb) for resi_nb in ca_resi if resi_nb <= len(scores))}",
-        )
+            if resi_nb in score_map:
+                cmd.alter(f"prot and resi {resi_nb}", f"b={score_map[resi_nb]}")
+                scored_resi.append(resi_nb)
+        if not scored_resi:
+            logger.warning(
+                f"No residue scores matched CA atoms in {structure_path}, skipping rendering."
+            )
+            return
+        if len(scored_resi) != len(score_map):
+            logger.warning(
+                f"Matched {len(scored_resi)}/{len(score_map)} scored residues to CA atoms in {structure_path}."
+            )
+        apply_spectrum(cmd, plt.cm.Spectral_r, score_values, scored_resi)
+        # Color residues without scores gray
+        unscored_sel = f"not resi {'+'.join(str(r) for r in scored_resi)}"
+        cmd.color("gray70", selection=unscored_sel)
         cmd.color("gray70", selection=f"HETATM")
 
         if title:
@@ -367,10 +371,10 @@ def _plot_aa_to_protein_scatter(
         target_label = context.labels[target_idx]
 
         plt.figure(figsize=(8, 4))
-        x_positions = torch.arange(len(values), dtype=torch.float32)
+        x_positions = torch.arange(len(values_sorted), dtype=torch.float32)
         scatter = plt.scatter(
             x_positions.numpy(),
-            values.numpy(),
+            values_sorted.numpy(),
             c=values_sorted.numpy(),
             cmap=plt.cm.Spectral_r,
         )
@@ -734,12 +738,15 @@ def plot_protein_attention(
         )
 
     # Plot AA->AA attention for residues linked to seed protein, if available
+    aa_close_key = ("aa", "close_to", "aa")
+    if aa_close_key not in layer_attention:
+        return
     # Get AA indices linked to seed protein (index 0) through belongs_to edges
     edge_index, _ = layer_attention[("aa", "belongs_to", "protein")]
     aa_src, protein_dst = edge_index[0], edge_index[1]
     seed_mask = protein_dst == 0
     aa_idx = aa_src[seed_mask]
-    edge_index, attn_weights = layer_attention[("aa", "close_to", "aa")]
+    edge_index, attn_weights = layer_attention[aa_close_key]
     # Get attention weights for edge_index where both source and target are in aa_idx
     aa_src, aa_dst = edge_index[0], edge_index[1]
     aa_mask = torch.isin(aa_src, aa_idx) & torch.isin(aa_dst, aa_idx)
@@ -835,8 +842,13 @@ def analyze_attention_captum_correlation(
             continue
 
         edge_index, attn_weights = layer_attention[key]
-        edge_index = edge_index.detach().cpu()[:, seed_mask]
-        attn_vals = attn_weights.mean(dim=-1).detach().cpu()[seed_mask]
+        edge_index = edge_index.detach().cpu()
+        attn_vals = attn_weights.mean(dim=-1).detach().cpu()
+
+        # Compute seed mask from this layer's own edge index
+        layer_seed_mask = edge_index[1] == 0
+        edge_index = edge_index[:, layer_seed_mask]
+        attn_vals = attn_vals[layer_seed_mask]
 
         # Match edges
         shared_attn, shared_captum = [], []

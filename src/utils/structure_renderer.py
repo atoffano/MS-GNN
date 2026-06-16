@@ -75,7 +75,6 @@ def _render_structures(
                 structure_cache[uniprot_id] = structure_path
 
         # Resolve output path - Neighbor or seed protein ?
-        is_seed = local_idx == 0
         base_dir = context.seed_dir if is_seed else context.neighbor_dir
         prefix = (
             context.seed_label
@@ -164,13 +163,22 @@ def export_layer_attention_3d(
             int(aa): int(prot) for aa, prot in zip(belongs_to_idx[0], belongs_to_idx[1])
         }
 
+        # Build per-protein AA offset so we can convert global batch AA index
+        # to a local 1-based residue position within each protein.
+        protein_aa_offset = {}  # protein_local_idx -> first global AA index
+        for aa_global, prot_local in sorted(aa_to_protein.items()):
+            if prot_local not in protein_aa_offset:
+                protein_aa_offset[prot_local] = aa_global
+
         aa_residue_scores = {}
         for aa_idx, score in enumerate(node_sum_attn.tolist()):
             if score > 0 and aa_idx in aa_to_protein:
                 prot_idx = aa_to_protein[aa_idx]
                 if prot_idx not in aa_residue_scores:
                     aa_residue_scores[prot_idx] = []
-                aa_residue_scores[prot_idx].append((aa_idx + 1, score))
+                # Convert global batch AA index to local 1-based residue position
+                local_residue = aa_idx - protein_aa_offset[prot_idx] + 1
+                aa_residue_scores[prot_idx].append((local_residue, score))
 
         _render_structures(
             context,
