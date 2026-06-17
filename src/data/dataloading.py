@@ -93,18 +93,6 @@ class SwissProtDataset:
         )
         self.data = self.transform(self.data)
 
-        # Pad edge_weight for edges added by AddRemainingSelfLoops.
-        # The self-loop transform only fills `edge_attr` but not `edge_weight`,
-        # causing a length mismatch. Self-loop edges get weight=1.0.
-        for edge_type in self.data.edge_types:
-            store = self.data[edge_type]
-            if hasattr(store, "edge_weight") and store.edge_weight is not None:
-                num_edges = store.edge_index.size(1)
-                num_weights = store.edge_weight.size(0)
-                if num_weights < num_edges:
-                    pad = torch.ones(num_edges - num_weights, dtype=store.edge_weight.dtype)
-                    store.edge_weight = torch.cat([store.edge_weight, pad])
-
         logger.info(
             f"Created protein graph with {self.data['protein'].num_nodes} proteins"
         )
@@ -279,12 +267,10 @@ class SwissProtDataset:
             )
             if config["model"][
                 "edge_attrs"
-            ]:  # Z-score Normalize and shift bitscore as edge attribute
+            ]:  # Z-score Normalize bitscore as edge attribute
                 features = alignment_df[["bitscore"]]
-                z_scores = ((features - features.mean()) / features.std()).values
-                z_shifted = z_scores - z_scores.min()  # Shift so min value is zero
                 edge_attrs = torch.tensor(
-                    z_shifted,
+                    ((features - features.mean()) / features.std()).values,
                     dtype=torch.float32,
                 )
             else:
@@ -356,21 +342,16 @@ class SwissProtDataset:
             )
             if config["model"][
                 "edge_attrs"
-            ]:  # Z-score Normalize and shift combined_score as edge attribute
+            ]:  # Z-score Normalize combined_score as edge attribute
                 features = stringdb_df[["combined_score"]]
-                z_scores = ((features - features.mean()) / features.std()).values
-                z_shifted = z_scores - z_scores.min()  # Shift so min value is zero
                 edge_attrs = torch.tensor(
-                    z_shifted,
+                    ((features - features.mean()) / features.std()).values,
                     dtype=torch.float32,
                 )
-                # 1D weights for biased neighbor sampling (separate from 2D edge_attr used by GATv2)
-                edge_weights = edge_attrs.squeeze(-1)
             else:
                 edge_attrs = None
-                edge_weights = None
 
-            return edge_index, edge_attrs, edge_weights
+            return edge_index, edge_attrs
 
         data = HeteroData()
         logger.info("Creating protein-protein graph edges...")
@@ -384,13 +365,11 @@ class SwissProtDataset:
                 )
 
         if ["protein", "stringdb", "protein"] in config["model"]["edge_types"]:
-            stringdb_edge_index, stringdb_edge_attrs, stringdb_edge_weights = stringdb_edge_data()
+            stringdb_edge_index, stringdb_edge_attrs = stringdb_edge_data()
             data["protein", "stringdb", "protein"].edge_index = stringdb_edge_index
             logger.info(f"STRINGdb edges: {stringdb_edge_index.shape[1]}")
             if config["model"]["edge_attrs"]:
                 data["protein", "stringdb", "protein"].edge_attr = stringdb_edge_attrs
-            if stringdb_edge_weights is not None:
-                data["protein", "stringdb", "protein"].edge_weight = stringdb_edge_weights
 
         # Protein nodes - aa features are added later when batching
         num_proteins = len(self.proteins)
@@ -648,23 +627,18 @@ class SwissProtDataset:
             except Exception as e:
                 logger.error(f"Error applying graph transformations: {e}")
                 logger.error(f"Batch before transformation: {batch}")
-                # logger.error(
-                #     f"Batch edge_attrs before transformation: {batch['protein', 'stringdb', 'protein'].edge_attr}"
-                # )
-                # logger.error(
-                #     f"Batch edge_attrs before transformation: {batch['protein', 'aligned_with', 'protein'].edge_attr}"
-                # )
+                logger.error(
+                    f"Batch edge_attrs before transformation: {batch['protein', 'stringdb', 'protein'].edge_attr}"
+                )
+                logger.error(
+                    f"Batch edge_attrs before transformation: {batch['protein', 'aligned_with', 'protein'].edge_attr}"
+                )
 
             return batch
 
-def make_batch_transform(dataset, mode, return_sequences=False):
-    """Populate batch with features.
 
-    Args:
-        dataset: SwissProtDataset instance.
-        mode: 'train' or 'predict'.
-        return_sequences: Whether to include protein sequences in the batch.
-    """
+def make_batch_transform(dataset, mode, return_sequences=False):
+    """Populate batch with features."""
 
     def batch_transform(batch):
         batch["mode"] = mode
@@ -672,7 +646,6 @@ def make_batch_transform(dataset, mode, return_sequences=False):
         return batch
 
     return batch_transform
-
 
 
 def define_loaders(config, dataset):
@@ -683,26 +656,15 @@ def define_loaders(config, dataset):
     for edge_type_str, num_samples in config["model"]["sampled_edges"].items():
         edge_type_tuple = tuple(edge_type_str.split("__"))
         num_neighbors[edge_type_tuple] = [num_samples]
-
-    logger.info("Subgraph sampling configuration: %s", num_neighbors)
-
-    # Weighted/biased neighbor sampling: edges with higher edge_weight are sampled preferentially.
-    # Only edge types that have the "edge_weight" attribute are affected (currently: stringdb).
-    # Edge types without it (aligned_with) keep uniform sampling.
-    weight_attr = "edge_weight" if config["model"].get("weighted_sampling", False) else None
-    if weight_attr:
-        logger.info("Weighted neighbor sampling enabled (weight_attr='%s')", weight_attr)
+    logger.info("Subgraph sampling configuration", num_neighbors)
 
     # num_neighbors = {("protein", "aligned_with", "protein"): [-1]}
     train_loader = NeighborLoader(
         dataset.data,
         num_neighbors=num_neighbors,
-        weight_attr=weight_attr,
         batch_size=config["model"]["batch_size"],
         input_nodes=("protein", dataset.train_mask),
-        transform=make_batch_transform(
-            dataset, mode="train",
-        ),
+        transform=make_batch_transform(dataset, mode="train"),
         shuffle=True,
         num_workers=config["trainer"]["num_workers"],
         drop_last=True,
@@ -711,12 +673,9 @@ def define_loaders(config, dataset):
     test_loader = NeighborLoader(
         dataset.data,
         num_neighbors=num_neighbors,
-        weight_attr=weight_attr,
         batch_size=config["model"]["batch_size"],
         input_nodes=("protein", dataset.test_mask),
-        transform=make_batch_transform(
-            dataset, mode="predict",
-        ),
+        transform=make_batch_transform(dataset, mode="predict"),
         shuffle=False,
         num_workers=config["trainer"]["num_workers"],
     )
@@ -727,12 +686,9 @@ def define_loaders(config, dataset):
         val_loader = NeighborLoader(
             dataset.data,
             num_neighbors=num_neighbors,
-            weight_attr=weight_attr,
             batch_size=config["model"]["batch_size"],
             input_nodes=("protein", dataset.val_mask),
-            transform=make_batch_transform(
-                dataset, mode="predict",
-            ),
+            transform=make_batch_transform(dataset, mode="predict"),
             shuffle=False,
             num_workers=config["trainer"]["num_workers"],
         )
