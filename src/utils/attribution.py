@@ -26,10 +26,12 @@ from src.utils.visualize import (
     plot_systemic_attention,
     plot_protein_attention,
     plot_attn_stringdb_vs_aligned_scatter,
+    plot_shared_name_attention_boxplot,
+    plot_edge_attr_vs_attention_scatter,
     ensure_structure,
-    analyze_attention_captum_correlation,
+    export_captum_3d,
+    export_layer_attention_3d,
 )
-from src.utils.structure_renderer import export_captum_3d, export_layer_attention_3d
 from src.utils.helpers import timeit
 
 logger = logging.getLogger(__name__)
@@ -261,13 +263,10 @@ class ExplanationExporter:
         self.plot_neighbors = plot_neighbors
         self.save_scores = save_scores
         self.structure_cache: Dict[str, str] = {}
-        self.aligned_seqs = None
         self.go_idx_to_term, self.ipr_idx_to_term = self._load_feature_vocab_maps()
         self.attr_abs_threshold = 1e-8  # skip numerical noise in dense masks
 
         # Feature families to export from protein node_mask
-        # Allowed values: "ipr", "go"
-        # self.save = ["ipr", "go"]
         self.save = ["go"]
 
         self.feature_names, self.feature_keep_mask = self._build_feature_name_lookup()
@@ -346,10 +345,6 @@ class ExplanationExporter:
 
         return f"FEATURE_IDX_{feature_idx}"
 
-    # def _ensure_msa(self, batch):
-    #     """Ensure MSA is computed for the current batch."""
-    #     if self.aligned_seqs is None:
-    #         self.aligned_seqs = perform_msa_from_batch(batch)
 
     def _ensure_cache(self, batch):
         """Lazy-load structure cache for proteins in the batch."""
@@ -525,9 +520,6 @@ class ExplanationExporter:
 
         if attentions:
             self._export_attention(batch, attentions)
-            # analyze_attention_captum_correlation(
-            #     self.output_dir, self.dataset, batch, attentions, hetero_explanation
-            # )
 
     def export_go_term(
         self,
@@ -600,9 +592,6 @@ class ExplanationExporter:
         target_keys = [
             ("protein", "aligned_with", "protein"),
             ("protein", "stringdb", "protein"),
-            #     ("protein", "rev_belongs_to", "aa"),
-            #     ("aa", "belongs_to", "protein"),
-            #     ("aa", "close_to", "aa"),
         ]
 
         if attentions:
@@ -662,12 +651,10 @@ class ExplanationExporter:
                 continue
 
             if go_term is None:
-                # Systemic level neighbor attribution
                 plot_systemic_attention(
                     self.output_dir, layer_attention, self.dataset, batch, idx
                 )
 
-            # Protein level residue attribution
             plot_protein_attention(
                 self.output_dir,
                 layer_attention,
@@ -679,15 +666,6 @@ class ExplanationExporter:
             )
 
             if self.plot_neighbors:
-                # plot_attn_seed_vs_neighbor_scatter(
-                #     self.output_dir,
-                #     layer_attention,
-                #     self.dataset,
-                #     batch,
-                #     idx,
-                #     go_term,
-                #     aligned_seqs=self.aligned_seqs,
-                # )
                 plot_attn_stringdb_vs_aligned_scatter(
                     self.output_dir,
                     layer_attention,
@@ -696,6 +674,26 @@ class ExplanationExporter:
                     idx,
                     go_term,
                 )
+
+            # Shared protein name attention boxplot (alignment edges only)
+            plot_shared_name_attention_boxplot(
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                go_term,
+            )
+
+            # Edge attribute vs attention scatter (per channel)
+            plot_edge_attr_vs_attention_scatter(
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                go_term,
+            )
 
             # 3D structure visualization with attention scores mapped onto residues
             export_layer_attention_3d(

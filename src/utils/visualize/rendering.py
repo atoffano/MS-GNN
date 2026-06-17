@@ -1,18 +1,134 @@
-"""Utilities for rendering protein structures with attribution scores."""
+"""PyMOL-based 3D structure rendering with score overlays."""
 
+import colorsys
 import logging
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from torch_scatter import scatter
-from src.utils.visualize import (
-    build_plot_context,
-    build_protein_score_map,
-    render_scene,
-    ensure_structure,
-)
+
+from src.utils.visualize.context import build_plot_context, ensure_structure
+from src.utils.visualize.residue import build_protein_score_map
+
+try:
+    import pymol2
+except ImportError:
+    pymol2 = None
 
 logger = logging.getLogger(__name__)
+
+
+def adjust_colormap(cmap, luminance_factor=1.0, saturation_factor=1.0, n_colors=256):
+    """Adjust the luminance and saturation of a colormap.
+
+    Args:
+        cmap: The input colormap to adjust.
+        luminance_factor: Factor to scale the luminance (value) of the colors.
+        saturation_factor: Factor to scale the saturation of the colors.
+        n_colors: Number of colors in the adjusted colormap.
+
+    Returns:
+        The adjusted colormap.
+    """
+    colors = [cmap(i / (n_colors - 1)) for i in range(n_colors)]
+    adjusted_colors = []
+    for color in colors:
+        r, g, b = color[:3]
+        h, s, v = colorsys.rgb_to_hsv(r, g, b)
+        s = min(1.0, s * saturation_factor)
+        v = min(1.0, v * luminance_factor)
+        adjusted_colors.append(colorsys.hsv_to_rgb(h, s, v))
+
+    return mcolors.LinearSegmentedColormap.from_list(
+        "adjusted_cmap", adjusted_colors, N=n_colors
+    )
+
+
+def _apply_spectrum(cmd, cmap, scores, ca_resi, n_colors=256):
+    """Generate a custom cmap and apply it to a PyMOL scene."""
+    cmap = adjust_colormap(cmap, luminance_factor=1, saturation_factor=4)
+    sampled_colors = [cmap(i / (n_colors - 1))[:3] for i in range(n_colors)]
+    rgb_colors = [tuple(color) for color in sampled_colors]
+    names = [mcolors.to_hex(color) for color in sampled_colors]
+
+    for name, color in zip(names, rgb_colors):
+        cmd.set_color(name, list(color))
+
+    cmd.spectrum(
+        expression="b",
+        palette=" ".join(names),
+        selection=f"resi {'+'.join(str(r) for r in ca_resi)}",
+        minimum=float(np.min(scores)),
+        maximum=float(np.max(scores)),
+    )
+
+
+def render_scene(
+    structure_path: str,
+    residue_scores: Sequence[Tuple[int, float]],
+    image_path: str,
+    *,
+    title: str | None = None,
+) -> None:
+    """Color a structure by residue scores via PyMOL. Supports both .pdb and .cif files.
+
+    Args:
+        structure_path: Path to the structure file.
+        residue_scores: Sequence of (residue_number_1based, score) tuples.
+        image_path: Path to save the rendered image.
+        title: Optional title for the rendering.
+    """
+    if not residue_scores:
+        logger.warning(f"No residue scores for {structure_path}, skipping")
+        return
+
+    # Build lookup from PDB residue number to score
+    score_map = dict(residue_scores)
+    score_values = np.asarray([s for _, s in residue_scores], dtype=np.float32)
+
+    os.makedirs(os.path.dirname(image_path), exist_ok=True)
+    logger.info(f"Rendering structure {structure_path}")
+
+    with pymol2.PyMOL() as pymol:
+        cmd = pymol.cmd
+        cmd.reinitialize()
+        cmd.load(structure_path, "prot")
+        cmd.alter("prot", "b=0.0")
+        ca_resi = [int(atom.resi) for atom in cmd.get_model("prot and name CA").atom]
+        scored_resi = []
+        for resi_nb in ca_resi:
+            if resi_nb in score_map:
+                cmd.alter(f"prot and resi {resi_nb}", f"b={score_map[resi_nb]}")
+                scored_resi.append(resi_nb)
+        if not scored_resi:
+            logger.warning(
+                f"No residue scores matched CA atoms in {structure_path}, skipping rendering."
+            )
+            return
+        if len(scored_resi) != len(score_map):
+            logger.warning(
+                f"Matched {len(scored_resi)}/{len(score_map)} scored residues to CA atoms in {structure_path}."
+            )
+        _apply_spectrum(cmd, plt.cm.Spectral_r, score_values, scored_resi)
+        # Color residues without scores gray
+        unscored_sel = f"not resi {'+'.join(str(r) for r in scored_resi)}"
+        cmd.color("gray70", selection=unscored_sel)
+        cmd.color("gray70", selection="HETATM")
+
+        if title:
+            cmd.set_title("title", state=0, text=title)
+        cmd.set("spec_reflect", 0)
+        cmd.set("ray_shadows", 0)
+        cmd.set("ray_opaque_background", 0)
+        cmd.bg_color("black")
+        cmd.orient("prot")
+        cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
+        cmd.save(image_path.replace(".png", ".pse"))
+        logger.info(f"Saved structure rendering to {image_path}")
 
 
 def _edge_scores_to_residues(
@@ -128,7 +244,7 @@ def export_layer_attention_3d(
         dataset,
         context.protein_ids,
         residue_scores,
-        suffix=f"attention_layer{layer_idx}_scene",
+        suffix=f"scene3d_aa_attention_L{layer_idx}",
         title_prefix=f"Attention L{layer_idx}",
         structure_cache=structure_cache,
         go_term=go_term,
@@ -146,13 +262,8 @@ def export_layer_attention_3d(
         if aa_attn_weights.dim() > 1:
             aa_attn_weights = aa_attn_weights.mean(dim=-1)
 
-        # Aggregate AA->AA attention per source AA node with degree smoothing
+        # Aggregate AA->AA attention per source AA node
         node_sum_attn = scatter(aa_attn_weights, aa_edge_index[0], dim=0, reduce="sum")
-        # node_degree = scatter(
-        #     torch.ones_like(aa_attn_weights), aa_edge_index[0], dim=0, reduce="sum"
-        # )
-        # smoothing_factor = node_degree.mean().item() if node_degree.numel() > 0 else 1.0
-        # node_avg_attn = node_sum_attn / (node_degree + smoothing_factor)
 
         # Map AA nodes to their respective proteins using the belongs_to edge_index
         belongs_to_idx = edge_index.detach().cpu()
@@ -185,7 +296,7 @@ def export_layer_attention_3d(
             dataset,
             context.protein_ids,
             aa_residue_scores,
-            suffix=f"aa_aa_attention_layer{layer_idx}_scene",
+            suffix=f"scene3d_aa_aa_attention_L{layer_idx}",
             title_prefix=f"AA-AA Attention L{layer_idx}",
             structure_cache=structure_cache,
             go_term=go_term,
@@ -213,7 +324,7 @@ def export_captum_3d(
     residue_scores = _edge_scores_to_residues(edge_index, edge_scores)
 
     context = build_plot_context(output_dir, dataset, batch)
-    suffix = f"captum_{go_term.replace(':', '_')}_scene" if go_term else "captum_scene"
+    suffix = f"scene3d_captum_{go_term.replace(':', '_')}" if go_term else "scene3d_captum"
     title_prefix = f"Captum ({go_term})" if go_term else "Captum"
 
     _render_structures(
