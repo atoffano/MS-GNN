@@ -281,6 +281,8 @@ def main():
     if args.dataset:
         config["data"]["dataset"] = args.dataset
 
+    subontology = config["data"]["subontology"]
+
     if not args.resume:
         time_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         dataset_name = config["data"]["dataset"]
@@ -288,11 +290,23 @@ def main():
             config["run"][
                 "qualifier"
             ] = f"{config['data']['swissprot_release']}_{config['run']['qualifier']}"
-        run_id = f"{time_str}_{dataset_name}_{config['run']['qualifier']}"
+        
+        counter = 1
+        while True:
+            suffix_str = f"_{counter}" if counter > 1 else ""
+            run_id = f"{time_str}{suffix_str}_{dataset_name}_{config['run']['qualifier']}"
+            candidate_dir = f"./results/{config['data']['dataset']}/{run_id}"
+            log_file = os.path.join(candidate_dir, f"{subontology}.log")
 
-        # Create results directory
-        config["run"]["results_dir"] = f"./results/{config['data']['dataset']}/{run_id}"
-        os.makedirs(config["run"]["results_dir"], exist_ok=True)
+            try:
+                os.makedirs(candidate_dir, exist_ok=True)
+                # 'x' mode atomically creates the file or raises FileExistsError if it exists
+                with open(log_file, "x"):
+                    pass
+                config["run"]["results_dir"] = candidate_dir
+                break
+            except FileExistsError:
+                counter += 1
 
         with open(os.path.join(config["run"]["results_dir"], "cfg.yaml"), "w") as f:
             yaml.dump(config, f)
@@ -300,7 +314,6 @@ def main():
     logger.info(
         "Config:\n" + yaml.dump(config, sort_keys=False, default_flow_style=False)
     )
-    subontology = config["data"]["subontology"]
 
     # Check if resuming from checkpoint
     start_epoch = 1
