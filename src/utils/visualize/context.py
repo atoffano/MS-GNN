@@ -33,7 +33,13 @@ def build_plot_context(base_path: str, dataset, batch) -> ProteinPlotContext:
         for idx, global_id in enumerate(protein_ids)
     }
     seed_label = labels[0]
-    seed_dir = os.path.join(base_path, "explanations", seed_label)
+    
+    sub = getattr(dataset, "subontology", None)
+    if sub:
+        seed_dir = os.path.join(base_path, "explanations", sub, seed_label)
+    else:
+        seed_dir = os.path.join(base_path, "explanations", seed_label)
+        
     neighbor_dir = os.path.join(seed_dir, "neighbors")
     os.makedirs(seed_dir, exist_ok=True)
     os.makedirs(neighbor_dir, exist_ok=True)
