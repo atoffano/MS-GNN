@@ -132,6 +132,7 @@ INTERPROSCAN_MAX_RETRIES = 3
 
 DIAMOND_EXECUTABLE = "diamond"
 DIAMOND_DEFAULT_EVALUE = 1e-3
+DIAMOND_DEFAULT_TOPK = 500
 
 
 # ============================================================================
@@ -141,7 +142,7 @@ DIAMOND_DEFAULT_EVALUE = 1e-3
 # Contact edges
 CONTACT_CUTOFF = 10.0  # Angstroms
 CONTACT_CHUNK_SIZE = 512
-
+TRUNCATED_PROTEIN_LENGTH = 1024
 
 
 # ============================================================================
@@ -220,4 +221,14 @@ ALPHAFOLD_CIF_URL = "https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
+# ============================================================================
+# Inference Model Directories
+# ============================================================================
+
+INFERENCE_MODELS_DIR = PROJECT_ROOT / "models"
+INFERENCE_MODEL_MAP = {
+    "MFO": "20260209_092916_D1_2024_01_GNN_DEL_NOIPR",
+    "BPO": "20260214_105749_D1_2024_01_GNN_DEL_NOIPR",
+    "CCO": "20260216_082607_D1_2024_01_GNN_DEL_NOIPR",
+}
 

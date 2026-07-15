@@ -18,6 +18,8 @@ model:
   sampled_edges:
     protein__aligned_with__protein: -1
     protein__stringdb__protein: 30
+  topk_stringdb_sampling: true  # Use deterministic top-K selection instead of random sampling for StringDB edges
+
 trainer:
   epochs: 6
   device: cuda
