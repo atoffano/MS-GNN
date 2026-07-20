@@ -1,20 +1,21 @@
 # Bridging Scales: A Multi-Level Graph Neural Network for Protein Function Prediction
 
-**MS-GNN** is a deep learning framework for protein function prediction in the form of Gene Ontology terms. It utilizes a graph neural network architecture based on attention mechanisms that simultaneously learns from residue-level 3D structures and global protein–protein association networks.
+**MS-GNN** is a deep learning framework for protein function prediction in the form of Gene Ontology terms. It utilizes a graph neural network architecture based on attention mechanisms to learn simultaneously form both residue-level 3D structures and global protein–protein association networks.
 
-This repository contains the source code, training configurations, and evaluation logic for modeling protein functions across all Gene Ontology (GO) sub-ontologies (MFO, BPO, CCO). It accompanies the paper: *"[Bridging Scales: A Multi-Level Graph Neural Network for Protein Function Prediction](https://hal.science/hal-05580207)."*
+This repository contains the source code, training configurations, and evaluation logic for modeling protein functions across all Gene Ontology (GO) sub-ontologies (MFO, BPO, CCO). It accompanies the paper: *"[MS-GNN: A Multi-Scale Graph Neural Network for Protein Function Prediction](https://hal.science/hal-05580207)."*
 
-Predicted annotations for all SwissProt proteins alongside all original workflows can be found in this repository under `predictions`. 
+Predicted annotations for all SwissProt proteins can be found in this repository under `predictions`.
+
 ## Architecture Highlights
 
 ![MS-GNN Architecture](gnn_model.png)
-*Overview of the multiscale graph architecture, detailing the flow of features from individual amino acid nodes to the global protein--protein interaction network. **a.** Global information flow through the model. **b**. Protein-level information propagation during GAT layers along edges between residues determined by contact maps (yellow edges) and between residues and global protein node (dotted red edges). **c.** Systemic-level information propagation during GAT layers between neighbors based on homology (red edges) and StringDB associations (blue edges).*
+*Overview of the multi-scale graph architecture, detailing the flow of features between individual amino acid nodes and the global protein--protein interaction network. **a.** Global information flow through the model. **b**. Residue-scale information propagation during GAT layers along edges between residues determined by contact maps (yellow edges) and between residues and global protein node (dotted red edges). **c.** Protein network scale information propagation during GAT layers between neighbors based on homology (red edges) and STRING associations (blue edges).*
 
-MS-GNN overcomes the limitations of existing computational methods by integrating heterogeneous data at two scales:
+MS-GNN integrates heterogeneous data at two scales:
 1. **Protein-Level Graph (Atomic Scale):** Each protein is modeled as a spatial graph where nodes correspond to amino acids initialized with pre-trained protein language model (pLM ESM-1b) embeddings. Edges connect residues within 10Å of each other based on AlphaFold/ESMFold predictions.
 2. **Network-Level Graph (Systemic Scale):** Proteins are embedded into a broader systemic network, with edges weighted by sequence similarity (DIAMOND) and functional associations (STRING database).
 
-A specialized central node for each protein aggregates functional signatures and connects both levels, enabling information to propagate from local structural motifs up to broader biological functional pathways via Graph Attention Networks (GAT).
+A specialized central node for each protein aggregates functional signatures (InterPro, GO) and connects both levels, which allows information to propagate between local structural motifs and broader protein-protein associations via Graph Attention Networks (GAT).
 
 ## Installation
 
@@ -45,7 +46,7 @@ pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -
 ## Data Preparation
 
 ### 1. Download Datasets & AlphaFold Structures
-A unified dataset preparation script automatically downloads AlphaFold structures corresponding to SwissProt targets and fetches functional annotations (e.g., InterPro), plus network interactions from STRING database:
+A preprocessing script automatically downloads AlphaFold structures corresponding to SwissProt targets and fetches functional annotations (e.g., InterPro), plus network interactions from STRING database:
 ```bash
 python -m src.data.gather_data
 ```
@@ -82,7 +83,7 @@ python main.py --config src/configs/cfg.yaml
 ```
 
 Modify `src/configs/cfg.yaml` to configure target `dataset` (e.g., `D1`, `ATGO`), specify the `subontology` (`MFO`, `BPO`, or `CCO`), and toggle between experimental logic (`exp_only: true`) vs. curated labels paradigms.
-x@
+
 ### Evaluation and Inference
 To generate predictions from a trained model run and automatically evaluate against the testing set:
 
@@ -102,7 +103,6 @@ python -m src.utils.evaluation \
 
 ## Data availability
 Benchmark datasets and evaluation scripts rely on original published sources from `cafa-eval` and original dataset providers.
-
 
 ## Acknowledgements
 We thank the UniProt consortium, the CAFA community, and developers of open-source bioinformatics tools used throughout our analysis. Computing HPC resources were provided by the Grand équipement national de calcul intensif at IDRIS [grant 2024-AD011012511R3]. Funding support from the French National Agency for Research through grant DIG-AI [ANR-22-CE23-0012] is gratefully acknowledged.
