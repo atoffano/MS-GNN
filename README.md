@@ -1,4 +1,4 @@
-# Bridging Scales: A Multi-Level Graph Neural Network for Protein Function Prediction
+# A Multi-Scale Graph Neural Network for Protein Function Prediction
 
 **MS-GNN** is a deep learning framework for protein function prediction in the form of Gene Ontology terms. It utilizes a graph neural network architecture based on attention mechanisms to learn simultaneously form both residue-level 3D structures and global protein–protein association networks.
 
@@ -102,7 +102,8 @@ python -m src.utils.evaluation \
 ```
 
 ## Data availability
-Benchmark datasets and evaluation scripts rely on original published sources from `cafa-eval` and original dataset providers.
+Benchmark datasets rely on original published sources.
+Evaluation scripts from `cafa-eval` and original dataset providers.
 
 ## Acknowledgements
 We thank the UniProt consortium, the CAFA community, and developers of open-source bioinformatics tools used throughout our analysis. Computing HPC resources were provided by the Grand équipement national de calcul intensif at IDRIS [grant 2024-AD011012511R3]. Funding support from the French National Agency for Research through grant DIG-AI [ANR-22-CE23-0012] is gratefully acknowledged.
