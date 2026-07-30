@@ -31,14 +31,11 @@ from src.utils.visualize import (
     plot_protein_attention_rank,
     plot_attn_stringdb_vs_aligned_scatter,
     plot_attn_stringdb_vs_aligned_scatter_rank,
-    plot_shared_name_attention_boxplot,
-    plot_shared_name_attention_boxplot_rank,
-    plot_edge_attr_vs_attention_scatter,
-    plot_edge_attr_vs_attention_scatter_rank,
     ensure_structure,
     export_captum_3d,
     export_captum_3d_rank,
     export_layer_attention_3d,
+    export_layer_attention_3d_rank,
 )
 from src.utils.helpers import timeit
 
@@ -742,44 +739,18 @@ class ExplanationExporter:
                     go_term,
                 )
 
-            # Shared protein name attention boxplot (alignment edges only)
-            plot_shared_name_attention_boxplot(
-                self.output_dir,
-                layer_attention,
-                self.dataset,
-                batch,
-                idx,
-                go_term,
-            )
-            plot_shared_name_attention_boxplot_rank(
-                self.output_dir,
-                layer_attention,
-                self.dataset,
-                batch,
-                idx,
-                go_term,
-            )
-
-            # Edge attribute vs attention scatter (per channel)
-            plot_edge_attr_vs_attention_scatter(
-                self.output_dir,
-                layer_attention,
-                self.dataset,
-                batch,
-                idx,
-                go_term,
-            )
-            plot_edge_attr_vs_attention_scatter_rank(
-                self.output_dir,
-                layer_attention,
-                self.dataset,
-                batch,
-                idx,
-                go_term,
-            )
-
             # 3D structure visualization with attention scores mapped onto residues
             export_layer_attention_3d(
+                self.output_dir,
+                self.dataset,
+                batch,
+                idx,
+                layer_attention,
+                structure_cache=self.structure_cache,
+                go_term=go_term,
+                plot_neighbors=self.plot_neighbors,
+            )
+            export_layer_attention_3d_rank(
                 self.output_dir,
                 self.dataset,
                 batch,

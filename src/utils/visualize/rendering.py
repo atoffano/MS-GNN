@@ -396,3 +396,107 @@ def export_captum_3d_rank(
         plot_neighbors=plot_neighbors,
         global_dir=output_dir,
     )
+
+
+def export_layer_attention_3d_rank(
+    output_dir: str,
+    dataset,
+    batch,
+    layer_idx: int,
+    layer_attention,
+    structure_cache: Optional[Dict[str, str]] = None,
+    go_term: Optional[str] = None,
+    plot_neighbors: bool = True,
+    global_dir: Optional[str] = None,
+) -> None:
+    """Export layer attention to 3D structure renderings using per-edge-type *ranks*.
+
+    Identical to :func:`export_layer_attention_3d` but replaces raw attention
+    scores with their 1-based ranks within each edge type.
+    """
+    keys = [
+        ("aa", "belongs_to", "protein"),
+    ]
+    if layer_attention is None:
+        return
+
+    selected_key = next((k for k in keys if k in layer_attention), None)
+    if selected_key is None:
+        return
+
+    edge_index, attn_weights = layer_attention[selected_key]
+    attn_cpu = attn_weights.detach().cpu()
+    # Rank within this edge type
+    rank_scores = _rank_values(attn_cpu)
+    residue_scores = _edge_scores_to_residues(
+        edge_index.detach().cpu(),
+        rank_scores,
+    )
+
+    context = build_plot_context(output_dir, dataset, batch)
+    _render_structures(
+        context,
+        dataset,
+        context.protein_ids,
+        residue_scores,
+        suffix=f"scene3d_aa_rank_attention_L{layer_idx}",
+        title_prefix=f"Attention Rank L{layer_idx}",
+        structure_cache=structure_cache,
+        go_term=go_term,
+        plot_neighbors=plot_neighbors,
+        global_dir=output_dir,
+    )
+
+    # Render AA -> AA attention ranks
+    aa_key = ("aa", "close_to", "aa")
+    if aa_key in layer_attention:
+        aa_edge_index, aa_attn_weights = layer_attention[aa_key]
+        aa_edge_index = aa_edge_index.detach().cpu()
+        aa_attn_weights = aa_attn_weights.detach().cpu()
+
+        if aa_attn_weights.dim() > 1:
+            aa_attn_weights = aa_attn_weights.mean(dim=-1)
+
+        # Aggregate AA->AA attention per source AA node
+        node_sum_attn = scatter(aa_attn_weights, aa_edge_index[0], dim=0, reduce="sum")
+
+        # Rank the aggregated per-node values
+        node_sum_ranked = _rank_values(node_sum_attn)
+
+        # Map AA nodes to their respective proteins using the belongs_to edge_index
+        belongs_to_idx = edge_index.detach().cpu()
+        if selected_key[1] == "rev_belongs_to":
+            belongs_to_idx = belongs_to_idx.flip(0)
+
+        aa_to_protein = {
+            int(aa): int(prot) for aa, prot in zip(belongs_to_idx[0], belongs_to_idx[1])
+        }
+
+        # Build per-protein AA offset
+        protein_aa_offset = {}
+        for aa_global, prot_local in sorted(aa_to_protein.items()):
+            if prot_local not in protein_aa_offset:
+                protein_aa_offset[prot_local] = aa_global
+
+        aa_residue_scores = {}
+        for aa_idx, score in enumerate(node_sum_ranked.tolist()):
+            if score > 0 and aa_idx in aa_to_protein:
+                prot_idx = aa_to_protein[aa_idx]
+                if prot_idx not in aa_residue_scores:
+                    aa_residue_scores[prot_idx] = []
+                local_residue = aa_idx - protein_aa_offset[prot_idx] + 1
+                aa_residue_scores[prot_idx].append((local_residue, score))
+
+        _render_structures(
+            context,
+            dataset,
+            context.protein_ids,
+            aa_residue_scores,
+            suffix=f"scene3d_aa_aa_rank_attention_L{layer_idx}",
+            title_prefix=f"AA-AA Attention Rank L{layer_idx}",
+            structure_cache=structure_cache,
+            go_term=go_term,
+            plot_neighbors=plot_neighbors,
+            global_dir=output_dir,
+        )
+
