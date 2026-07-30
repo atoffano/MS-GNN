@@ -5,12 +5,26 @@ from typing import Optional
 
 import matplotlib.pyplot as plt
 import networkx as nx
+import numpy as np
 import torch
+from scipy.stats import rankdata
 
 from src.utils.constants import RANDOM_SEED
 from src.utils.visualize.context import ProteinPlotContext, build_plot_context, save_plot
 
 logger = logging.getLogger(__name__)
+
+
+def _rank_values(values: torch.Tensor) -> torch.Tensor:
+    """Return ranks (1-based) of *values* as a float tensor.
+
+    Ties are broken by the average rank (scipy default). Values are returned
+    as raw integer ranks so that the y-axis / colormap shows rank numbers
+    rather than normalised scores.
+    """
+    arr = values.detach().cpu().numpy().astype(np.float64)
+    ranks = rankdata(arr, method="average")
+    return torch.from_numpy(ranks).float()
 
 
 def _plot_protein_network(
@@ -140,3 +154,95 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
 
     if not plotted:
         logger.info(f"No systemic attention found for layer {layer_idx}.")
+
+
+def plot_systemic_attention_rank(path, layer_attention, dataset, batch, layer_idx):
+    """Plot protein-protein attention graph using per-edge-type attention *ranks*."""
+    context = build_plot_context(path, dataset, batch)
+
+    if layer_attention is None:
+        return
+
+    plotted = False
+    for edge_type, (edge_index, attn_weights) in layer_attention.items():
+        if not isinstance(edge_type, tuple) or len(edge_type) != 3:
+            continue
+
+        src, rel, dst = edge_type
+        if src == "protein" and dst == "protein":
+            edge_index = edge_index.detach().cpu()
+            if edge_index.numel() == 0:
+                continue
+
+            attn_values = attn_weights.mean(dim=-1).detach().cpu()
+
+            # Filter out self-loops for non-seed proteins
+            src_idx, dst_idx = edge_index[0], edge_index[1]
+            mask = ~((src_idx == dst_idx) & (src_idx != 0))
+            edge_index = edge_index[:, mask]
+            attn_values = attn_values[mask]
+
+            if edge_index.numel() == 0:
+                continue
+
+            # Rank within this edge type
+            rank_values = _rank_values(attn_values)
+
+            title = f"Protein-Protein Attention Rank (Layer {layer_idx}, {rel}): {context.seed_label}"
+            _plot_protein_network(
+                context,
+                edge_index,
+                rank_values,
+                title,
+                "Attention Rank",
+                f"network_attention_rank_L{layer_idx}_{rel}",
+            )
+            plotted = True
+
+    if not plotted:
+        logger.info(f"No systemic attention found for layer {layer_idx} (rank plot).")
+
+
+def plot_systemic_explanation_rank(
+    path, hetero_explanation, dataset, title_suffix=None, go_term=None
+):
+    """Plot protein-protein explanation graph using per-edge-type Captum *ranks*."""
+    context = build_plot_context(path, dataset, hetero_explanation.batch)
+
+    plotted = False
+    for edge_type in hetero_explanation.edge_types:
+        src, rel, dst = edge_type
+        if src == "protein" and dst == "protein":
+            if edge_type not in hetero_explanation:
+                continue
+
+            expl_data = hetero_explanation[edge_type]
+            if (
+                not hasattr(expl_data, "edge_index")
+                or expl_data.edge_index.numel() == 0
+            ):
+                continue
+
+            edge_index = expl_data.edge_index.detach().cpu()
+            edge_mask = expl_data.edge_mask.detach().cpu().view(-1)
+
+            # Rank within this edge type
+            rank_values = _rank_values(edge_mask)
+
+            title = f"Protein-Protein Explanation Rank ({rel}): {context.seed_label}"
+            if title_suffix:
+                title += f" ({title_suffix})"
+
+            _plot_protein_network(
+                context,
+                edge_index,
+                rank_values,
+                title,
+                "Edge Importance Rank",
+                f"network_captum_rank_{rel}",
+                go_term,
+            )
+            plotted = True
+
+    if not plotted:
+        logger.info("No systemic edges found to plot (rank plot).")

@@ -4,12 +4,21 @@ import logging
 from typing import Dict, Optional
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
+from scipy.stats import rankdata
 from torch_scatter import scatter
 
 from src.utils.visualize.context import ProteinPlotContext, build_plot_context, save_plot
 
 logger = logging.getLogger(__name__)
+
+
+def _rank_values(values: torch.Tensor) -> torch.Tensor:
+    """Return 1-based ranks of *values* as a float tensor (ties → average rank)."""
+    arr = values.detach().cpu().numpy().astype(np.float64)
+    ranks = rankdata(arr, method="average")
+    return torch.from_numpy(ranks).float()
 
 
 def build_protein_score_map(
@@ -220,4 +229,108 @@ def plot_protein_attention(
         "Mean Attention Weight",
         f"scatter_aa_aa_attention_L{layer_idx}",
         go_term,
+    )
+
+
+def plot_protein_attention_rank(
+    path: str,
+    layer_attention,
+    dataset,
+    batch,
+    layer_idx: int,
+    go_term: Optional[str] = None,
+    plot_neighbors: bool = True,
+):
+    """Plot amino acid to protein attention *ranks* (ranked within edge type)."""
+    context = build_plot_context(path, dataset, batch)
+
+    if layer_attention is None:
+        return
+
+    # Plot AA -> Protein attention ranks
+    belongs_key = ("aa", "belongs_to", "protein")
+    if belongs_key in layer_attention:
+        edge_index, attn_weights = layer_attention[belongs_key]
+        attn_mean = attn_weights.mean(dim=-1).detach().cpu()
+        rank_values = _rank_values(attn_mean)
+        _plot_aa_to_protein_scatter(
+            context,
+            edge_index.detach().cpu(),
+            rank_values,
+            f"AA-Protein Attention Rank (Layer {layer_idx}): {{protein}}",
+            "Attention Rank",
+            f"scatter_aa_attention_rank_L{layer_idx}",
+            go_term,
+            plot_neighbors=plot_neighbors,
+        )
+
+    # Plot AA->AA attention ranks for residues linked to seed protein
+    aa_close_key = ("aa", "close_to", "aa")
+    if aa_close_key not in layer_attention or belongs_key not in layer_attention:
+        return
+
+    edge_index, _ = layer_attention[belongs_key]
+    aa_src, protein_dst = edge_index[0], edge_index[1]
+    seed_mask = protein_dst == 0
+    aa_idx = aa_src[seed_mask]
+
+    edge_index, attn_weights = layer_attention[aa_close_key]
+    aa_src, aa_dst = edge_index[0], edge_index[1]
+    aa_mask = torch.isin(aa_src, aa_idx) & torch.isin(aa_dst, aa_idx)
+    aa_edge_index = edge_index[:, aa_mask].detach().cpu()
+    aa_attn_weights = attn_weights[aa_mask].detach().cpu()
+
+    if aa_attn_weights.dim() > 1:
+        aa_attn_weights = aa_attn_weights.mean(dim=-1)
+
+    # Aggregate AA->AA attention per source AA node with degree smoothing
+    node_sum_attn = scatter(aa_attn_weights, aa_edge_index[0], dim=0, reduce="sum")
+    node_degree = scatter(
+        torch.ones_like(aa_attn_weights), aa_edge_index[0], dim=0, reduce="sum"
+    )
+    smoothing_factor = node_degree.mean().item() if node_degree.numel() > 0 else 1.0
+    node_avg_attn = node_sum_attn / (node_degree + smoothing_factor)
+
+    # Rank the aggregated per-AA values within this edge type
+    rank_values = _rank_values(node_avg_attn.flatten())
+
+    _plot_aa_to_aa_scatter(
+        context,
+        aa_edge_index,
+        rank_values,
+        f"AA→AA Attention Rank (Layer {layer_idx}): {{protein}}",
+        "Mean Attention Rank",
+        f"scatter_aa_aa_attention_rank_L{layer_idx}",
+        go_term,
+    )
+
+
+def plot_protein_explanation_rank(
+    path: str,
+    hetero_explanation,
+    dataset,
+    title_suffix: Optional[str] = None,
+    go_term: Optional[str] = None,
+    plot_neighbors: bool = True,
+):
+    """Plot amino acid to protein Captum explanation *ranks* (ranked within edge type)."""
+    context = build_plot_context(path, dataset, hetero_explanation.batch)
+    key = ("aa", "belongs_to", "protein")
+
+    edge_mask = hetero_explanation[key]["edge_mask"].detach().cpu()
+    rank_values = _rank_values(edge_mask)
+
+    title = "AA-Protein Explanation Rank: {protein}"
+    if title_suffix:
+        title += f" ({title_suffix})"
+
+    _plot_aa_to_protein_scatter(
+        context,
+        hetero_explanation[key]["edge_index"].detach().cpu(),
+        rank_values,
+        title,
+        "Edge Importance Rank",
+        "scatter_aa_captum_rank",
+        go_term,
+        plot_neighbors=plot_neighbors,
     )

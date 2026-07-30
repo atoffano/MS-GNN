@@ -9,6 +9,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from scipy.stats import rankdata
 from torch_scatter import scatter
 
 from src.utils.visualize.context import build_plot_context, ensure_structure
@@ -326,6 +327,62 @@ def export_captum_3d(
     context = build_plot_context(output_dir, dataset, batch)
     suffix = f"scene3d_captum_{go_term.replace(':', '_')}" if go_term else "scene3d_captum"
     title_prefix = f"Captum ({go_term})" if go_term else "Captum"
+
+    _render_structures(
+        context,
+        dataset,
+        context.protein_ids,
+        residue_scores,
+        suffix=suffix,
+        title_prefix=title_prefix,
+        structure_cache=structure_cache,
+        go_term=go_term,
+        plot_neighbors=plot_neighbors,
+        global_dir=output_dir,
+    )
+
+
+def _rank_values(values: torch.Tensor) -> torch.Tensor:
+    """Return 1-based ranks of *values* as a float tensor (ties → average rank)."""
+    arr = values.detach().cpu().numpy().astype(np.float64)
+    ranks = rankdata(arr, method="average")
+    return torch.from_numpy(ranks).float()
+
+
+def export_captum_3d_rank(
+    output_dir: str,
+    dataset,
+    batch,
+    hetero_explanation,
+    go_term: Optional[str] = None,
+    structure_cache: Optional[Dict[str, str]] = None,
+    plot_neighbors: bool = True,
+) -> None:
+    """Export Captum explanations to 3D renderings using per-edge-type *ranks*.
+
+    Identical to :func:`export_captum_3d` but replaces raw attribution scores
+    with their 1-based ranks within the ``(aa, belongs_to, protein)`` edge
+    type.  The resulting colormap therefore reflects relative importance rather
+    than absolute magnitude.
+    """
+    logger.info("Exporting ranked Captum explanations to 3D renderings...")
+    key = ("aa", "belongs_to", "protein")
+
+    edge_index = hetero_explanation[key]["edge_index"].detach().cpu()
+    edge_scores = hetero_explanation[key]["edge_mask"].detach().cpu()
+
+    # Replace scores with their ranks within this edge type
+    rank_scores = _rank_values(edge_scores)
+
+    residue_scores = _edge_scores_to_residues(edge_index, rank_scores)
+
+    context = build_plot_context(output_dir, dataset, batch)
+    suffix = (
+        f"scene3d_captum_rank_{go_term.replace(':', '_')}"
+        if go_term
+        else "scene3d_captum_rank"
+    )
+    title_prefix = f"Captum Rank ({go_term})" if go_term else "Captum Rank"
 
     _render_structures(
         context,

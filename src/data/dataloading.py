@@ -313,13 +313,12 @@ class SwissProtDataset:
             stringdb_df["protein2"] = stringdb_df["protein2"].map(rev_stringdb_mapping)
             stringdb_df = stringdb_df.dropna()
 
-            # Keep only edges with combined_score >= 400
             before_filter = len(stringdb_df)
-            stringdb_df = stringdb_df[stringdb_df["combined_score"] >= 400]
-            logger.info(
-                f"STRING-DB: kept {len(stringdb_df)} / {before_filter} edges "
-                f"(combined_score >= 400)"
-            )
+            # stringdb_df = stringdb_df[stringdb_df["combined_score"] >= 400]
+            # logger.info(
+            #     f"STRING-DB: kept {len(stringdb_df)} / {before_filter} edges "
+            #     f"(combined_score >= 400)"
+            # )
 
             if self.uses_entryid:
                 stringdb_df["protein1"] = stringdb_df["protein1"].map(

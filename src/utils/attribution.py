@@ -22,14 +22,22 @@ from src.utils.constants import (
 )
 from src.utils.visualize import (
     plot_systemic_explanation,
+    plot_systemic_explanation_rank,
     plot_protein_explanation,
+    plot_protein_explanation_rank,
     plot_systemic_attention,
+    plot_systemic_attention_rank,
     plot_protein_attention,
+    plot_protein_attention_rank,
     plot_attn_stringdb_vs_aligned_scatter,
+    plot_attn_stringdb_vs_aligned_scatter_rank,
     plot_shared_name_attention_boxplot,
+    plot_shared_name_attention_boxplot_rank,
     plot_edge_attr_vs_attention_scatter,
+    plot_edge_attr_vs_attention_scatter_rank,
     ensure_structure,
     export_captum_3d,
+    export_captum_3d_rank,
     export_layer_attention_3d,
 )
 from src.utils.helpers import timeit
@@ -503,13 +511,28 @@ class ExplanationExporter:
             )
 
         plot_systemic_explanation(self.output_dir, hetero_explanation, self.dataset)
+        plot_systemic_explanation_rank(self.output_dir, hetero_explanation, self.dataset)
         plot_protein_explanation(
             self.output_dir,
             hetero_explanation,
             self.dataset,
             plot_neighbors=self.plot_neighbors,
         )
+        plot_protein_explanation_rank(
+            self.output_dir,
+            hetero_explanation,
+            self.dataset,
+            plot_neighbors=self.plot_neighbors,
+        )
         export_captum_3d(
+            self.output_dir,
+            self.dataset,
+            batch,
+            hetero_explanation,
+            structure_cache=self.structure_cache,
+            plot_neighbors=self.plot_neighbors,
+        )
+        export_captum_3d_rank(
             self.output_dir,
             self.dataset,
             batch,
@@ -544,6 +567,13 @@ class ExplanationExporter:
             title_suffix=title_suffix,
             go_term=go_term,
         )
+        plot_systemic_explanation_rank(
+            self.output_dir,
+            hetero_explanation,
+            self.dataset,
+            title_suffix=title_suffix,
+            go_term=go_term,
+        )
         plot_protein_explanation(
             self.output_dir,
             hetero_explanation,
@@ -552,7 +582,24 @@ class ExplanationExporter:
             go_term=go_term,
             plot_neighbors=self.plot_neighbors,
         )
+        plot_protein_explanation_rank(
+            self.output_dir,
+            hetero_explanation,
+            self.dataset,
+            title_suffix=title_suffix,
+            go_term=go_term,
+            plot_neighbors=self.plot_neighbors,
+        )
         export_captum_3d(
+            self.output_dir,
+            self.dataset,
+            batch,
+            hetero_explanation,
+            go_term=go_term,
+            structure_cache=self.structure_cache,
+            plot_neighbors=self.plot_neighbors,
+        )
+        export_captum_3d_rank(
             self.output_dir,
             self.dataset,
             batch,
@@ -654,8 +701,20 @@ class ExplanationExporter:
                 plot_systemic_attention(
                     self.output_dir, layer_attention, self.dataset, batch, idx
                 )
+                plot_systemic_attention_rank(
+                    self.output_dir, layer_attention, self.dataset, batch, idx
+                )
 
             plot_protein_attention(
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                go_term,
+                plot_neighbors=self.plot_neighbors,
+            )
+            plot_protein_attention_rank(
                 self.output_dir,
                 layer_attention,
                 self.dataset,
@@ -674,6 +733,14 @@ class ExplanationExporter:
                     idx,
                     go_term,
                 )
+                plot_attn_stringdb_vs_aligned_scatter_rank(
+                    self.output_dir,
+                    layer_attention,
+                    self.dataset,
+                    batch,
+                    idx,
+                    go_term,
+                )
 
             # Shared protein name attention boxplot (alignment edges only)
             plot_shared_name_attention_boxplot(
@@ -684,9 +751,25 @@ class ExplanationExporter:
                 idx,
                 go_term,
             )
+            plot_shared_name_attention_boxplot_rank(
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                go_term,
+            )
 
             # Edge attribute vs attention scatter (per channel)
             plot_edge_attr_vs_attention_scatter(
+                self.output_dir,
+                layer_attention,
+                self.dataset,
+                batch,
+                idx,
+                go_term,
+            )
+            plot_edge_attr_vs_attention_scatter_rank(
                 self.output_dir,
                 layer_attention,
                 self.dataset,
