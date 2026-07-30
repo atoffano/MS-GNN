@@ -103,7 +103,7 @@ def plot_systemic_explanation(
                 edge_mask,
                 title,
                 "Edge importance",
-                f"network_captum_{rel}",
+                f"network_raw_captum_{rel}",
                 go_term,
             )
             plotted = True
@@ -148,7 +148,7 @@ def plot_systemic_attention(path, layer_attention, dataset, batch, layer_idx):
                 attn_values,
                 title,
                 "Attention Weight",
-                f"network_attention_L{layer_idx}_{rel}",
+                f"network_raw_attention_L{layer_idx}_{rel}",
             )
             plotted = True
 
@@ -195,7 +195,7 @@ def plot_systemic_attention_rank(path, layer_attention, dataset, batch, layer_id
                 rank_values,
                 title,
                 "Attention Rank",
-                f"network_attention_rank_L{layer_idx}_{rel}",
+                f"network_rank_attention_L{layer_idx}_{rel}",
             )
             plotted = True
 
@@ -239,7 +239,7 @@ def plot_systemic_explanation_rank(
                 rank_values,
                 title,
                 "Edge Importance Rank",
-                f"network_captum_rank_{rel}",
+                f"network_rank_captum_{rel}",
                 go_term,
             )
             plotted = True

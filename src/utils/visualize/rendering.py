@@ -245,7 +245,7 @@ def export_layer_attention_3d(
         dataset,
         context.protein_ids,
         residue_scores,
-        suffix=f"scene3d_aa_attention_L{layer_idx}",
+        suffix=f"scene3d_aa_raw_attention_L{layer_idx}",
         title_prefix=f"Attention L{layer_idx}",
         structure_cache=structure_cache,
         go_term=go_term,
@@ -297,7 +297,7 @@ def export_layer_attention_3d(
             dataset,
             context.protein_ids,
             aa_residue_scores,
-            suffix=f"scene3d_aa_aa_attention_L{layer_idx}",
+            suffix=f"scene3d_aa_aa_raw_attention_L{layer_idx}",
             title_prefix=f"AA-AA Attention L{layer_idx}",
             structure_cache=structure_cache,
             go_term=go_term,
@@ -325,7 +325,7 @@ def export_captum_3d(
     residue_scores = _edge_scores_to_residues(edge_index, edge_scores)
 
     context = build_plot_context(output_dir, dataset, batch)
-    suffix = f"scene3d_captum_{go_term.replace(':', '_')}" if go_term else "scene3d_captum"
+    suffix = f"scene3d_raw_captum_{go_term.replace(':', '_')}" if go_term else "scene3d_raw_captum"
     title_prefix = f"Captum ({go_term})" if go_term else "Captum"
 
     _render_structures(
@@ -378,9 +378,9 @@ def export_captum_3d_rank(
 
     context = build_plot_context(output_dir, dataset, batch)
     suffix = (
-        f"scene3d_captum_rank_{go_term.replace(':', '_')}"
+        f"scene3d_rank_captum_{go_term.replace(':', '_')}"
         if go_term
-        else "scene3d_captum_rank"
+        else "scene3d_rank_captum"
     )
     title_prefix = f"Captum Rank ({go_term})" if go_term else "Captum Rank"
 

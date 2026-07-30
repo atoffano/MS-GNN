@@ -156,7 +156,7 @@ def plot_protein_explanation(
         hetero_explanation[key]["edge_mask"].detach().cpu(),
         title,
         "Edge Importance",
-        "scatter_aa_captum",
+        "scatter_aa_raw_captum",
         go_term,
         plot_neighbors=plot_neighbors,
     )
@@ -187,7 +187,7 @@ def plot_protein_attention(
             attn_weights.mean(dim=-1).detach().cpu(),
             f"AA-Protein Attention (Layer {layer_idx}): {{protein}}",
             "Attention weight",
-            f"scatter_aa_attention_L{layer_idx}",
+            f"scatter_aa_raw_attention_L{layer_idx}",
             go_term,
             plot_neighbors=plot_neighbors,
         )
@@ -227,7 +227,7 @@ def plot_protein_attention(
         node_avg_attn.flatten(),
         f"AA→AA Attention (Layer {layer_idx}): {{protein}}",
         "Mean Attention Weight",
-        f"scatter_aa_aa_attention_L{layer_idx}",
+        f"scatter_aa_aa_raw_attention_L{layer_idx}",
         go_term,
     )
 
@@ -259,7 +259,7 @@ def plot_protein_attention_rank(
             rank_values,
             f"AA-Protein Attention Rank (Layer {layer_idx}): {{protein}}",
             "Attention Rank",
-            f"scatter_aa_attention_rank_L{layer_idx}",
+            f"scatter_aa_rank_attention_L{layer_idx}",
             go_term,
             plot_neighbors=plot_neighbors,
         )
@@ -300,7 +300,7 @@ def plot_protein_attention_rank(
         rank_values,
         f"AA→AA Attention Rank (Layer {layer_idx}): {{protein}}",
         "Mean Attention Rank",
-        f"scatter_aa_aa_attention_rank_L{layer_idx}",
+        f"scatter_aa_aa_rank_attention_L{layer_idx}",
         go_term,
     )
 
@@ -330,7 +330,7 @@ def plot_protein_explanation_rank(
         rank_values,
         title,
         "Edge Importance Rank",
-        "scatter_aa_captum_rank",
+        "scatter_aa_rank_captum",
         go_term,
         plot_neighbors=plot_neighbors,
     )

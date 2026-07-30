@@ -99,7 +99,7 @@ def plot_attn_stringdb_vs_aligned_scatter(
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
 
-    save_plot(context, f"scatter_stringdb_vs_aligned_L{layer_idx}", go_term=go_term)
+    save_plot(context, f"scatter_stringdb_vs_raw_aligned_L{layer_idx}", go_term=go_term)
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ def plot_shared_name_attention_boxplot(
     plt.ylabel("Attention weight")
     plt.tight_layout()
 
-    save_plot(context, f"boxplot_shared_name_attention_L{layer_idx}", go_term=go_term)
+    save_plot(context, f"boxplot_shared_name_raw_attention_L{layer_idx}", go_term=go_term)
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +385,7 @@ def plot_edge_attr_vs_attention_scatter(
 
         save_plot(
             context,
-            f"scatter_edge_attr_vs_attention_L{layer_idx}_{rel}",
+            f"scatter_edge_attr_vs_raw_attention_L{layer_idx}_{rel}",
             go_term=go_term,
         )
 
@@ -473,7 +473,7 @@ def plot_attn_stringdb_vs_aligned_scatter_rank(
 
     save_plot(
         context,
-        f"scatter_stringdb_vs_aligned_rank_L{layer_idx}",
+        f"scatter_stringdb_vs_rank_aligned_L{layer_idx}",
         go_term=go_term,
     )
 
@@ -564,7 +564,7 @@ def plot_shared_name_attention_boxplot_rank(
 
     save_plot(
         context,
-        f"boxplot_shared_name_attention_rank_L{layer_idx}",
+        f"boxplot_shared_name_rank_attention_L{layer_idx}",
         go_term=go_term,
     )
 
@@ -665,6 +665,6 @@ def plot_edge_attr_vs_attention_scatter_rank(
 
         save_plot(
             context,
-            f"scatter_edge_attr_vs_attention_rank_L{layer_idx}_{rel}",
+            f"scatter_edge_attr_vs_rank_attention_L{layer_idx}_{rel}",
             go_term=go_term,
         )

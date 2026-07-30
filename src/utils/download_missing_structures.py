@@ -156,6 +156,11 @@ def main():
         required=True,
         help="Protein names (UniProt IDs or Entry IDs)",
     )
+    parser.add_argument(
+        "--seed-only",
+        action="store_true",
+        help="Skip downloading neighborhood proteins, get seed proteins only",
+    )
 
     args = parser.parse_args()
 
@@ -174,10 +179,22 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     logger.info(f"Output directory: {output_dir}")
 
-    # Get all proteins in neighborhood
-    logger.info(f"Analyzing neighborhood for {len(args.proteins)} protein(s)...")
-    all_proteins = get_neighborhood_proteins(config, dataset, args.proteins)
-    logger.info(f"Found {len(all_proteins)} total proteins in neighborhood")
+    if args.seed_only:
+        logger.info(f"Using only seed proteins: {len(args.proteins)} protein(s)...")
+        resolved = resolve_protein_names(dataset, args.proteins)
+        all_proteins = set()
+        for p in resolved:
+            if dataset.uses_entryid:
+                uniprot_id = dataset.rev_pid_mapping.get(p, p)
+            else:
+                uniprot_id = p
+            all_proteins.add(uniprot_id)
+        logger.info(f"Found {len(all_proteins)} total seed proteins")
+    else:
+        # Get all proteins in neighborhood
+        logger.info(f"Analyzing neighborhood for {len(args.proteins)} protein(s)...")
+        all_proteins = get_neighborhood_proteins(config, dataset, args.proteins)
+        logger.info(f"Found {len(all_proteins)} total proteins in neighborhood")
 
     # Check which structures are missing
     missing_proteins = []
@@ -221,7 +238,7 @@ def main():
     logger.info("\n" + "=" * 60)
     logger.info("DOWNLOAD SUMMARY")
     logger.info("=" * 60)
-    logger.info(f"Total proteins in neighborhood: {len(all_proteins)}")
+    logger.info(f"Total proteins to process: {len(all_proteins)}")
     logger.info(f"Already cached: {len(cached_proteins)}")
     logger.info(f"Downloaded: {success_count}/{len(missing_proteins)}")
 
