@@ -93,6 +93,18 @@ class SwissProtDataset:
         )
         self.data = self.transform(self.data)
 
+        # Build the training graph with val/test proteins fully excluded
+        # (all edges touching them removed) so they can never be sampled as
+        # neighbor context during training. This is stricter than the GO-term
+        # masking in get_batch_features: InterPro and AA features of val/test
+        # proteins no longer propagate to train seeds either.
+        if config["data"].get("exclude_val_test", True):
+            self.train_data = self._exclude_nodes_from_train_graph(
+                self.val_mask | self.test_mask
+            )
+        else:
+            self.train_data = self.data
+
         logger.info(
             f"Created protein graph with {self.data['protein'].num_nodes} proteins"
         )
@@ -384,6 +396,38 @@ class SwissProtDataset:
 
         return data.detach().clone()
 
+    def _exclude_nodes_from_train_graph(self, exclude_mask):
+        """Create a copy of the protein graph with all edges touching excluded nodes removed.
+
+        Node count and global node indices are preserved (excluded nodes simply
+        become isolated), so split masks and the ``n_id`` -> protein ID mapping
+        used by ``get_batch_features`` remain valid. Because excluded nodes are
+        unreachable from train seeds at any hop depth, they can never appear in
+        training batches.
+
+        Args:
+            exclude_mask: Bool tensor of shape (num_proteins,) with True for
+                nodes to exclude (e.g. ``self.val_mask | self.test_mask``).
+
+        Returns:
+            HeteroData: Filtered copy of ``self.data`` for the train loader.
+        """
+        data = self.data.clone()
+        keep = ~exclude_mask
+        for edge_type, store in data.edge_items():
+            edge_index = store.edge_index
+            edge_mask = keep[edge_index[0]] & keep[edge_index[1]]
+            n_removed = int((~edge_mask).sum())
+            if n_removed > 0:
+                logger.info(
+                    f"Train graph: removed {n_removed} "
+                    f"{'-'.join(edge_type)} edges touching val/test proteins"
+                )
+            store.edge_index = edge_index[:, edge_mask]
+            if "edge_attr" in store:
+                store.edge_attr = store.edge_attr[edge_mask]
+        return data
+
     def load_protein_graph(self, protein_id):
         """Load a single protein graph from disk."""
         try:
@@ -667,7 +711,7 @@ def define_loaders(config, dataset):
 
     # num_neighbors = {("protein", "aligned_with", "protein"): [-1]}
     train_loader = NeighborLoader(
-        dataset.data,
+        dataset.train_data,
         num_neighbors=num_neighbors,
         batch_size=config["model"]["batch_size"],
         input_nodes=("protein", dataset.train_mask),
