@@ -673,6 +673,10 @@ class SwissProtDataset:
             if return_sequences:
                 batch["protein"].sequences = sampled_sequences
 
+            for store in batch.edge_stores:
+                if "num_sampled_edges" in store:
+                    del store["num_sampled_edges"]
+
             try:
                 batch = self.transform(batch)
             except Exception as e:

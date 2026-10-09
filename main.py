@@ -334,6 +334,19 @@ def main():
             f"Resuming training from epoch {start_epoch}"
         )
 
+    # Set wandb directories to writable path on cluster (avoiding ~/.local/share on compute nodes)
+    project_path = config["run"].get("project_path", ".")
+    wandb_base = os.path.join(project_path, "wandb")
+    for env_var, sub_dir in [
+        ("WANDB_DIR", ""),
+        ("WANDB_DATA_DIR", "data"),
+        ("WANDB_CACHE_DIR", "cache"),
+        ("WANDB_CONFIG_DIR", "config"),
+    ]:
+        dir_path = os.path.join(wandb_base, sub_dir) if sub_dir else wandb_base
+        os.environ.setdefault(env_var, dir_path)
+        os.makedirs(os.environ[env_var], exist_ok=True)
+
     run_name = f"{os.path.basename(config['run']['results_dir'])}_{subontology}"
     wandb.init(
         project="PFP_layer",
@@ -342,7 +355,10 @@ def main():
         id=wandb_id,
         resume="allow" if wandb_id else None,
     )
-    wandb.run.log_code(".")
+    try:
+        wandb.run.log_code(".")
+    except Exception as e:
+        logger.warning(f"Could not log code artifact to wandb: {e}")
 
     # Set up logging to file
     log_file = os.path.join(config["run"]["results_dir"], f"{subontology}.log")

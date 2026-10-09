@@ -74,6 +74,10 @@ def render_scene(
     image_path: str,
     *,
     title: str | None = None,
+    putty: bool = False,
+    putty_scale_min: float = 0.2,
+    putty_scale_max: float = 2.0,
+    tube_radius: float = 0.4,
 ) -> None:
     """Color a structure by residue scores via PyMOL. Supports both .pdb and .cif files.
 
@@ -82,17 +86,25 @@ def render_scene(
         residue_scores: Sequence of (residue_number_1based, score) tuples.
         image_path: Path to save the rendered image.
         title: Optional title for the rendering.
+        putty: If True, render cartoon as a variable-width putty tube scaled by scores.
+        putty_scale_min: Minimum putty tube scale factor (default: 0.2).
+        putty_scale_max: Maximum putty tube scale factor (default: 2.0).
+        tube_radius: Base cartoon tube radius for putty rendering (default: 0.4).
     """
+    if pymol2 is None:
+        logger.warning(f"pymol2 is not installed. Skipping 3D PyMOL rendering for {structure_path}.")
+        return False
+
     if not residue_scores:
         logger.warning(f"No residue scores for {structure_path}, skipping")
-        return
+        return False
 
     # Build lookup from PDB residue number to score
     score_map = dict(residue_scores)
     score_values = np.asarray([s for _, s in residue_scores], dtype=np.float32)
 
     os.makedirs(os.path.dirname(image_path), exist_ok=True)
-    logger.info(f"Rendering structure {structure_path}")
+    logger.info(f"Rendering structure {structure_path} (putty={putty})")
 
     with pymol2.PyMOL() as pymol:
         cmd = pymol.cmd
@@ -109,7 +121,7 @@ def render_scene(
             logger.warning(
                 f"No residue scores matched CA atoms in {structure_path}, skipping rendering."
             )
-            return
+            return False
         if len(scored_resi) != len(score_map):
             logger.warning(
                 f"Matched {len(scored_resi)}/{len(score_map)} scored residues to CA atoms in {structure_path}."
@@ -120,6 +132,18 @@ def render_scene(
         cmd.color("gray70", selection=unscored_sel)
         cmd.color("gray70", selection="HETATM")
 
+        if putty:
+            # Apply Putty Layout: variable tube radius proportional to attribution score
+            cmd.hide("labels")
+            cmd.hide("ribbon")
+            cmd.set("cartoon_tube_radius", tube_radius)
+            cmd.cartoon("putty", "prot")
+            cmd.show("cartoon", "prot")
+            cmd.set("cartoon_putty_scale_min", putty_scale_min)
+            cmd.set("cartoon_putty_scale_max", putty_scale_max)
+            cmd.set("cartoon_putty_transform", 0)
+            cmd.set("cartoon_color", "default", "prot")
+
         if title:
             cmd.set_title("title", state=0, text=title)
         cmd.set("spec_reflect", 0)
@@ -128,8 +152,36 @@ def render_scene(
         cmd.bg_color("black")
         cmd.orient("prot")
         cmd.png(image_path, width=1600, height=1200, dpi=300, ray=1)
-        cmd.save(image_path.replace(".png", ".pse"))
-        logger.info(f"Saved structure rendering to {image_path}")
+        pse_path = image_path.rsplit(".", 1)[0] + ".pse"
+        cmd.save(pse_path)
+        logger.info(f"Saved structure rendering to {image_path} and {pse_path}")
+        return True
+
+
+def render_putty_scene(
+    structure_path: str,
+    residue_scores: Sequence[Tuple[int, float]],
+    image_path: str,
+    *,
+    title: str | None = None,
+    putty_scale_min: float = 0.2,
+    putty_scale_max: float = 2.0,
+    tube_radius: float = 0.4,
+) -> bool:
+    """Render a protein structure using the PyMOL putty layout colored by residue attribution."""
+    return bool(
+        render_scene(
+            structure_path=structure_path,
+            residue_scores=residue_scores,
+            image_path=image_path,
+            title=title,
+            putty=True,
+            putty_scale_min=putty_scale_min,
+            putty_scale_max=putty_scale_max,
+            tube_radius=tube_radius,
+        )
+    )
+
 
 
 def _edge_scores_to_residues(

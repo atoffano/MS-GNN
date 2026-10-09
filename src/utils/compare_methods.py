@@ -9,11 +9,30 @@ from matplotlib import cm
 import os
 
 
-def parse_predictions(pred_file, target_id, threshold, gt_terms=None):
-    """Parse the prediction TSV and return a dict of GO terms and their scores for the given target IDs above threshold."""
+def propagate_predictions_max(go_terms_dict):
+    """Propagate prediction scores to all ancestors using True Path Rule (max-propagation).
+
+    Guarantees score(ancestor) >= score(child) across the ontology DAG.
+    """
+    propagated = dict(go_terms_dict)
+    for term, score in go_terms_dict.items():
+        try:
+            for ancestor in go3.ancestors(term):
+                propagated[ancestor] = max(propagated.get(ancestor, 0.0), score)
+        except (KeyError, ValueError):
+            continue
+    return propagated
+
+
+def parse_predictions(pred_file, target_id, threshold, gt_terms=None, propagate_max=True):
+    """Parse the prediction TSV and return a dict of GO terms and their scores for the given target IDs above threshold.
+
+    If propagate_max is True (default), applies True Path Rule max-propagation so that
+    ancestor scores are at least equal to their descendant predictions, matching CAFA evaluation.
+    """
     if gt_terms is None:
         gt_terms = set()
-    go_terms = {}
+    raw_scores = {}
     with open(pred_file) as f:
         header = next(f)
         for line in f:
@@ -23,11 +42,19 @@ def parse_predictions(pred_file, target_id, threshold, gt_terms=None):
             target, go_term, score = parts[0], parts[1], parts[2]
             if target == target_id:
                 try:
-                    score = float(score)
-                    if score >= threshold or go_term in gt_terms:
-                        go_terms[go_term] = score
+                    raw_scores[go_term] = float(score)
                 except ValueError:
                     continue
+
+    if propagate_max:
+        all_scores = propagate_predictions_max(raw_scores)
+    else:
+        all_scores = raw_scores
+
+    go_terms = {}
+    for go_term, score in all_scores.items():
+        if score >= threshold or go_term in gt_terms:
+            go_terms[go_term] = score
     return go_terms
 
 
@@ -434,6 +461,11 @@ def main():
         action="store_true",
         help="Show prediction subnodes even if score is below threshold",
     )
+    parser.add_argument(
+        "--no_propagate_max",
+        action="store_true",
+        help="Disable True Path Rule max-propagation for predictions (enabled by default)",
+    )
     args = parser.parse_args()
 
     print("Loading ontology with go3...")
@@ -463,7 +495,13 @@ def main():
     for i, (pred_file, thresh, name) in enumerate(args.pred):
         print(f"Parsing predictions from {pred_file} with threshold {thresh}...")
         pred_dicts.append(
-            parse_predictions(pred_file, args.protein, float(thresh), gt_terms)
+            parse_predictions(
+                pred_file,
+                args.protein,
+                float(thresh),
+                gt_terms,
+                propagate_max=not args.no_propagate_max,
+            )
         )
         pred_cmaps.append(color_maps[i % len(color_maps)])
         pred_names.append(name)

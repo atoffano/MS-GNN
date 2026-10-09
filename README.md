@@ -101,6 +101,29 @@ python -m src.utils.evaluation \
     --subontology MFO
 ```
 
+### Standalone Inference & 3D Putty Attribution
+Run fast localized inference on arbitrary proteins (UniProt IDs, entry names, or FASTA files) without loading the monolithic SwissProt graph:
+
+```bash
+# Standard inference across all subontologies (attribution and 3D putty enabled by default, seed 53)
+python -m src.utils.inference.infer \
+    --proteins P21549 Q93092 \
+    --subontology MFO BPO CCO \
+    --output-dir results/inference_output
+
+# Disable attribution and 3D rendering if only GO predictions are needed
+python -m src.utils.inference.infer \
+    --proteins P21549 \
+    --subontology MFO \
+    --no-attribution \
+    --output-dir results/inference_output
+```
+
+- **Attribution & 3D Putty Layout (Default)**: Automatically extracts Layer-2 residue attention weights and renders high-resolution 3D visualizations (`<protein>_putty.png`, `<protein>_putty.pse`) where cartoon tube thickness and Spectral colormap reflect residue attribution scores (falling back to `<protein>_residue_attribution.tsv` only if PyMOL is unavailable). Use `--no-attribution` to skip.
+- **`--seed`**: Ensures deterministic neighbor sampling across runs (default: `53`).
+- See [INFERENCE_GUIDE.md](INFERENCE_GUIDE.md) for full architecture details, options, and Python API usage.
+
+
 ## Data availability
 Benchmark datasets rely on original published sources.
 Evaluation scripts from `cafa-eval` and original dataset providers.
