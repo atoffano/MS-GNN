@@ -32,6 +32,9 @@ from src.utils.constants import (
     ALPHAFOLD_PDB_DIR,
     ESMFOLD_PDB_DIR,
     PROTEIN_GRAPHS_DIR,
+    VOCABS_DIR,
+    INTERPRO_VOCAB,
+    GO_VOCAB,
     INTERPRO_TSV,
     GO_OBO_PATH,
     GO_ANNOTATION_TEMPLATE,
@@ -48,6 +51,7 @@ logging.basicConfig(level=logging.INFO)
 
 # Create output directory if it doesn't exist
 PROTEIN_GRAPHS_DIR.mkdir(parents=True, exist_ok=True)
+VOCABS_DIR.mkdir(parents=True, exist_ok=True)
 STRUCTURE_MISSING_PATH.touch(exist_ok=True)
 
 
@@ -300,7 +304,7 @@ def load_interpro_annotations() -> Tuple[Dict[str, torch.Tensor], int]:
             vec[ipr_to_idx[ipr]] = 1.0
         interpro[pid] = vec
 
-    with open(PROTEIN_GRAPHS_DIR / "interpro_vocab.pkl", "wb") as handle:
+    with open(INTERPRO_VOCAB, "wb") as handle:
         pickle.dump({"ipr_to_idx": ipr_to_idx, "vocab_size": len(ipr_ids)}, handle)
 
     return interpro, len(ipr_ids)
@@ -344,7 +348,7 @@ def load_go_vocab() -> Dict[str, int]:
             "vocab_size": len(sorted_terms),
         }
 
-    with open(PROTEIN_GRAPHS_DIR / "go_vocab.pkl", "wb") as handle:
+    with open(GO_VOCAB, "wb") as handle:
         pickle.dump(vocab_info, handle)
 
     return {onto: info["vocab_size"] for onto, info in vocab_info.items()}

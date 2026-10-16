@@ -33,13 +33,15 @@ SWISSPROT_TAR_PATH = SWISSPROT_ROOT / f"uniprot_sprot-only{SWISSPROT_RELEASE}.ta
 SWISSPROT_DAT_GZ_PATH = SWISSPROT_ROOT / "uniprot_sprot.dat.gz"
 SWISSPROT_DAT_PATH = SWISSPROT_ROOT / "uniprot_sprot.dat"
 
+VOCABS_DIR = DATA_ROOT / "vocabs"
+
 # InterPro
 INTERPRO_URL = (
     "https://ftp.ebi.ac.uk/pub/databases/interpro/releases/106.0/protein2ipr.dat.gz"
 )
 INTERPRO_GZ_PATH = SWISSPROT_ROOT / "protein2ipr.dat.gz"
 INTERPRO_TSV = SWISSPROT_ROOT / "swissprot_interpro_106_0.tsv"
-INTERPRO_VOCAB = SWISSPROT_ROOT / "protein_graphs" / "interpro_vocab.pkl"
+INTERPRO_VOCAB = VOCABS_DIR / "interpro_vocab.pkl"
 
 # Gene Ontology
 GO_OBO_PATH = DATA_ROOT / "go.obo"
@@ -47,7 +49,7 @@ GO_ANNOTATION_TEMPLATE = SWISSPROT_ROOT / "swissprot_2024_01_{onto}_annotations.
 GO_EXP_ANNOTATION_TEMPLATE = (
     SWISSPROT_ROOT / "swissprot_2024_01_{onto}_exp_annotations.tsv"
 )
-GO_VOCAB = SWISSPROT_ROOT / "protein_graphs" / "go_vocab.pkl"
+GO_VOCAB = VOCABS_DIR / "go_vocab.pkl"
 
 # Embeddings
 EMBED_H5_PATH = SWISSPROT_ROOT / "swissprot_esm1b_per_aa.h5"
@@ -130,7 +132,11 @@ INTERPROSCAN_MAX_RETRIES = 3
 # DIAMOND Alignment Parameters
 # ============================================================================
 
-DIAMOND_EXECUTABLE = "diamond"
+DIAMOND_EXECUTABLE = (
+    str(DATA_ROOT / "diamond")
+    if (DATA_ROOT / "diamond").exists()
+    else "diamond"
+)
 DIAMOND_DEFAULT_EVALUE = 1e-3
 DIAMOND_DEFAULT_TOPK = 500
 
@@ -231,4 +237,12 @@ INFERENCE_MODEL_MAP = {
     "BPO": "20260214_105749_D1_2024_01_GNN_DEL_NOIPR",
     "CCO": "20260216_082607_D1_2024_01_GNN_DEL_NOIPR",
 }
+
+# Optimal benchmark decision thresholds (maximum F1 / Fmax)
+DEFAULT_MODEL_THRESHOLDS = {
+    "MFO": 0.36,
+    "BPO": 0.21,
+    "CCO": 0.32,
+}
+
 
