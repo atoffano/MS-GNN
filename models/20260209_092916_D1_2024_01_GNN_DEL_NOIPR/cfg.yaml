@@ -1,0 +1,56 @@
+data:
+  alignment_path: ./data/swissprot/2024_01/diamond_swissprot_2024_01_alignment.tsv
+  dataset: D1
+  exp_only: true
+  external_annotations_path: ./data/swissprot/2024_01/swissprot_2024_01_MFO_exp_annotations.tsv
+  protein_graphs: ./data/swissprot/2024_01/protein_graphs
+  stringdb_path: ./data/swissprot/2024_01/swissprot_stringdb.tsv
+  subontology: MFO
+  swissprot_release: '2024_01'
+  train_proteins: D1
+  exclude_val_test: false
+model:
+  batch_size: 8
+  edge_attrs: true
+  edge_types:
+  - - aa
+    - close_to
+    - aa
+  - - aa
+    - belongs_to
+    - protein
+  - - protein
+    - aligned_with
+    - protein
+  - - protein
+    - stringdb
+    - protein
+  go_neighbors: true
+  hidden_channels: 256
+  interpro: false
+  sampled_edges:
+    protein__aligned_with__protein: -1
+    protein__stringdb__protein: 30
+optimizer:
+  lr: 0.001
+  type: Adam
+run:
+  project_path: /lustre/fsn1/projects/rech/dqy/uki62ne/tempdata/PFP_layer
+  qualifier: 2024_01_GNN_DEL_NOIPR
+  results_dir: ./results/D1/20260209_092916_D1_2024_01_GNN_DEL_NOIPR
+  run_beprof_eval: true
+  run_cafa_eval: true
+  save_epoch_checkpoints: true
+  save_predictions:
+    test: true
+    val: true
+  test_only: true
+scheduler:
+  gamma: 0.5
+  step_size: 1
+  type: StepLR
+trainer:
+  compile: false
+  device: cuda
+  epochs: 6
+  num_workers: 4
