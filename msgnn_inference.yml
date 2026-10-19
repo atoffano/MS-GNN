@@ -1,0 +1,27 @@
+name: msgnn_inference
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pytorch=2.4.1
+  - pytorch-cuda=12.4
+  - pip
+  - pip:
+      - numpy>=1.26.4,<2.0.0
+      - pandas>=2.2.0
+      - scipy>=1.13.0
+      - h5py>=3.11.0
+      - requests>=2.31.0
+      - pyyaml>=6.0
+      - tqdm>=4.66.0
+      - biopython>=1.83
+      - fair-esm>=2.0.0
+      - torch-geometric>=2.6.0
+      - matplotlib>=3.8.0
+      - go3>=1.0.0
+      - --find-links https://data.pyg.org/whl/torch-2.4.0+cu124.html
+      - torch-scatter
+      - torch-sparse
